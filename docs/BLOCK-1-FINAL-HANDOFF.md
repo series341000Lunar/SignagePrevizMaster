@@ -9,8 +9,8 @@
 ```text
 BLOCK 0:  TECHNICAL PASS / USER VISUAL PASS / CLOSED
 BLOCK 1A: MANUAL FULL-RES LINK / USER VISUAL PASS / CLOSED
-BLOCK 1B: AUTO SYNC / USER FUNCTIONAL PASS
-BLOCK 1:  PASS WITH WARNINGS / USER-APPROVED DESIGN HANDOFF
+BLOCK 1B: AUTO SYNC / USER PASS / CLOSED
+BLOCK 1:  TECHNICAL PASS / USER PASS / CLOSED
 ```
 
 Photoshop 2026의 Active Document Composite를 원본 해상도로 캡처하여
@@ -19,11 +19,9 @@ Sync 경로가 실제 환경에서 동작했다. 사용자는 Auto Sync 갱신 �
 연결, 갱신 중 줌 유지까지 최종 확인하고 **“지시가 완벽히 수행되었습니다”**라고
 승인했다.
 
-경고는 기능 실패가 아니라 최종 증거 범위에 관한 것이다. 최신 소스로
-Portable EXE를 재빌드하고 독립 실행 smoke test까지 PASS했지만, 그 재빌드본과
-실제 Photoshop UXP를 연결한 Manual/Auto Sync 수동 세션은 아직 별도 증거가
-없다. 사용자는 이 제한을 포함한 최종 인계 내용을 확인한 뒤 Block 1 결과의
-commit/push와 설계 단계 인계를 명시적으로 지시했다.
+최신 소스로 재빌드한 Portable EXE와 Photoshop 2026의 Manual Send 및 Auto
+Sync도 사용자 PASS로 확정됐다. Block 1은 후속 Block의 고정 기준선이며,
+Full-Resolution capture/send 및 localhost security 경로를 재설계하지 않는다.
 
 ## B. 구현된 전체 경로
 
@@ -258,9 +256,8 @@ Critical error: none
 EXE는 GitHub 일반 파일 크기 제한을 초과하므로 Git에 올리지 않는다. 소스,
 build configuration, `package.json`, `package-lock.json`은 추적 대상이다.
 
-Portable 독립 실행 smoke는 PASS했다. 그러나 이번 최종 재빌드본에 대해
-`Portable EXE ↔ 실제 Photoshop 2026` Manual Send/Auto Sync를 다시 확인한
-사용자 증거는 아직 없다. 이 항목이 Block 1의 유일한 명시적 검증 부채다.
+Portable 독립 실행 smoke와 `Portable EXE ↔ 실제 Photoshop 2026` Manual
+Send/Auto Sync 사용자 검증이 모두 PASS했다.
 
 ## K. 주요 파일
 
@@ -295,9 +292,9 @@ docs/BLOCK-1-FINAL-HANDOFF.md
 Branch:       main
 Baseline:     91ac0aec4a65fb7bb3d6c3c07a405d9b16fea212
 Remote:       https://github.com/series341000Lunar/SignagePrevizMaster.git
-Block 1 commit: this handoff document를 포함한 closure commit
-Push target:    origin/main
-Working tree:   push 후 clean 상태 확인 예정
+Block 1 implementation commit: 004a0e01f5fef17f3ed3ec29c4f8f5dbc65a0e58
+Block 1 closure:               this status-finalization commit
+Push target:                   origin/main
 ```
 
 다음은 ignored 상태다.
@@ -312,9 +309,8 @@ Working tree:   push 후 clean 상태 확인 예정
 ```
 
 `package-lock.json`은 추적 대상이다. 전역 `safe.directory "*"` 설정을 사용하지
-않았다. 최신 Portable EXE와 실제 Photoshop Live Link의 마지막 수동 확인은
-후속 회귀 확인 항목으로 남기되, 사용자 지시에 따라 Block 1 closure commit과
-`origin/main` push를 진행한다.
+않았다. Block 1은 별도 closure commit과 `origin/main` push 후 clean 상태에서
+Block 2 기준선으로 고정한다.
 
 ## M. 해결된 실환경 문제
 
@@ -369,8 +365,9 @@ Development Photoshop Live Link: USER PASS
 Auto Sync responsiveness:        USER PASS
 Color appearance:                USER PASS
 Zoom/pan preservation:           USER PASS
-Latest rebuilt Portable Live:    FINAL MANUAL CHECK PENDING
-Block 1 commit/push:             USER AUTHORIZED
+Latest rebuilt Portable Manual:  USER PASS
+Latest rebuilt Portable Auto:    USER PASS
+Block 1 status:                  TECHNICAL PASS / USER PASS / CLOSED
 ```
 
 ```text

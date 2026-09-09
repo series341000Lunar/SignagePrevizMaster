@@ -5,7 +5,7 @@
 ```text
 BLOCK 0:  CLOSED
 BLOCK 1A: MANUAL FULL-RES LINK — USER VISUAL PASS / CLOSED
-BLOCK 1B: AUTO SYNC — IMPLEMENTED / USER FUNCTIONAL PASS
+BLOCK 1B: AUTO SYNC — TECHNICAL PASS / USER PASS / CLOSED
 ```
 
 The installed Photoshop 2026 event probe is complete. Production Auto Sync now
@@ -128,8 +128,8 @@ also preserves the current zoom, pan, and view mode; the user confirmed this in
 the installed Photoshop workflow.
 
 The latest Portable EXE was rebuilt and passed its independent packaged smoke
-test after the view-preservation change. A separate manual Photoshop Live Link
-check against that exact rebuilt EXE remains the final explicit validation debt.
+test after the view-preservation change. Its Photoshop 2026 Manual Send and Auto
+Sync checks also received USER PASS.
 
 ## Fixed Block 1A constraints
 
