@@ -1,0 +1,95 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LUUX Live Link</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header>
+      <h1>LUUX LIVE LINK</h1>
+      <p>Full-resolution Photoshop composite</p>
+    </header>
+
+    <section>
+      <h2>Photoshop</h2>
+      <div class="diagnostics">
+        <div class="diagnostic-row"><span class="label">Document</span><span id="document-name" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Dimensions</span><span id="document-dimensions" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Mode / Depth</span><span id="document-mode" class="value">—</span></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Connection</h2>
+      <div id="connection-state" class="state disconnected">● DISCONNECTED</div>
+      <button id="connect-button" type="button">CONNECT</button>
+      <button id="send-button" type="button" disabled>SEND FULL RES</button>
+      <label class="auto-sync-control">
+        <input id="auto-sync" type="checkbox">
+        Auto Sync — 350 ms debounce
+      </label>
+      <div class="diagnostics auto-sync-diagnostics">
+        <div class="diagnostic-row"><span class="label">Auto Sync</span><span id="auto-sync-state" class="value">OFF</span></div>
+        <div class="diagnostic-row"><span class="label">Notifications Seen</span><span id="notifications-seen" class="value">0</span></div>
+        <div class="diagnostic-row"><span class="label">Notifications Accepted</span><span id="notifications-accepted" class="value">0</span></div>
+        <div class="diagnostic-row"><span class="label">Debounced Triggers</span><span id="debounced-triggers" class="value">0</span></div>
+        <div class="diagnostic-row"><span class="label">Frames Requested</span><span id="frames-requested" class="value">0</span></div>
+        <div class="diagnostic-row"><span class="label">Frames Sent</span><span id="frames-sent" class="value">0</span></div>
+        <div class="diagnostic-row"><span class="label">Dirty Replacements</span><span id="dirty-replacements" class="value">0</span></div>
+        <div class="diagnostic-row"><span class="label">Last Event</span><span id="last-auto-event" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Last Event Time</span><span id="last-auto-event-time" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Notify → Capture</span><span id="notify-capture-ms" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Last Capture</span><span id="last-capture-time" class="value">—</span></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Last Frame</h2>
+      <div class="diagnostics">
+        <div class="diagnostic-row"><span class="label">Phase</span><span id="phase" class="value">IDLE</span></div>
+        <div class="diagnostic-row"><span class="label">Frame ID</span><span id="frame-id" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Capture</span><span id="capture-size" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Bytes</span><span id="frame-bytes" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Capture</span><span id="capture-ms" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Send</span><span id="send-ms" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">ACK</span><span id="ack-ms" class="value">—</span></div>
+      </div>
+      <div id="last-error" class="error">No error.</div>
+    </section>
+
+    <section>
+      <h2>Event Probe — Development Only</h2>
+      <p class="hint">Observe real Photoshop 2026 action notifications before Auto Sync is enabled.</p>
+      <div class="probe-controls">
+        <button id="probe-start" type="button">START PROBE</button>
+        <button id="probe-stop" type="button" disabled>STOP PROBE</button>
+      </div>
+      <label class="field-label" for="probe-operation">Operation being tested</label>
+      <select id="probe-operation">
+        <option value="Paint">Paint / Brush</option>
+        <option value="Layer Visibility">Layer Visibility</option>
+        <option value="Move">Move</option>
+        <option value="Transform">Transform</option>
+        <option value="Paste">Paste</option>
+        <option value="Layer Create">Layer Create</option>
+        <option value="Layer Delete">Layer Delete</option>
+        <option value="Adjustment / Property">Adjustment / Property</option>
+      </select>
+      <button id="probe-arm" type="button" disabled>ARM SELECTED OPERATION</button>
+      <button id="probe-clear" type="button">CLEAR PROBE RESULTS</button>
+      <div class="diagnostics probe-diagnostics">
+        <div class="diagnostic-row"><span class="label">Probe</span><span id="probe-state" class="value">STOPPED</span></div>
+        <div class="diagnostic-row"><span class="label">Armed</span><span id="probe-armed" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Notifications</span><span id="probe-seen" class="value">0</span></div>
+        <div class="diagnostic-row"><span class="label">Last Event</span><span id="probe-last-event" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Last Event Time</span><span id="probe-last-time" class="value">—</span></div>
+      </div>
+      <pre id="probe-results" class="probe-results">No events observed.</pre>
+    </section>
+
+    <script src="config.js"></script>
+    <script src="index.js"></script>
+  </body>
+</html>

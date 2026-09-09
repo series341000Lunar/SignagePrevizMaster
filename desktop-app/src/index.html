@@ -4,17 +4,17 @@
     <meta charset="UTF-8">
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file:; object-src 'none'; base-uri 'none'; frame-src 'none'"
+      content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file: ws://localhost:34100; object-src 'none'; base-uri 'none'; frame-src 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>LUUX Signage Previz — Block 0</title>
+    <title>LUUX Signage Previz — Block 1</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <div>
-        <h1>LUUX SIGNAGE PREVIZ — BLOCK 0</h1>
-        <p>Full-resolution Electron / Three.js texture validation</p>
+        <h1>LUUX SIGNAGE PREVIZ — BLOCK 1</h1>
+        <p>Block 0 full-resolution viewer · Photoshop composite live link</p>
       </div>
       <div id="full-resolution-badge" class="badge pending">WAITING</div>
     </header>
@@ -30,6 +30,7 @@
       <button id="four-button" type="button">400%</button>
       <button id="filter-button" type="button">NORMAL</button>
       <button id="reload-button" type="button">RELOAD</button>
+      <span id="link-status" class="link-status disconnected">Photoshop Link: DISCONNECTED</span>
       <span id="zoom-readout">Zoom —</span>
     </section>
 
@@ -49,4 +50,3 @@
     <script type="module" src="./renderer.js"></script>
   </body>
 </html>
-

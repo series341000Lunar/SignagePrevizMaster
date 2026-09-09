@@ -9,3 +9,6 @@ self-contained Windows x64 portable Electron executable. See
 [`desktop-app/README.md`](desktop-app/README.md) for commands and acceptance
 details.
 
+Block 1A adds a localhost-only Photoshop UXP manual live-link path under
+[`photoshop-uxp/luux-live-link`](photoshop-uxp/luux-live-link). Auto Sync is
+intentionally deferred until the required manual Photoshop test passes.

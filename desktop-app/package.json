@@ -1,8 +1,8 @@
 {
   "name": "luux-signage-previz",
-  "version": "0.0.0-block0",
+  "version": "0.1.0-block1a",
   "private": true,
-  "description": "LUUX Signage Previz Block 0 full-resolution GPU texture validation",
+  "description": "LUUX Signage Previz full-resolution Electron viewer and Photoshop live-link validation",
   "license": "UNLICENSED",
   "main": "src/main.cjs",
   "packageManager": "npm@12.0.2",
@@ -10,8 +10,10 @@
     "build": "node scripts/build.mjs",
     "dev": "npm run build && electron .",
     "dist": "npm run build && electron-builder --win portable --x64",
-    "test": "npm run test:static && npm run test:runtime",
-    "test:static": "npm run build && node tests/static-validation.mjs",
+    "test": "npm run test:static && npm run test:protocol && npm run test:runtime",
+    "test:static": "npm run build && node --check ../photoshop-uxp/luux-live-link/config.js && node --check ../photoshop-uxp/luux-live-link/index.js && node tests/static-validation.mjs",
+    "test:protocol": "node tests/protocol-validation.mjs",
+    "test:link": "npm run build && electron . --link-smoke-test --report=.runtime/link-runtime.json --screenshot=.runtime/link-runtime.png",
     "test:runtime": "npm run build && electron . --smoke-test --report=.runtime/dev-runtime.json --screenshot=.runtime/dev-runtime.png",
     "test:portable": "node tests/portable-validation.mjs"
   },
@@ -31,6 +33,8 @@
     "files": [
       "build/**/*",
       "src/main.cjs",
+      "src/live-link-broker.cjs",
+      "src/live-link-config.json",
       "package.json"
     ],
     "win": {
@@ -44,6 +48,8 @@
       ],
       "artifactName": "LUUX Signage Previz.exe"
     }
+  },
+  "dependencies": {
+    "ws": "8.21.3"
   }
 }
-

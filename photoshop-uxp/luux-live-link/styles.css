@@ -1,0 +1,161 @@
+:root {
+  color: #f3f4f6;
+  background: #252525;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 12px;
+}
+
+header,
+section {
+  padding: 12px;
+  border: 1px solid #4a4a4a;
+  background: #303030;
+}
+
+section {
+  margin-top: 10px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+
+h2 {
+  margin-bottom: 9px;
+  color: #c9cdd3;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+header p {
+  margin-top: 4px;
+  color: #a5abb4;
+}
+
+.hint {
+  color: #a5abb4;
+  line-height: 1.4;
+}
+
+.diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diagnostic-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.label {
+  color: #a5abb4;
+}
+
+.value {
+  text-align: right;
+}
+
+button {
+  width: 100%;
+  min-height: 32px;
+  margin-top: 8px;
+}
+
+.probe-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.probe-controls button {
+  width: 50%;
+}
+
+.field-label {
+  display: block;
+  margin-top: 10px;
+  color: #a5abb4;
+}
+
+select {
+  width: 100%;
+  min-height: 28px;
+  margin-top: 5px;
+}
+
+.probe-diagnostics {
+  margin-top: 12px;
+}
+
+.probe-results {
+  max-height: 240px;
+  margin: 10px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border-left: 3px solid #6c737d;
+  background: #242424;
+  color: #c8ccd2;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.state {
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+
+.state.connected {
+  color: #65dca1;
+}
+
+.state.disconnected {
+  color: #f1c56d;
+}
+
+.disabled-control,
+.auto-sync-control {
+  display: block;
+  margin-top: 10px;
+  color: #8f949b;
+}
+
+.auto-sync-diagnostics {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #454545;
+}
+
+.error {
+  margin-top: 10px;
+  padding: 8px;
+  border-left: 3px solid #6c737d;
+  background: #242424;
+  color: #c8ccd2;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.error.active {
+  border-color: #ff7783;
+  color: #ffb6bc;
+}

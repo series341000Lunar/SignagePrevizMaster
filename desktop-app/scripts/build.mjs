@@ -55,7 +55,8 @@ await rm(buildRoot, { recursive: true, force: true });
 await mkdir(path.join(buildRoot, 'assets'), { recursive: true });
 await Promise.all([
   copyFile(path.join(sourceRoot, 'index.html'), path.join(buildRoot, 'index.html')),
-  copyFile(path.join(sourceRoot, 'styles.css'), path.join(buildRoot, 'styles.css'))
+  copyFile(path.join(sourceRoot, 'styles.css'), path.join(buildRoot, 'styles.css')),
+  copyFile(path.join(sourceRoot, 'live-link-config.json'), path.join(buildRoot, 'live-link-config.json'))
 ]);
 
 await build({
@@ -97,4 +98,3 @@ const manifest = {
 };
 await writeFile(path.join(buildRoot, 'assets-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 console.log(JSON.stringify(manifest, null, 2));
-

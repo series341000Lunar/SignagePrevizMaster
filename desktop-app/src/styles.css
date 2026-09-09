@@ -107,6 +107,22 @@ button:hover {
   font-variant-numeric: tabular-nums;
 }
 
+.link-status {
+  padding: 5px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.link-status.connected {
+  color: #62daa1;
+}
+
+.link-status.disconnected {
+  color: #efc66b;
+}
+
 main {
   min-height: 0;
   display: grid;
@@ -199,4 +215,3 @@ dd {
     grid-template-columns: minmax(0, 1fr) 280px;
   }
 }
-
