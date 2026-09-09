@@ -1,8 +1,12 @@
-# Desktop App — Block 0
+# Desktop App — Blocks 0–2
 
 Block 0 proves that a 4728 x 5760-class source can remain full resolution from
 disk decode through a Three.js GPU texture in both development and a Windows
 x64 portable executable.
+
+Block 1 adds the Photoshop Full-Resolution live texture source. Block 2 adds a
+canonical reverse point link, persistent Previz target feedback, and separate
+NAVIGATE/POINT interaction modes.
 
 ## Commands
 
@@ -10,7 +14,9 @@ x64 portable executable.
 npm install
 npm run dev
 npm run test:static
+npm run test:protocol
 npm run test:runtime
+npm run test:link
 npm run dist
 npm run test:portable
 ```
@@ -47,7 +53,11 @@ nearest-neighbour filtering without modifying the source texture.
 
 ## Manual visual validation
 
-After the technical tests pass, open the portable executable and compare
-Original PNG with Small PNG at 1:1, 200%, and 400%. Inspect fine text, one-pixel
-edges, and small details in both Normal and Pixel Inspection modes.
+The Block 2 portable validation passed with Photoshop Live. In `POINT` mode,
+left click sends a canonical point, middle-button drag pans, and the wheel
+zooms. The Previz target is yellow while pending, green after Photoshop ACK,
+and red after a rejected command. `CLEAR POINTER` removes the reserved helper.
 
+The complete acceptance evidence and design-stage constraints are recorded in
+[`../docs/BLOCK-2-POINTER-VALIDATION.md`](../docs/BLOCK-2-POINTER-VALIDATION.md)
+and [`../docs/BLOCK-2-HANDOFF.md`](../docs/BLOCK-2-HANDOFF.md).

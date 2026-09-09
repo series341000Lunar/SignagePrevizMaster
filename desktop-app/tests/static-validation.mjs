@@ -10,6 +10,8 @@ const mainSource = await readFile(path.join(appRoot, 'src', 'main.cjs'), 'utf8')
 const brokerSource = await readFile(path.join(appRoot, 'src', 'live-link-broker.cjs'), 'utf8');
 const liveLinkConfig = JSON.parse(await readFile(path.join(appRoot, 'src', 'live-link-config.json'), 'utf8'));
 const rendererSource = await readFile(path.join(appRoot, 'src', 'renderer.js'), 'utf8');
+const coordinateSource = await readFile(path.join(appRoot, 'src', 'canonical-coordinate.js'), 'utf8');
+const pointerQueueSource = await readFile(path.join(appRoot, 'src', 'pointer-command-queue.js'), 'utf8');
 const htmlSource = await readFile(path.join(appRoot, 'src', 'index.html'), 'utf8');
 const builtRenderer = await readFile(path.join(appRoot, 'build', 'renderer.js'), 'utf8');
 const manifest = JSON.parse(await readFile(path.join(appRoot, 'build', 'assets-manifest.json'), 'utf8'));
@@ -18,6 +20,10 @@ const uxpManifest = JSON.parse(await readFile(path.join(uxpRoot, 'manifest.json'
 const uxpConfigSource = await readFile(path.join(uxpRoot, 'config.js'), 'utf8');
 const uxpHtmlSource = await readFile(path.join(uxpRoot, 'index.html'), 'utf8');
 const uxpSource = await readFile(path.join(uxpRoot, 'index.js'), 'utf8');
+const captureSource = uxpSource.slice(
+  uxpSource.indexOf('async function captureComposite()'),
+  uxpSource.indexOf('async function sendCapture(')
+);
 const uxpContext = { window: {} };
 vm.runInNewContext(uxpConfigSource, uxpContext);
 const uxpConfig = uxpContext.window.LUUX_LIVE_LINK_CONFIG;
@@ -40,6 +46,7 @@ assert(!/unpkg\.com|cdn\.jsdelivr\.net/i.test(`${rendererSource}\n${htmlSource}\
 assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
 assert(!/_TestSource/i.test(`${mainSource}\n${rendererSource}\n${htmlSource}`), 'Runtime references _TestSource.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
+assert(packageJson.version === '0.2.0-block2', 'Package version must identify the Block 2 baseline.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
@@ -65,6 +72,22 @@ assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an 
 assert(/new Uint8Array\(metadata\.totalBytes\)/.test(rendererSource), 'Renderer must preallocate the exact declared frame size.');
 assert(/uv\.setY\(index,\s*1\s*-\s*uv\.getY\(index\)\)/.test(rendererSource), 'Live orientation must be corrected without flipping the full pixel buffer.');
 assert(htmlSource.includes(`connect-src 'self' file: ${liveLinkConfig.endpoint}`), 'Renderer CSP must permit only the configured loopback WebSocket endpoint.');
+assert(/new THREE\.Raycaster/.test(rendererSource) && /intersectObject\(state\.mesh/.test(rendererSource), 'Pointer mapping must raycast the current image plane.');
+assert(/worldToLocal\(hit\.point\.clone\(\)\)/.test(rendererSource), 'Pointer mapping must use the mesh local intersection point.');
+assert(/localX \+ width \/ 2/.test(coordinateSource) && /height \/ 2 - localY/.test(coordinateSource), 'Canonical mapping must use top-left image coordinates from centered mesh-local coordinates.');
+assert(/origin:\s*'top-left'/.test(coordinateSource), 'Canonical Signage Coordinate origin must be top-left.');
+assert(/canonicalToLocalPoint/.test(rendererSource) && /id="pointer-marker"/.test(htmlSource), 'Previz must project a persistent marker from canonical source coordinates.');
+assert(/marker\.documentId === live\.documentId/.test(rendererSource), 'Previz marker must be bound to the matching live Photoshop document.');
+assert(/pending/.test(rendererSource) && /acknowledged/.test(rendererSource) && /error/.test(rendererSource), 'Previz marker must expose pending, acknowledged, and error states.');
+assert(/event\.button === 1[\s\S]*beginPan\(event\)/.test(rendererSource), 'Middle-button drag must begin pan in both interaction modes.');
+assert(/state\.dragPointerId !== event\.pointerId/.test(rendererSource), 'Pan must track its initiating pointer ID.');
+assert(/state\.dragging && state\.dragPointerId === event\.pointerId[\s\S]*endDrag\(event\)[\s\S]*return/.test(rendererSource), 'Middle-button pan release must finish before POINT click handling.');
+assert(/state\.asset\?\.kind === 'live'/.test(rendererSource), 'Pointer commands must require a Photoshop Live source.');
+assert(/class LatestWinsPointerQueue/.test(pointerQueueSource) && /this\.pending = command/.test(pointerQueueSource), 'Pointer commands must use one-in-flight latest-wins queuing.');
+assert(/id="navigate-button"/.test(htmlSource) && /id="point-button"/.test(htmlSource) && /id="clear-pointer-button"/.test(htmlSource), 'Renderer must expose NAVIGATE, POINT, and CLEAR POINTER controls.');
+assert(/case 'POINTER_ACK'/.test(rendererSource) && /case 'POINTER_ERROR'/.test(rendererSource), 'Renderer must handle pointer ACK and ERROR messages.');
+assert(/case 'POINTER_SET'/.test(brokerSource) && /case 'POINTER_CLEAR'/.test(brokerSource), 'Broker must route reverse pointer control messages.');
+assert(/DUPLICATE_REQUEST/.test(brokerSource) && /UXP_DISCONNECTED/.test(brokerSource) && /OUT_OF_RANGE/.test(brokerSource), 'Broker must enforce pointer safety validation.');
 
 assert(uxpManifest.manifestVersion === 5, 'UXP manifest must use manifest v5.');
 assert(uxpManifest.host.app === 'PS' && uxpManifest.host.minVersion === '23.3.0', 'UXP host baseline must be Photoshop 23.3 or newer.');
@@ -76,7 +99,7 @@ assert(uxpConfig.chunkSizeBytes === liveLinkConfig.chunkSizeBytes, 'UXP and Elec
 assert(uxpConfig.protocol === liveLinkConfig.protocol && uxpConfig.protocolVersion === liveLinkConfig.protocolVersion, 'UXP and Electron protocol identifiers must match.');
 assert(/imaging\.getPixels\(\{[\s\S]*documentID:\s*doc\.id,[\s\S]*colorSpace:\s*'RGB',[\s\S]*colorProfile:\s*DISPLAY_COLOR_PROFILE,[\s\S]*componentSize:\s*8[\s\S]*\}\)/.test(uxpSource), 'UXP must request the active document composite as Photoshop-converted 8-bit sRGB pixels.');
 assert(/core\.executeAsModal\(async\s*\(\)\s*=>\s*\{[\s\S]*imaging\.getPixels/.test(uxpSource), 'UXP imaging capture must run inside Photoshop modal scope.');
-assert(!/\b(?:layerID|sourceBounds|targetSize)\b/.test(uxpSource), 'UXP capture must not request a layer, bounds, or resized target.');
+assert(!/\b(?:layerID|sourceBounds|targetSize)\b/.test(captureSource), 'UXP composite capture must not request a layer, bounds, or resized target.');
 assert(/getData\(\{\s*chunky:\s*true\s*\}\)/.test(uxpSource), 'UXP must request chunky pixel data.');
 assert(/finally\s*\{\s*photoshopImageData\.dispose\(\)/s.test(uxpSource), 'PhotoshopImageData must be disposed in finally.');
 assert(/bufferedAmount\s*>\s*limit/.test(uxpSource), 'UXP sender must use WebSocket bufferedAmount backpressure.');
@@ -92,6 +115,15 @@ assert(/action\.addNotificationListener\(AUTO_SYNC_EVENTS,\s*autoSyncNotificatio
 assert(/action\.removeNotificationListener\(AUTO_SYNC_EVENTS,\s*autoSyncNotificationListener\)/.test(uxpSource), 'Auto Sync OFF must remove the exact production listener callback.');
 assert(/elements\.sendButton\.onclick = \(\) => requestLatestFrame\('manual'\)/.test(uxpSource), 'Manual Send must use the shared latest-frame request entrypoint.');
 assert(/requestLatestFrame\('auto'\)/.test(uxpSource), 'Debounced Auto Sync must use the shared latest-frame request entrypoint.');
+assert(/const POINTER_LAYER_NAME = '__LUUX_POINTER__'/.test(uxpSource), 'UXP pointer writes must use the reserved helper layer name.');
+assert(/const POINTER_DIAMETER_PX = 25/.test(uxpSource), 'Pointer patch diameter must be one explicit native-pixel constant.');
+assert(/doc\.id !== message\.documentId \|\| doc\.width !== message\.width \|\| doc\.height !== message\.height/.test(uxpSource), 'UXP must reject stale document ID or dimension mismatches.');
+assert(/doc\.createLayer\(constants\.LayerKind\.NORMAL/.test(uxpSource), 'UXP must create a Pixel Layer through the supported DOM API.');
+assert(/imaging\.createImageDataFromBuffer/.test(uxpSource) && /imaging\.putPixels/.test(uxpSource), 'UXP must write a small pixel patch through the official Imaging API.');
+assert(/replace:\s*true/.test(uxpSource) && /targetBounds:\s*\{\s*left:\s*patch\.left,\s*top:\s*patch\.top\s*\}/.test(uxpSource), 'Pointer writes must replace the helper layer and use clipped target bounds.');
+assert(/imageData\.dispose\(\)/.test(uxpSource), 'Created pointer image data must be disposed.');
+assert(/core\.executeAsModal\(async\s*\(\)\s*=>\s*\{[\s\S]*validatePointerDocument/.test(uxpSource), 'Pointer document mutation must execute inside modal scope.');
+assert(/id="pointer-state"/.test(uxpHtmlSource) && /id="pointer-requested"/.test(uxpHtmlSource) && /id="pointer-applied"/.test(uxpHtmlSource), 'UXP must expose reverse pointer diagnostics.');
 assert(!/id="auto-sync"[^>]*disabled/.test(uxpHtmlSource), 'Auto Sync checkbox must be enabled after the real event probe.');
 assert(/id="probe-start"/.test(uxpHtmlSource) && /id="probe-operation"/.test(uxpHtmlSource), 'UXP must expose the temporary Block 1B event probe controls.');
 
@@ -122,6 +154,13 @@ const result = {
     autoSyncEvent: 'historyStateChanged',
     autoSyncDebounceMs: 350,
     rgbToRgbaExpansion: false
+  },
+  pointerLink: {
+    canonicalOrigin: 'top-left',
+    mapping: 'raycast -> mesh local -> Canonical Signage Coordinate',
+    layerName: '__LUUX_POINTER__',
+    patchDiameterPx: 25,
+    latestWins: true
   },
   assets: manifest.assets
 };

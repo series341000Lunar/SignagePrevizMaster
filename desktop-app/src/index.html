@@ -7,14 +7,14 @@
       content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file: ws://localhost:34100; object-src 'none'; base-uri 'none'; frame-src 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>LUUX Signage Previz — Block 1</title>
+    <title>LUUX Signage Previz — Block 2</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <div>
-        <h1>LUUX SIGNAGE PREVIZ — BLOCK 1</h1>
-        <p>Block 0 full-resolution viewer · Photoshop composite live link</p>
+        <h1>LUUX SIGNAGE PREVIZ — BLOCK 2</h1>
+        <p>Full-resolution Photoshop live link · Canonical reverse point link</p>
       </div>
       <div id="full-resolution-badge" class="badge pending">WAITING</div>
     </header>
@@ -30,6 +30,10 @@
       <button id="four-button" type="button">400%</button>
       <button id="filter-button" type="button">NORMAL</button>
       <button id="reload-button" type="button">RELOAD</button>
+      <span class="control-divider" aria-hidden="true"></span>
+      <button id="navigate-button" class="mode-button active" type="button">NAVIGATE</button>
+      <button id="point-button" class="mode-button" type="button" disabled>POINT</button>
+      <button id="clear-pointer-button" type="button" disabled>CLEAR POINTER</button>
       <span id="link-status" class="link-status disconnected">Photoshop Link: DISCONNECTED</span>
       <span id="zoom-readout">Zoom —</span>
     </section>
@@ -37,7 +41,11 @@
     <main>
       <section id="viewer" aria-label="Full-resolution texture viewer">
         <canvas id="three-canvas"></canvas>
-        <div id="drag-hint">Wheel: zoom · Drag: pan</div>
+        <div id="pointer-marker" class="pointer-marker" aria-hidden="true">
+          <span class="pointer-marker-ring"></span>
+          <span class="pointer-marker-label">POINT</span>
+        </div>
+        <div id="drag-hint">NAVIGATE: Wheel zoom · Drag pan</div>
       </section>
 
       <aside>

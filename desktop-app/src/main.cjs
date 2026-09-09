@@ -44,6 +44,16 @@ async function waitForDiagnostics(window) {
   throw new Error('Timed out waiting for renderer diagnostics.');
 }
 
+async function waitForPointerDiagnostics(window, requestId) {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    const result = await window.webContents.executeJavaScript('window.block2PointerDiagnostics ?? null', true);
+    if (result?.lastAck?.requestId === requestId && !result.queue.activeRequestId) return result;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for pointer diagnostics for request ${requestId}.`);
+}
+
 async function runSmokeTest(window) {
   const reportPath = resolveArgumentPath(reportArgument, 'runtime.json');
   const screenshotPath = resolveArgumentPath(screenshotArgument, 'runtime.png');
@@ -212,6 +222,26 @@ async function runLinkSmokeTest(window) {
       viewBeforeSecondFrame.zoom === 2 && viewBeforeSecondFrame.viewMode === '200%' &&
       viewAfterSecondFrame.zoom === viewBeforeSecondFrame.zoom &&
       viewAfterSecondFrame.viewMode === viewBeforeSecondFrame.viewMode;
+
+    const pointerSetPromise = waitForClientMessage(
+      photoshopClient,
+      (message) => message.type === 'POINTER_SET'
+    );
+    const pointerRequest = await window.webContents.executeJavaScript('window.runBlock2PointerSmokeRequest()', true);
+    const pointerSet = await pointerSetPromise;
+    const pointerAck = {
+      type: 'POINTER_ACK',
+      requestId: pointerSet.requestId,
+      documentId: pointerSet.documentId,
+      requestedX: pointerSet.x,
+      requestedY: pointerSet.y,
+      appliedX: pointerSet.x,
+      appliedY: pointerSet.y,
+      layerName: '__LUUX_POINTER__',
+      selectionRestored: true
+    };
+    photoshopClient.send(JSON.stringify(pointerAck));
+    const pointerRuntime = await waitForPointerDiagnostics(window, pointerSet.requestId);
     await new Promise((resolve) => setTimeout(resolve, 150));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -231,6 +261,13 @@ async function runLinkSmokeTest(window) {
       runtime.textureWidth === width && runtime.textureHeight === height &&
       runtime.framesReceived === 2 && runtime.framesDropped === 0 && runtime.framesReplaced === 1 &&
       liveViewPreserved &&
+      pointerRequest.command.requestId === pointerSet.requestId &&
+      pointerRequest.canonical.x === pointerSet.x && pointerRequest.canonical.y === pointerSet.y &&
+      pointerSet.sourceFrameId === 2 && pointerSet.documentId === 9001 &&
+      pointerRuntime.state === 'READY' && pointerRuntime.coordinateError === 0 &&
+      pointerRuntime.applied.x === pointerSet.x && pointerRuntime.applied.y === pointerSet.y &&
+      pointerRuntime.marker?.requestId === pointerSet.requestId &&
+      pointerRuntime.marker?.status === 'acknowledged' && pointerRuntime.marker?.visible === true &&
       runtime.rendererTextureCount === 1 && runtime.contextLossCount === 0 &&
       runtime.textureGlError === 0 &&
       runtime.centerPixel.slice(0, 3).every((value) => value >= 188 && value <= 196) &&
@@ -249,13 +286,17 @@ async function runLinkSmokeTest(window) {
       viewBeforeSecondFrame,
       viewAfterSecondFrame,
       liveViewPreserved,
+      pointerRequest,
+      pointerSet,
+      pointerAck,
+      pointerRuntime,
       runtime,
       screenshotPath,
       criticalErrors
     };
     writeJson(reportPath, report);
-    console.log(`BLOCK1_LINK_REPORT=${reportPath}`);
-    console.log(`BLOCK1_SYNTHETIC_LINK_PASS=${technicalPass}`);
+    console.log(`BLOCK2_POINTER_LINK_REPORT=${reportPath}`);
+    console.log(`BLOCK2_SYNTHETIC_POINTER_PASS=${technicalPass}`);
     photoshopClient.close();
     app.exit(technicalPass ? 0 : 2);
   } catch (error) {

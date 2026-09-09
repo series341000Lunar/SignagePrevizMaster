@@ -1,5 +1,11 @@
 import * as THREE from 'three';
 import liveLinkConfig from './live-link-config.json';
+import {
+  CANONICAL_COORDINATE_SYSTEM,
+  canonicalToLocalPoint,
+  localPointToCanonical
+} from './canonical-coordinate.js';
+import { LatestWinsPointerQueue } from './pointer-command-queue.js';
 
 const canvas = document.querySelector('#three-canvas');
 const viewer = document.querySelector('#viewer');
@@ -10,6 +16,11 @@ const sourceSelect = document.querySelector('#source-select');
 const zoomReadout = document.querySelector('#zoom-readout');
 const filterButton = document.querySelector('#filter-button');
 const linkStatusElement = document.querySelector('#link-status');
+const navigateButton = document.querySelector('#navigate-button');
+const pointButton = document.querySelector('#point-button');
+const clearPointerButton = document.querySelector('#clear-pointer-button');
+const dragHint = document.querySelector('#drag-hint');
+const pointerMarker = document.querySelector('#pointer-marker');
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -25,6 +36,7 @@ const gl = renderer.getContext();
 const scene = new THREE.Scene();
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
 camera.position.z = 1;
+const raycaster = new THREE.Raycaster();
 
 const state = {
   manifest: null,
@@ -34,7 +46,9 @@ const state = {
   zoom: 1,
   viewMode: 'fit',
   filterMode: 'normal',
+  interactionMode: 'navigate',
   dragging: false,
+  dragPointerId: null,
   pointerX: 0,
   pointerY: 0,
   contextLossCount: 0,
@@ -51,8 +65,23 @@ const state = {
     framesReplaced: 0,
     lastFrame: null,
     lastError: ''
+  },
+  pointer: {
+    nextRequestId: 1,
+    state: 'UNAVAILABLE',
+    down: null,
+    lastCanonical: null,
+    requested: null,
+    applied: null,
+    coordinateError: null,
+    lastAck: null,
+    lastError: '',
+    marker: null,
+    markerVisible: false
   }
 };
+
+const pointerQueue = new LatestWinsPointerQueue((command) => sendLinkMessage(command));
 
 canvas.addEventListener('webglcontextlost', (event) => {
   event.preventDefault();
@@ -155,9 +184,9 @@ async function loadAsset(assetId) {
   installTexture(texture, decodedWidth, decodedHeight, false);
 
   applyFit();
-  renderer.render(scene, camera);
+  render();
   await nextFrame();
-  renderer.render(scene, camera);
+  render();
   gl.finish();
   updateDiagnostics();
   window.dispatchEvent(new CustomEvent('block0-ready', { detail: state.diagnostics }));
@@ -181,6 +210,13 @@ async function installLiveFrame(frame) {
   const metadata = frame.metadata;
   const replacingLiveTexture = state.asset?.kind === 'live' && Boolean(state.texture);
   const updateStartedAt = performance.now();
+  if (state.pointer.marker && (
+    state.pointer.marker.documentId !== metadata.documentId ||
+    state.pointer.marker.width !== metadata.documentWidth ||
+    state.pointer.marker.height !== metadata.documentHeight
+  )) {
+    state.pointer.marker = null;
+  }
   disposeCurrentTexture();
   state.asset = {
     id: 'photoshop-live',
@@ -221,9 +257,9 @@ async function installLiveFrame(frame) {
 
   sourceSelect.value = 'photoshop-live';
   if (!replacingLiveTexture) applyFit();
-  renderer.render(scene, camera);
+  render();
   await nextFrame();
-  renderer.render(scene, camera);
+  render();
   gl.finish();
 
   const textureGlError = gl.getError();
@@ -279,6 +315,30 @@ function applyFit() {
 
 function render() {
   renderer.render(scene, camera);
+  updatePointerMarker();
+}
+
+function updatePointerMarker() {
+  const marker = state.pointer.marker;
+  const live = state.link.lastFrame;
+  const matchesCurrentDocument = marker && state.asset?.kind === 'live' && state.mesh && live &&
+    marker.documentId === live.documentId &&
+    marker.width === live.documentWidth &&
+    marker.height === live.documentHeight;
+  if (!matchesCurrentDocument) {
+    pointerMarker.className = 'pointer-marker';
+    state.pointer.markerVisible = false;
+    return;
+  }
+
+  const local = canonicalToLocalPoint(marker.canonical, marker.width, marker.height);
+  const projected = state.mesh.localToWorld(new THREE.Vector3(local.x, local.y, 0)).project(camera);
+  const visible = projected.z >= -1 && projected.z <= 1 &&
+    projected.x >= -1 && projected.x <= 1 && projected.y >= -1 && projected.y <= 1;
+  pointerMarker.className = `pointer-marker ${marker.status}${visible ? ' visible' : ''}`;
+  pointerMarker.style.left = `${(projected.x + 1) * 50}%`;
+  pointerMarker.style.top = `${(1 - projected.y) * 50}%`;
+  state.pointer.markerVisible = visible;
 }
 
 function formatBytes(bytes) {
@@ -288,6 +348,160 @@ function formatBytes(bytes) {
 
 function formatMs(value) {
   return Number.isFinite(value) ? `${value.toFixed(1)} ms` : '—';
+}
+
+function pointerRequirementsSatisfied() {
+  const live = state.link.lastFrame;
+  return state.asset?.kind === 'live' &&
+    state.link.rendererHandshake && state.link.photoshopConnected &&
+    Number.isSafeInteger(live?.frameId) && live.frameId > 0 &&
+    Number.isSafeInteger(live?.documentId) && live.documentId > 0 &&
+    Number.isSafeInteger(live?.documentWidth) && live.documentWidth > 0 &&
+    Number.isSafeInteger(live?.documentHeight) && live.documentHeight > 0 &&
+    state.mesh;
+}
+
+function updatePointerControls() {
+  const available = Boolean(pointerRequirementsSatisfied());
+  pointButton.disabled = !available;
+  clearPointerButton.disabled = !available;
+  if (!available && state.interactionMode === 'point') state.interactionMode = 'navigate';
+  navigateButton.classList.toggle('active', state.interactionMode === 'navigate');
+  pointButton.classList.toggle('active', state.interactionMode === 'point');
+  canvas.classList.toggle('point-mode', state.interactionMode === 'point');
+  dragHint.textContent = state.interactionMode === 'point'
+    ? 'POINT: Left click · Middle drag: pan · Wheel: zoom'
+    : 'NAVIGATE: Left/Middle drag: pan · Wheel: zoom';
+  if (!available && !pointerQueue.snapshot().activeRequestId) state.pointer.state = 'UNAVAILABLE';
+  else if (available && state.pointer.state === 'UNAVAILABLE') state.pointer.state = 'READY';
+}
+
+function setInteractionMode(mode) {
+  if (!['navigate', 'point'].includes(mode)) throw new Error(`Unknown interaction mode: ${mode}`);
+  if (mode === 'point' && !pointerRequirementsSatisfied()) {
+    state.pointer.state = 'UNAVAILABLE';
+    state.pointer.lastError = 'POINT unavailable — Photoshop Live required.';
+    updateDiagnostics();
+    return false;
+  }
+  state.interactionMode = mode;
+  state.pointer.lastError = '';
+  updateDiagnostics();
+  return true;
+}
+
+function mapClientPointToCanonical(clientX, clientY) {
+  if (!pointerRequirementsSatisfied()) return null;
+  const bounds = canvas.getBoundingClientRect();
+  if (clientX < bounds.left || clientX > bounds.right || clientY < bounds.top || clientY > bounds.bottom) return null;
+  const ndc = new THREE.Vector2(
+    ((clientX - bounds.left) / bounds.width) * 2 - 1,
+    -((clientY - bounds.top) / bounds.height) * 2 + 1
+  );
+  raycaster.setFromCamera(ndc, camera);
+  const hit = raycaster.intersectObject(state.mesh, false)[0];
+  if (!hit) return null;
+  const local = state.mesh.worldToLocal(hit.point.clone());
+  return localPointToCanonical(local.x, local.y, state.asset.sourceWidth, state.asset.sourceHeight);
+}
+
+function pointerCommandBase() {
+  const live = state.link.lastFrame;
+  return {
+    requestId: state.pointer.nextRequestId++,
+    sourceFrameId: live.frameId,
+    documentId: live.documentId,
+    documentName: live.documentName,
+    width: live.documentWidth,
+    height: live.documentHeight
+  };
+}
+
+function queuePointerCommand(command) {
+  if (!pointerRequirementsSatisfied()) {
+    state.pointer.state = 'UNAVAILABLE';
+    state.pointer.lastError = 'POINT unavailable — Photoshop Live required.';
+    updateDiagnostics();
+    return null;
+  }
+  const result = pointerQueue.request(command);
+  if (!result.sent && !result.pending) {
+    state.pointer.state = 'ERROR';
+    state.pointer.lastError = 'Pointer command could not be sent.';
+    if (state.pointer.marker?.requestId === command.requestId) {
+      state.pointer.marker.status = 'error';
+      updatePointerMarker();
+    }
+  } else {
+    state.pointer.state = 'BUSY';
+    state.pointer.lastError = '';
+  }
+  updateDiagnostics();
+  return command;
+}
+
+function requestPointerAt(canonical) {
+  const command = {
+    type: 'POINTER_SET',
+    ...pointerCommandBase(),
+    x: canonical.x,
+    y: canonical.y,
+    u: canonical.u,
+    v: canonical.v
+  };
+  state.pointer.lastCanonical = canonical;
+  state.pointer.requested = { x: canonical.x, y: canonical.y };
+  state.pointer.applied = null;
+  state.pointer.coordinateError = null;
+  state.pointer.marker = {
+    requestId: command.requestId,
+    documentId: command.documentId,
+    width: command.width,
+    height: command.height,
+    canonical,
+    status: 'pending'
+  };
+  updatePointerMarker();
+  return queuePointerCommand(command);
+}
+
+function requestPointerClear() {
+  return queuePointerCommand({ type: 'POINTER_CLEAR', ...pointerCommandBase() });
+}
+
+function handlePointerResponse(message) {
+  if (!pointerQueue.settle(message)) return;
+  state.pointer.lastAck = message;
+  if (message.type === 'POINTER_ACK') {
+    state.pointer.requested = { x: message.requestedX, y: message.requestedY };
+    state.pointer.applied = { x: message.appliedX, y: message.appliedY };
+    state.pointer.coordinateError = Math.hypot(
+      message.appliedX - message.requestedX,
+      message.appliedY - message.requestedY
+    );
+    state.pointer.lastError = '';
+    if (state.pointer.marker?.requestId === message.requestId) {
+      state.pointer.marker.status = 'acknowledged';
+    }
+  } else if (message.type === 'POINTER_CLEAR_ACK') {
+    state.pointer.applied = null;
+    state.pointer.coordinateError = null;
+    state.pointer.lastError = '';
+    if (!state.pointer.marker || state.pointer.marker.requestId < message.requestId) {
+      state.pointer.marker = null;
+    }
+  } else {
+    state.pointer.lastError = `${message.code || 'POINTER_ERROR'}: ${message.message || 'Pointer command failed.'}`;
+    if (state.pointer.marker?.requestId === message.requestId) {
+      state.pointer.marker.status = 'error';
+    }
+  }
+  const queueState = pointerQueue.snapshot();
+  state.pointer.state = queueState.activeRequestId
+    ? 'BUSY'
+    : (message.type === 'POINTER_ERROR' ? 'ERROR' : 'READY');
+  updatePointerMarker();
+  updateDiagnostics();
 }
 
 function updateLinkStatus() {
@@ -377,10 +591,32 @@ function updateDiagnostics() {
       centerPixel: live?.centerPixel || null,
       textureGlError: live?.textureGlError ?? null,
       lastError: state.link.lastError
+    },
+    pointerLink: {
+      coordinateSystem: CANONICAL_COORDINATE_SYSTEM.name,
+      origin: CANONICAL_COORDINATE_SYSTEM.origin,
+      interactionMode: state.interactionMode.toUpperCase(),
+      state: state.pointer.state,
+      canonical: state.pointer.lastCanonical,
+      requested: state.pointer.requested,
+      applied: state.pointer.applied,
+      coordinateError: state.pointer.coordinateError,
+      documentId: live?.documentId || null,
+      sourceFrameId: live?.frameId || null,
+      lastAck: state.pointer.lastAck,
+      lastError: state.pointer.lastError,
+      marker: state.pointer.marker ? {
+        requestId: state.pointer.marker.requestId,
+        documentId: state.pointer.marker.documentId,
+        status: state.pointer.marker.status,
+        visible: state.pointer.markerVisible
+      } : null,
+      queue: pointerQueue.snapshot()
     }
   };
   window.block0Diagnostics = structuredClone(state.diagnostics);
   window.block1Diagnostics = structuredClone(state.diagnostics.liveLink);
+  window.block2PointerDiagnostics = structuredClone(state.diagnostics.pointerLink);
 
   const rows = [
     ['Photoshop Link', state.link.photoshopConnected ? 'CONNECTED' : 'DISCONNECTED'],
@@ -414,7 +650,21 @@ function updateDiagnostics() {
     ['Texture Count', state.diagnostics.rendererMemoryTextures],
     ['Context Loss', state.diagnostics.contextLossCount],
     ['Filter', state.diagnostics.filterMode.toUpperCase()],
-    ['Last Link Error', state.link.lastError || '—']
+    ['Last Link Error', state.link.lastError || '—'],
+    ['Interaction Mode', state.interactionMode.toUpperCase()],
+    ['Pointer Link', state.pointer.state],
+    ['Canonical u / v', state.pointer.lastCanonical ? `${state.pointer.lastCanonical.u.toFixed(6)} / ${state.pointer.lastCanonical.v.toFixed(6)}` : '—'],
+    ['Requested Pixel', state.pointer.requested ? `${state.pointer.requested.x} / ${state.pointer.requested.y}` : '—'],
+    ['Applied Pixel', state.pointer.applied ? `${state.pointer.applied.x} / ${state.pointer.applied.y}` : '—'],
+    ['Coordinate Error', Number.isFinite(state.pointer.coordinateError) ? `${state.pointer.coordinateError.toFixed(3)} px` : '—'],
+    ['Pointer Document ID', live?.documentId || '—'],
+    ['Pointer Source Frame', live?.frameId || '—'],
+    ['Pointer In Flight', pointerQueue.snapshot().activeRequestId || '—'],
+    ['Pointer Pending', pointerQueue.snapshot().pendingRequestId || '—'],
+    ['Pointer Replacements', pointerQueue.snapshot().replacements],
+    ['Last Pointer ACK', state.pointer.lastAck?.type || '—'],
+    ['Last Pointer Error', state.pointer.lastError || '—'],
+    ['Previz Marker', state.pointer.marker ? `${state.pointer.marker.status.toUpperCase()} / ${state.pointer.markerVisible ? 'VISIBLE' : 'OFFSCREEN'}` : 'CLEARED']
   ];
   diagnosticsElement.replaceChildren();
   for (const [label, value] of rows) {
@@ -426,6 +676,7 @@ function updateDiagnostics() {
   }
 
   updateLinkStatus();
+  updatePointerControls();
   if (!state.asset) {
     badgeElement.className = 'badge pending';
     badgeElement.textContent = 'WAITING';
@@ -554,6 +805,11 @@ function handleLinkJson(message) {
     case 'FRAME_ABORT':
       rejectIncomingFrame(message.code || 'FRAME_ABORT', message.message || 'Broker aborted the frame.', message.frameId);
       return;
+    case 'POINTER_ACK':
+    case 'POINTER_CLEAR_ACK':
+    case 'POINTER_ERROR':
+      handlePointerResponse(message);
+      return;
     case 'ERROR':
       state.link.lastError = `${message.code || 'ERROR'}: ${message.message || 'Unknown link error.'}`;
       break;
@@ -598,6 +854,8 @@ function connectLiveLink() {
   socket.addEventListener('close', () => {
     state.link.rendererHandshake = false;
     state.link.photoshopConnected = false;
+    pointerQueue.reset();
+    state.pointer.state = 'UNAVAILABLE';
     if (state.link.currentFrame) rejectIncomingFrame('BROKER_DISCONNECTED', 'Broker disconnected during a frame.', state.link.currentFrame.metadata.frameId);
     updateDiagnostics();
     scheduleReconnect();
@@ -629,6 +887,9 @@ document.querySelector('#reload-button').addEventListener('click', () => {
   }
 });
 filterButton.addEventListener('click', () => setFilterMode(state.filterMode === 'normal' ? 'pixel' : 'normal'));
+navigateButton.addEventListener('click', () => setInteractionMode('navigate'));
+pointButton.addEventListener('click', () => setInteractionMode('point'));
+clearPointerButton.addEventListener('click', requestPointerClear);
 sourceSelect.addEventListener('change', () => {
   if (sourceSelect.value === 'photoshop-live') selectLiveSource();
   else void loadAsset(sourceSelect.value);
@@ -640,16 +901,32 @@ canvas.addEventListener('wheel', (event) => {
   setZoom(state.zoom * factor, 'wheel');
 }, { passive: false });
 
-canvas.addEventListener('pointerdown', (event) => {
+function beginPan(event) {
+  event.preventDefault();
   state.dragging = true;
+  state.dragPointerId = event.pointerId;
   state.pointerX = event.clientX;
   state.pointerY = event.clientY;
   canvas.setPointerCapture(event.pointerId);
   canvas.classList.add('dragging');
+}
+
+canvas.addEventListener('pointerdown', (event) => {
+  if (event.button === 1) {
+    beginPan(event);
+    return;
+  }
+  if (event.button !== 0) return;
+  if (state.interactionMode === 'point') {
+    state.pointer.down = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    canvas.setPointerCapture(event.pointerId);
+    return;
+  }
+  beginPan(event);
 });
 
 canvas.addEventListener('pointermove', (event) => {
-  if (!state.dragging) return;
+  if (!state.dragging || state.dragPointerId !== event.pointerId) return;
   const deltaX = event.clientX - state.pointerX;
   const deltaY = event.clientY - state.pointerY;
   state.pointerX = event.clientX;
@@ -662,14 +939,57 @@ canvas.addEventListener('pointermove', (event) => {
 });
 
 function endDrag(event) {
+  if (state.dragPointerId !== event.pointerId) return;
   state.dragging = false;
+  state.dragPointerId = null;
   if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
   canvas.classList.remove('dragging');
 }
 
-canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointercancel', endDrag);
+canvas.addEventListener('pointerup', (event) => {
+  if (state.dragging && state.dragPointerId === event.pointerId) {
+    endDrag(event);
+    return;
+  }
+  if (state.interactionMode === 'point') {
+    const down = state.pointer.down;
+    state.pointer.down = null;
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+    if (!down || down.pointerId !== event.pointerId) return;
+    const movement = Math.hypot(event.clientX - down.x, event.clientY - down.y);
+    if (movement > 4) return;
+    const canonical = mapClientPointToCanonical(event.clientX, event.clientY);
+    if (canonical) requestPointerAt(canonical);
+    return;
+  }
+});
+canvas.addEventListener('pointercancel', (event) => {
+  if (state.pointer.down?.pointerId === event.pointerId) state.pointer.down = null;
+  endDrag(event);
+});
+canvas.addEventListener('auxclick', (event) => {
+  if (event.button === 1) event.preventDefault();
+});
 window.addEventListener('resize', resizeRenderer);
+
+window.runBlock2PointerSmokeRequest = () => {
+  if (!setInteractionMode('point')) throw new Error('Synthetic pointer smoke requires an active Photoshop Live source.');
+  const sourceX = Math.floor(state.asset.sourceWidth / 2);
+  const sourceY = Math.floor(state.asset.sourceHeight / 2);
+  const local = new THREE.Vector3(
+    sourceX - state.asset.sourceWidth / 2 + 0.25,
+    state.asset.sourceHeight / 2 - sourceY - 0.25,
+    0
+  );
+  const projected = state.mesh.localToWorld(local).project(camera);
+  const bounds = canvas.getBoundingClientRect();
+  const clientX = bounds.left + ((projected.x + 1) / 2) * bounds.width;
+  const clientY = bounds.top + ((1 - projected.y) / 2) * bounds.height;
+  const canonical = mapClientPointToCanonical(clientX, clientY);
+  if (!canonical) throw new Error('Synthetic pointer point did not intersect the image plane.');
+  const command = requestPointerAt(canonical);
+  return { command, canonical };
+};
 
 window.runBlock0SmokeActions = async () => {
   const actions = {};

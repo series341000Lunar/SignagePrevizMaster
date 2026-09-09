@@ -101,6 +101,23 @@ button:hover {
   background: #363e4a;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.control-divider {
+  width: 1px;
+  height: 24px;
+  margin: 0 2px;
+  background: #4b5565;
+}
+
+.mode-button.active {
+  border-color: #62daa1;
+  color: #62daa1;
+}
+
 #zoom-readout {
   margin-left: auto;
   color: #bac3cf;
@@ -147,6 +164,85 @@ main {
 
 #three-canvas.dragging {
   cursor: grabbing;
+}
+
+#three-canvas.point-mode {
+  cursor: crosshair;
+}
+
+#three-canvas.point-mode.dragging {
+  cursor: grabbing;
+}
+
+.pointer-marker {
+  --pointer-marker-color: #efc66b;
+  position: absolute;
+  z-index: 2;
+  display: none;
+  width: 32px;
+  height: 32px;
+  color: var(--pointer-marker-color);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 90%));
+}
+
+.pointer-marker.visible {
+  display: block;
+}
+
+.pointer-marker.pending {
+  --pointer-marker-color: #efc66b;
+}
+
+.pointer-marker.acknowledged {
+  --pointer-marker-color: #62daa1;
+}
+
+.pointer-marker.error {
+  --pointer-marker-color: #ff7c88;
+}
+
+.pointer-marker-ring {
+  position: absolute;
+  inset: 0;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+}
+
+.pointer-marker-ring::before,
+.pointer-marker-ring::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  background: currentColor;
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.pointer-marker-ring::before {
+  width: 42px;
+  height: 2px;
+}
+
+.pointer-marker-ring::after {
+  width: 2px;
+  height: 42px;
+}
+
+.pointer-marker-label {
+  position: absolute;
+  top: 37px;
+  left: 50%;
+  padding: 2px 5px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  background: rgb(9 10 13 / 85%);
+  color: currentColor;
+  font: 700 10px/1.2 "Segoe UI", system-ui, sans-serif;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  transform: translateX(-50%);
 }
 
 #drag-hint {

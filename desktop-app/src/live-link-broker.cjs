@@ -10,6 +10,9 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
   const makeServer = serverFactory || ((options) => new WebSocketServer(options));
   const clients = { photoshop: null, renderer: null };
   let activeFrame = null;
+  let activePointerRequest = null;
+  const seenPointerRequestIds = new Set();
+  const seenPointerRequestOrder = [];
   const server = makeServer({
     host: config.host,
     port: config.port,
@@ -35,6 +38,11 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
     emit('protocol-error', { role: socket?.luuxRole || 'unassigned', code, message, frameId });
   }
 
+  function sendPointerError(socket, requestId, code, message) {
+    sendJson(socket, { type: 'POINTER_ERROR', requestId: requestId ?? null, code, message });
+    emit('pointer-error', { role: socket?.luuxRole || 'unassigned', requestId: requestId ?? null, code, message });
+  }
+
   function linkStatus() {
     return {
       type: 'LINK_STATUS',
@@ -56,6 +64,139 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
     sendJson(activeFrame.renderer, { type: 'FRAME_ABORT', code, message, frameId });
     emit('frame-aborted', { code, message, frameId });
     activeFrame = null;
+  }
+
+  function abortActivePointer(code, message) {
+    if (!activePointerRequest) return;
+    const { requestId, renderer, timer } = activePointerRequest;
+    if (timer) clearTimeout(timer);
+    sendPointerError(renderer, requestId, code, message);
+    activePointerRequest = null;
+  }
+
+  function rejectActivePointerResponse(socket, code, message) {
+    const requestId = activePointerRequest?.requestId ?? null;
+    const rendererSocket = activePointerRequest?.renderer || null;
+    if (activePointerRequest?.timer) clearTimeout(activePointerRequest.timer);
+    activePointerRequest = null;
+    if (rendererSocket) sendPointerError(rendererSocket, requestId, code, message);
+    sendPointerError(socket, requestId, code, message);
+  }
+
+  function rememberPointerRequestId(requestId) {
+    seenPointerRequestIds.add(requestId);
+    seenPointerRequestOrder.push(requestId);
+    if (seenPointerRequestOrder.length > 256) {
+      seenPointerRequestIds.delete(seenPointerRequestOrder.shift());
+    }
+  }
+
+  function validatePointerBase(message) {
+    for (const field of ['requestId', 'sourceFrameId', 'documentId', 'width', 'height']) {
+      if (!Number.isSafeInteger(message[field]) || message[field] <= 0) {
+        throw new Error(`${field} must be a positive safe integer.`);
+      }
+    }
+    if (typeof message.documentName !== 'string' || message.documentName.length === 0 || message.documentName.length > 1024) {
+      throw new Error('documentName must be a non-empty string of at most 1024 characters.');
+    }
+  }
+
+  function validatePointerCommand(message) {
+    validatePointerBase(message);
+    if (message.type === 'POINTER_SET') {
+      if (!Number.isSafeInteger(message.x) || !Number.isSafeInteger(message.y)) {
+        throw new Error('x and y must be safe integer pixels.');
+      }
+      if (message.x < 0 || message.x >= message.width || message.y < 0 || message.y >= message.height) {
+        const error = new Error('Pointer pixel is outside the declared document dimensions.');
+        error.code = 'OUT_OF_RANGE';
+        throw error;
+      }
+      if (![message.u, message.v].every(Number.isFinite) || message.u < 0 || message.u > 1 || message.v < 0 || message.v > 1) {
+        throw new Error('u and v must be finite normalized coordinates in the range 0..1.');
+      }
+      const normalizedX = Math.min(message.width - 1, Math.floor(message.u * message.width));
+      const normalizedY = Math.min(message.height - 1, Math.floor(message.v * message.height));
+      if (Math.abs(normalizedX - message.x) > 1 || Math.abs(normalizedY - message.y) > 1) {
+        throw new Error('Canonical normalized and pixel coordinates disagree.');
+      }
+    }
+  }
+
+  function handlePointerCommand(socket, message) {
+    if (socket !== clients.renderer) {
+      sendPointerError(socket, message.requestId, 'ROLE_VIOLATION', 'Only the renderer may send pointer commands.');
+      return;
+    }
+    try {
+      if (!['POINTER_SET', 'POINTER_CLEAR'].includes(message.type)) throw new Error('Unsupported pointer command type.');
+      validatePointerCommand(message);
+      if (seenPointerRequestIds.has(message.requestId)) {
+        sendPointerError(socket, message.requestId, 'DUPLICATE_REQUEST', 'Pointer requestId was already used in this renderer session.');
+        return;
+      }
+      if (activePointerRequest) {
+        sendPointerError(socket, message.requestId, 'POINTER_IN_FLIGHT', 'A pointer request is already awaiting Photoshop response.');
+        return;
+      }
+      if (!isOpen(clients.photoshop)) {
+        sendPointerError(socket, message.requestId, 'UXP_DISCONNECTED', 'Photoshop UXP is not connected.');
+        return;
+      }
+      rememberPointerRequestId(message.requestId);
+      activePointerRequest = {
+        requestId: message.requestId,
+        type: message.type,
+        renderer: socket,
+        photoshop: clients.photoshop,
+        timer: setTimeout(() => {
+          if (activePointerRequest?.requestId === message.requestId) {
+            abortActivePointer('POINTER_TIMEOUT', `Photoshop did not respond within ${config.ackTimeoutMs} ms.`);
+          }
+        }, config.ackTimeoutMs)
+      };
+      sendJson(clients.photoshop, message);
+      emit('pointer-routed', { requestId: message.requestId, command: message.type });
+    } catch (error) {
+      sendPointerError(socket, message.requestId, error.code || 'INVALID_POINTER', error.message);
+    }
+  }
+
+  function handlePointerResponse(socket, message) {
+    if (socket !== clients.photoshop) {
+      sendPointerError(socket, message.requestId, 'ROLE_VIOLATION', 'Only Photoshop may respond to pointer commands.');
+      return;
+    }
+    if (!activePointerRequest || activePointerRequest.photoshop !== socket || message.requestId !== activePointerRequest.requestId) {
+      sendPointerError(socket, message.requestId, 'UNEXPECTED_POINTER_RESPONSE', 'Pointer response does not match the active request.');
+      return;
+    }
+    if (message.type === 'POINTER_ACK') {
+      for (const field of ['documentId', 'requestedX', 'requestedY', 'appliedX', 'appliedY']) {
+        if (!Number.isSafeInteger(message[field]) || message[field] < 0) {
+          rejectActivePointerResponse(socket, 'INVALID_POINTER_ACK', `${field} must be a non-negative safe integer.`);
+          return;
+        }
+      }
+      if (typeof message.layerName !== 'string' || message.layerName.length === 0) {
+        rejectActivePointerResponse(socket, 'INVALID_POINTER_ACK', 'layerName is required.');
+        return;
+      }
+    } else if (message.type === 'POINTER_CLEAR_ACK') {
+      if (!Number.isSafeInteger(message.documentId) || message.documentId <= 0) {
+        rejectActivePointerResponse(socket, 'INVALID_POINTER_ACK', 'documentId is required.');
+        return;
+      }
+    } else if (typeof message.code !== 'string' || message.code.length === 0) {
+      rejectActivePointerResponse(socket, 'INVALID_POINTER_ERROR', 'Pointer errors require a code.');
+      return;
+    }
+    const rendererSocket = activePointerRequest.renderer;
+    if (activePointerRequest.timer) clearTimeout(activePointerRequest.timer);
+    activePointerRequest = null;
+    sendJson(rendererSocket, message);
+    emit('pointer-response', { requestId: message.requestId, response: message.type });
   }
 
   function validateFrameMetadata(message) {
@@ -99,6 +240,9 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       const replaced = clients[message.role];
       if (activeFrame && (activeFrame.photoshop === replaced || activeFrame.renderer === replaced)) {
         abortActiveFrame('TEST_ROLE_REPLACED', `${message.role} was replaced by the isolated smoke-test client.`);
+      }
+      if (activePointerRequest && (activePointerRequest.photoshop === replaced || activePointerRequest.renderer === replaced)) {
+        abortActivePointer('TEST_ROLE_REPLACED', `${message.role} was replaced by the isolated smoke-test client.`);
       }
       clients[message.role] = null;
       replaced.close(1012, 'Replaced by isolated smoke-test client');
@@ -219,6 +363,15 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       case 'FRAME_BEGIN': handleFrameBegin(socket, message); break;
       case 'FRAME_END': handleFrameEnd(socket, message); break;
       case 'FRAME_ACK': handleFrameAck(socket, message); break;
+      case 'POINTER_SET':
+      case 'POINTER_CLEAR':
+        handlePointerCommand(socket, message);
+        break;
+      case 'POINTER_ACK':
+      case 'POINTER_CLEAR_ACK':
+      case 'POINTER_ERROR':
+        handlePointerResponse(socket, message);
+        break;
       case 'ERROR':
         if (activeFrame && message.frameId === activeFrame.metadata.frameId) abortActiveFrame(message.code || 'PEER_ERROR', message.message || 'Peer reported an error.');
         break;
@@ -250,6 +403,13 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       if (activeFrame && (activeFrame.photoshop === socket || activeFrame.renderer === socket)) {
         abortActiveFrame('PEER_DISCONNECTED', `${role || 'Unassigned client'} disconnected during a frame.`);
       }
+      if (activePointerRequest && (activePointerRequest.photoshop === socket || activePointerRequest.renderer === socket)) {
+        abortActivePointer('PEER_DISCONNECTED', `${role || 'Unassigned client'} disconnected during a pointer request.`);
+      }
+      if (role === 'renderer') {
+        seenPointerRequestIds.clear();
+        seenPointerRequestOrder.length = 0;
+      }
       if (role) emit('client-disconnected', { role });
       broadcastStatus();
     });
@@ -265,7 +425,8 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       address: server.address(),
       photoshopConnected: isOpen(clients.photoshop),
       rendererConnected: isOpen(clients.renderer),
-      activeFrameId: activeFrame?.metadata.frameId || null
+      activeFrameId: activeFrame?.metadata.frameId || null,
+      activePointerRequestId: activePointerRequest?.requestId || null
     }),
     close: () => new Promise((resolve) => {
       for (const socket of Object.values(clients)) {

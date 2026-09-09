@@ -5,6 +5,8 @@ const config = window.LUUX_LIVE_LINK_CONFIG;
 const DISPLAY_COLOR_PROFILE = 'sRGB IEC61966-2.1';
 const AUTO_SYNC_EVENTS = ['historyStateChanged'];
 const AUTO_SYNC_DEBOUNCE_MS = 350;
+const POINTER_LAYER_NAME = '__LUUX_POINTER__';
+const POINTER_DIAMETER_PX = 25;
 
 const elements = {
   documentName: document.querySelector('#document-name'),
@@ -33,6 +35,14 @@ const elements = {
   lastAutoEventTime: document.querySelector('#last-auto-event-time'),
   notifyCaptureMs: document.querySelector('#notify-capture-ms'),
   lastCaptureTime: document.querySelector('#last-capture-time'),
+  pointerState: document.querySelector('#pointer-state'),
+  pointerRequest: document.querySelector('#pointer-request'),
+  pointerRequested: document.querySelector('#pointer-requested'),
+  pointerApplied: document.querySelector('#pointer-applied'),
+  pointerLayer: document.querySelector('#pointer-layer'),
+  pointerResult: document.querySelector('#pointer-result'),
+  pointerSelection: document.querySelector('#pointer-selection'),
+  pointerError: document.querySelector('#pointer-error'),
   probeStart: document.querySelector('#probe-start'),
   probeStop: document.querySelector('#probe-stop'),
   probeOperation: document.querySelector('#probe-operation'),
@@ -71,6 +81,16 @@ const state = {
   pendingAck: null,
   lastFrame: null,
   lastError: '',
+  pointer: {
+    processing: false,
+    lastRequestId: null,
+    requested: null,
+    applied: null,
+    layerName: '',
+    result: '',
+    selectionRestored: null,
+    lastError: ''
+  },
   autoSync: {
     enabled: false,
     listenerRegistered: false,
@@ -296,6 +316,19 @@ function enumLabel(value) {
   return tail.toUpperCase();
 }
 
+function renderPointer() {
+  const pointer = state.pointer;
+  elements.pointerState.textContent = pointer.processing ? 'BUSY' : 'IDLE';
+  elements.pointerRequest.textContent = pointer.lastRequestId ? String(pointer.lastRequestId) : '—';
+  elements.pointerRequested.textContent = pointer.requested ? `${pointer.requested.x} / ${pointer.requested.y}` : '—';
+  elements.pointerApplied.textContent = pointer.applied ? `${pointer.applied.x} / ${pointer.applied.y}` : '—';
+  elements.pointerLayer.textContent = pointer.layerName || '—';
+  elements.pointerResult.textContent = pointer.result || '—';
+  elements.pointerSelection.textContent = pointer.selectionRestored === null ? '—' : (pointer.selectionRestored ? 'YES' : 'NO');
+  elements.pointerError.className = `error ${pointer.lastError ? 'active' : ''}`;
+  elements.pointerError.textContent = pointer.lastError || 'No pointer error.';
+}
+
 function render() {
   const connected = isReady();
   elements.connectionState.className = `state ${connected ? 'connected' : 'disconnected'}`;
@@ -313,6 +346,7 @@ function render() {
   elements.lastError.textContent = state.lastError || 'No error.';
   renderAutoSync();
   renderProbe();
+  renderPointer();
 }
 
 function refreshDocumentInfo() {
@@ -353,6 +387,210 @@ function waitForAck(frameId) {
   });
 }
 
+function pointerFailure(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function collectLayers(layers, result = []) {
+  for (const layer of layers) {
+    result.push(layer);
+    if (layer.layers && layer.layers.length) collectLayers(layer.layers, result);
+  }
+  return result;
+}
+
+function pointerLayers(doc) {
+  return collectLayers(doc.layers).filter((layer) => layer.name === POINTER_LAYER_NAME);
+}
+
+function restoreActiveLayers(doc, layerIds) {
+  if (!layerIds.length) return true;
+  try {
+    const byId = new Map(collectLayers(doc.layers).map((layer) => [layer.id, layer]));
+    const layers = layerIds.map((id) => byId.get(id)).filter(Boolean);
+    if (!layers.length) return false;
+    doc.activeLayers = layers;
+    return layers.length === layerIds.length;
+  } catch {
+    return false;
+  }
+}
+
+function validatePointerDocument(message, requireCoordinate) {
+  const doc = app.activeDocument;
+  if (!doc || doc.id !== message.documentId || doc.width !== message.width || doc.height !== message.height) {
+    throw pointerFailure(
+      'DOCUMENT_MISMATCH',
+      `Active document does not match request ${message.documentId} (${message.width} × ${message.height}).`
+    );
+  }
+  if (requireCoordinate && (!Number.isSafeInteger(message.x) || !Number.isSafeInteger(message.y) ||
+    message.x < 0 || message.x >= doc.width || message.y < 0 || message.y >= doc.height)) {
+    throw pointerFailure('OUT_OF_RANGE', 'Requested pointer pixel is outside the active document.');
+  }
+  return doc;
+}
+
+async function getSinglePointerLayer(doc) {
+  const matches = pointerLayers(doc);
+  if (matches.some((layer) => layer.kind !== constants.LayerKind.NORMAL)) {
+    throw pointerFailure('POINTER_LAYER_TYPE_MISMATCH', `${POINTER_LAYER_NAME} exists but is not a Pixel Layer.`);
+  }
+  const layer = matches[0] || await doc.createLayer(constants.LayerKind.NORMAL, { name: POINTER_LAYER_NAME });
+  for (const duplicate of matches.slice(1)) duplicate.delete();
+  layer.name = POINTER_LAYER_NAME;
+  layer.visible = true;
+  return layer;
+}
+
+function createClippedPointerPatch(x, y, documentWidth, documentHeight) {
+  const radius = Math.floor(POINTER_DIAMETER_PX / 2);
+  const left = Math.max(0, x - radius);
+  const top = Math.max(0, y - radius);
+  const right = Math.min(documentWidth - 1, x + radius);
+  const bottom = Math.min(documentHeight - 1, y + radius);
+  const width = right - left + 1;
+  const height = bottom - top + 1;
+  const bytes = new Uint8Array(width * height * 4);
+  for (let patchY = 0; patchY < height; patchY += 1) {
+    for (let patchX = 0; patchX < width; patchX += 1) {
+      const documentX = left + patchX;
+      const documentY = top + patchY;
+      if (Math.hypot(documentX - x, documentY - y) > radius) continue;
+      const offset = (patchY * width + patchX) * 4;
+      bytes[offset] = 255;
+      bytes[offset + 1] = 255;
+      bytes[offset + 2] = 255;
+      bytes[offset + 3] = 255;
+    }
+  }
+  return { bytes, width, height, left, top };
+}
+
+async function applyPointerSet(message) {
+  return core.executeAsModal(async () => {
+    const doc = validatePointerDocument(message, true);
+    const previousLayerIds = Array.from(doc.activeLayers, (layer) => layer.id);
+    let selectionRestored = false;
+    let result;
+    try {
+      const layer = await getSinglePointerLayer(doc);
+      const patch = createClippedPointerPatch(message.x, message.y, doc.width, doc.height);
+      const imageData = await imaging.createImageDataFromBuffer(patch.bytes, {
+        width: patch.width,
+        height: patch.height,
+        components: 4,
+        chunky: true,
+        colorProfile: DISPLAY_COLOR_PROFILE,
+        colorSpace: 'RGB'
+      });
+      try {
+        await imaging.putPixels({
+          documentID: doc.id,
+          layerID: layer.id,
+          imageData,
+          replace: true,
+          targetBounds: { left: patch.left, top: patch.top },
+          commandName: 'LUUX Pointer Set'
+        });
+      } finally {
+        imageData.dispose();
+      }
+      result = {
+        documentId: doc.id,
+        requestedX: message.x,
+        requestedY: message.y,
+        appliedX: message.x,
+        appliedY: message.y,
+        layerName: POINTER_LAYER_NAME,
+        layerId: layer.id,
+        patchWidth: patch.width,
+        patchHeight: patch.height,
+        patchLeft: patch.left,
+        patchTop: patch.top,
+        diameter: POINTER_DIAMETER_PX
+      };
+    } finally {
+      selectionRestored = restoreActiveLayers(doc, previousLayerIds);
+    }
+    return { ...result, selectionRestored };
+  }, { commandName: 'LUUX Pointer Set' });
+}
+
+async function applyPointerClear(message) {
+  return core.executeAsModal(async () => {
+    const doc = validatePointerDocument(message, false);
+    const previousLayerIds = Array.from(doc.activeLayers, (layer) => layer.id);
+    const matches = pointerLayers(doc);
+    let selectionRestored = false;
+    try {
+      for (const layer of matches) layer.delete();
+    } finally {
+      selectionRestored = restoreActiveLayers(doc, previousLayerIds);
+    }
+    return {
+      documentId: doc.id,
+      layerName: POINTER_LAYER_NAME,
+      clearedLayers: matches.length,
+      selectionRestored
+    };
+  }, { commandName: 'LUUX Pointer Clear' });
+}
+
+function sendPointerError(message, error) {
+  const code = error.code || 'POINTER_WRITE_FAILED';
+  const detail = error.message || String(error);
+  state.pointer.result = code;
+  state.pointer.lastError = `${code}: ${detail}`;
+  if (isSocketOpen()) {
+    sendJson({
+      type: 'POINTER_ERROR',
+      requestId: message.requestId,
+      documentId: message.documentId,
+      code,
+      message: detail
+    });
+  }
+}
+
+async function processPointerCommand(message) {
+  if (state.pointer.processing) {
+    sendPointerError(message, pointerFailure('POINTER_BUSY', 'A pointer mutation is already in progress.'));
+    render();
+    return;
+  }
+  state.pointer.processing = true;
+  state.pointer.lastRequestId = message.requestId;
+  state.pointer.requested = message.type === 'POINTER_SET' ? { x: message.x, y: message.y } : null;
+  state.pointer.applied = null;
+  state.pointer.layerName = POINTER_LAYER_NAME;
+  state.pointer.result = 'PROCESSING';
+  state.pointer.selectionRestored = null;
+  state.pointer.lastError = '';
+  render();
+  try {
+    const result = message.type === 'POINTER_SET'
+      ? await applyPointerSet(message)
+      : await applyPointerClear(message);
+    state.pointer.applied = message.type === 'POINTER_SET' ? { x: result.appliedX, y: result.appliedY } : null;
+    state.pointer.result = message.type === 'POINTER_SET' ? 'POINTER_ACK' : 'POINTER_CLEAR_ACK';
+    state.pointer.selectionRestored = result.selectionRestored;
+    sendJson({
+      type: state.pointer.result,
+      requestId: message.requestId,
+      ...result
+    });
+  } catch (error) {
+    sendPointerError(message, error);
+  } finally {
+    state.pointer.processing = false;
+    refreshDocumentInfo();
+    render();
+  }
+}
+
 function handleJson(message) {
   switch (message.type) {
     case 'HELLO_ACK':
@@ -371,6 +609,10 @@ function handleJson(message) {
         pending.resolve({ ...message, ackMs: performance.now() - pending.waitingSince });
       }
       break;
+    case 'POINTER_SET':
+    case 'POINTER_CLEAR':
+      void processPointerCommand(message);
+      return;
     case 'ERROR': {
       const error = new Error(`${message.code || 'ERROR'}: ${message.message || 'Unknown live-link error.'}`);
       state.lastError = error.message;
