@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file:; object-src 'none'; base-uri 'none'; frame-src 'none'"
+    >
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LUUX Signage Previz — Block 0</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>LUUX SIGNAGE PREVIZ — BLOCK 0</h1>
+        <p>Full-resolution Electron / Three.js texture validation</p>
+      </div>
+      <div id="full-resolution-badge" class="badge pending">WAITING</div>
+    </header>
+
+    <section class="controls" aria-label="Viewer controls">
+      <label>
+        Source
+        <select id="source-select" aria-label="Source image"></select>
+      </label>
+      <button id="fit-button" type="button">FIT</button>
+      <button id="one-button" type="button">1:1</button>
+      <button id="two-button" type="button">200%</button>
+      <button id="four-button" type="button">400%</button>
+      <button id="filter-button" type="button">NORMAL</button>
+      <button id="reload-button" type="button">RELOAD</button>
+      <span id="zoom-readout">Zoom —</span>
+    </section>
+
+    <main>
+      <section id="viewer" aria-label="Full-resolution texture viewer">
+        <canvas id="three-canvas"></canvas>
+        <div id="drag-hint">Wheel: zoom · Drag: pan</div>
+      </section>
+
+      <aside>
+        <h2>Runtime diagnostics</h2>
+        <dl id="diagnostics"></dl>
+        <div id="runtime-status" class="status">Loading source…</div>
+      </aside>
+    </main>
+
+    <script type="module" src="./renderer.js"></script>
+  </body>
+</html>
+

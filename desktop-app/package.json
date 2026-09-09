@@ -1,0 +1,49 @@
+{
+  "name": "luux-signage-previz",
+  "version": "0.0.0-block0",
+  "private": true,
+  "description": "LUUX Signage Previz Block 0 full-resolution GPU texture validation",
+  "license": "UNLICENSED",
+  "main": "src/main.cjs",
+  "packageManager": "npm@12.0.2",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win portable --x64",
+    "test": "npm run test:static && npm run test:runtime",
+    "test:static": "npm run build && node tests/static-validation.mjs",
+    "test:runtime": "npm run build && electron . --smoke-test --report=.runtime/dev-runtime.json --screenshot=.runtime/dev-runtime.png",
+    "test:portable": "node tests/portable-validation.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "three": "0.186.0"
+  },
+  "build": {
+    "appId": "com.luux.signagepreviz",
+    "productName": "LUUX Signage Previz",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "build/**/*",
+      "src/main.cjs",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "LUUX Signage Previz.exe"
+    }
+  }
+}
+

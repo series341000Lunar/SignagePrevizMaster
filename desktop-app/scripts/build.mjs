@@ -1,0 +1,100 @@
+import { createHash } from 'node:crypto';
+import { rm, mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
+
+const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const sourceRoot = path.join(appRoot, 'src');
+const assetRoot = path.join(appRoot, 'assets');
+const buildRoot = path.join(appRoot, 'build');
+
+const assets = [
+  { id: 'original-png', label: 'Original PNG', fileName: 'AnamorphicTest_rocket_Original_0379f_.png', mime: 'image/png' },
+  { id: 'original-jpg', label: 'Original JPG', fileName: 'AnamorphicTest_rocket_Original_0379f_.jpg', mime: 'image/jpeg' },
+  { id: 'small-png', label: 'Small PNG', fileName: 'AnamorphicTest_rocket_Small_0379f_.png', mime: 'image/png' }
+];
+
+function sha256(buffer) {
+  return createHash('sha256').update(buffer).digest('hex').toUpperCase();
+}
+
+function readPngDimensions(buffer) {
+  const signature = '89504E470D0A1A0A';
+  if (buffer.subarray(0, 8).toString('hex').toUpperCase() !== signature) {
+    throw new Error('Invalid PNG signature.');
+  }
+  return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+}
+
+function readJpegDimensions(buffer) {
+  if (buffer[0] !== 0xff || buffer[1] !== 0xd8) throw new Error('Invalid JPEG signature.');
+  let offset = 2;
+  while (offset < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = buffer[offset + 1];
+    offset += 2;
+    if (marker === 0xd8 || marker === 0xd9) continue;
+    const length = buffer.readUInt16BE(offset);
+    if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+      return { height: buffer.readUInt16BE(offset + 3), width: buffer.readUInt16BE(offset + 5) };
+    }
+    offset += length;
+  }
+  throw new Error('JPEG dimensions were not found.');
+}
+
+function readDimensions(buffer, mime) {
+  return mime === 'image/png' ? readPngDimensions(buffer) : readJpegDimensions(buffer);
+}
+
+await rm(buildRoot, { recursive: true, force: true });
+await mkdir(path.join(buildRoot, 'assets'), { recursive: true });
+await Promise.all([
+  copyFile(path.join(sourceRoot, 'index.html'), path.join(buildRoot, 'index.html')),
+  copyFile(path.join(sourceRoot, 'styles.css'), path.join(buildRoot, 'styles.css'))
+]);
+
+await build({
+  entryPoints: [path.join(sourceRoot, 'renderer.js')],
+  outfile: path.join(buildRoot, 'renderer.js'),
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  target: ['chrome140'],
+  sourcemap: false,
+  minify: false,
+  legalComments: 'none'
+});
+
+const manifestAssets = [];
+for (const asset of assets) {
+  const sourcePath = path.join(assetRoot, asset.fileName);
+  const destinationPath = path.join(buildRoot, 'assets', asset.fileName);
+  const sourceBytes = await readFile(sourcePath);
+  const dimensions = readDimensions(sourceBytes, asset.mime);
+  await copyFile(sourcePath, destinationPath);
+  const destinationBytes = await readFile(destinationPath);
+  const sourceHash = sha256(sourceBytes);
+  const destinationHash = sha256(destinationBytes);
+  if (sourceHash !== destinationHash) throw new Error(`Asset copy hash mismatch: ${asset.fileName}`);
+  manifestAssets.push({
+    ...asset,
+    sourceWidth: dimensions.width,
+    sourceHeight: dimensions.height,
+    bytes: sourceBytes.length,
+    sha256: sourceHash
+  });
+}
+
+const manifest = {
+  generatedAt: new Date().toISOString(),
+  primaryAssetId: 'original-png',
+  assets: manifestAssets
+};
+await writeFile(path.join(buildRoot, 'assets-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+console.log(JSON.stringify(manifest, null, 2));
+

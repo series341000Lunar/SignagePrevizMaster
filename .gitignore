@@ -1,0 +1,16 @@
+# Local reference material (never part of the parent repository)
+/luux-mockup/
+/_TestSource/
+/list.txt
+
+# Dependencies and generated output
+node_modules/
+/desktop-app/build/
+/desktop-app/dist/
+/desktop-app/.runtime/
+*.log
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
