@@ -47,7 +47,7 @@ assert(!/unpkg\.com|cdn\.jsdelivr\.net/i.test(`${rendererSource}\n${htmlSource}\
 assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
 assert(!/_TestSource/i.test(`${mainSource}\n${rendererSource}\n${htmlSource}`), 'Runtime references _TestSource.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.3.0-block3c', 'Package version must identify the Block 3C checkpoint.');
+assert(packageJson.version === '0.4.0-block4a', 'Package version must identify the Block 4A checkpoint.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');

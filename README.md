@@ -35,3 +35,9 @@ future `ANAMORPHIC` mode safely reports `NONE` until its reserved meshes are
 supplied. See
 [`docs/BLOCK-3B-LEGACY-SCENE-CONTRACT.md`](docs/BLOCK-3B-LEGACY-SCENE-CONTRACT.md)
 and [`docs/BLOCK-3C-GLB-SURFACE-VALIDATION.md`](docs/BLOCK-3C-GLB-SURFACE-VALIDATION.md).
+
+Block 4A extracts four independent Legacy Camera/PhotoScene contracts into an
+app-owned calibration profile without adding Block 4B+ runtime features. It
+preserves unresolved Max-like, Photo runtime, and Location values explicitly.
+See [`docs/BLOCK-4A-VALIDATION.md`](docs/BLOCK-4A-VALIDATION.md) and
+[`docs/BLOCK-4A-HANDOFF.md`](docs/BLOCK-4A-HANDOFF.md).

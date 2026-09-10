@@ -1,4 +1,4 @@
-# Desktop App — Block 3C Checkpoint
+# Desktop App — Block 4A Checkpoint
 
 Block 0 proves that a 4728 x 5760-class source can remain full resolution from
 disk decode through a Three.js GPU texture in both development and a Windows
@@ -36,6 +36,12 @@ its camera locked. `CAMERA LOCKED` can be toggled to `CAMERA UNLOCKED` to enable
 Orbit/Pan/Dolly. Entering Legacy 2D World or changing its scene restores the
 lock; POINT remains available while the camera is locked.
 
+Block 4A adds the data-only `site-calibration-profile.js` foundation. It records
+four independent Legacy Photo Reference Cameras, the four byte-identical
+8256×5504 photo sources, exact Legacy mapping meshes, immutable reset baselines,
+and the inherited camera lock policy. PhotoScene runtime, camera editing,
+Max-like conversion, Environment, and Location UI remain deferred.
+
 ## Commands
 
 ```powershell
@@ -43,6 +49,7 @@ npm install
 npm run dev
 npm run test:static
 npm run test:protocol
+npm run test:block4a
 npm run test:runtime
 npm run test:link
 npm run dist

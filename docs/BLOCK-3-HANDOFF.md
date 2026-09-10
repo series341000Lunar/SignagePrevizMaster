@@ -10,7 +10,7 @@ Repository:             C:\_InternalProjects\SignagePrevizMaster
 Branch:                 main
 Block 2 closing commit: 383fdf016ddf99bc1cb3fcac84cddbffc060c800
 Block 3 surface foundation commit: bae8e61fcc5c28377045ccb0372fa90bd828ba2b
-Legacy camera lock:             this handoff commit
+Legacy camera lock commit:     306e5c3a0efd822af307f8d0ce9e490ba9613bd4
 Block 0–3:              CLOSED
 ```
 
