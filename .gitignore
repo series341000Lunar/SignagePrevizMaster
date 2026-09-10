@@ -4,6 +4,7 @@
 /list.txt
 /Codex_Toggle_Git_Metadata.bat
 /Run_Previz_Dev.bat
+/3DAsset/BG/Previz_3Dworld_Background_v01.glb
 
 # Dependencies and generated output
 node_modules/

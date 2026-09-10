@@ -55,3 +55,12 @@ texture stays on the exact Legacy meshes, and Photo POINT uses the same
 content viewport, mesh UV, canonical coordinate, and Photoshop protocol path.
 See [`docs/BLOCK-4C-VALIDATION.md`](docs/BLOCK-4C-VALIDATION.md) and
 [`docs/BLOCK-4C-HANDOFF.md`](docs/BLOCK-4C-HANDOFF.md).
+
+Block 4D adds the mutable `SITE_ENVIRONMENT` asset to 3D World without changing
+Functional Signage ownership. The corrected
+`Previz_3Dworld_Background_v02.glb` contains 18 environment-only meshes, uses
+direct project coordinates, and receives a neutral double-sided runtime
+material with DAY/NIGHT presentation modes. Environment geometry participates
+in visual depth but never becomes a master-texture or Canonical POINT target.
+See [`docs/BLOCK-4D-VALIDATION.md`](docs/BLOCK-4D-VALIDATION.md) and
+[`docs/BLOCK-4D-HANDOFF.md`](docs/BLOCK-4D-HANDOFF.md).

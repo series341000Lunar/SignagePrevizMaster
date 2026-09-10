@@ -79,6 +79,7 @@ async function runSmokeTest(window) {
     await waitForSiteReady(window);
     const cameraEditor = await window.webContents.executeJavaScript('window.runBlock4BCameraEditorSmoke()', true);
     const photoScene = await window.webContents.executeJavaScript('window.runBlock4CPhotoSceneSmoke()', true);
+    const environment = await window.webContents.executeJavaScript('window.runBlock4DEnvironmentSmoke()', true);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -97,8 +98,17 @@ async function runSmokeTest(window) {
       photoScene.contentAspectExact === true && photoScene.outsideContentRejected === true &&
       photoScene.centerNdcExact === true && photoScene.passiveRenderPreserved === true &&
       photoScene.photoResourceCount === 1 && photoScene.stressSwitchCount === 24 &&
-      photoScene.stressLatestWins === true && photoScene.rendererTextureCountAfterStress <= 2 &&
+      photoScene.stressLatestWins === true && photoScene.rendererTextureCountAfterStress <= photoScene.rendererTextureBudget &&
       photoScene.contextLossCount === 0 &&
+      environment.status === 'READY' && environment.revisionChanged === false &&
+      environment.coordinatePolicy === 'DIRECT_NO_CONVERSION' &&
+      environment.meshCount === 18 && environment.visibleMeshCount === 18 &&
+      environment.excludedMeshCount === 0 && environment.rootVisibleInWorld3d === true &&
+      environment.hiddenOutsideWorld3d === true && environment.rootTransformIdentity === true &&
+      environment.allTransformsFinite === true && environment.materialOverrideExact === true &&
+      environment.pointTargetCount === 0 && environment.raycastDisabled === true &&
+      environment.loadCount === 1 && environment.nightDarker === true &&
+      environment.strictSignageStillActive === true && environment.presentationControlVisible === true &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -116,6 +126,7 @@ async function runSmokeTest(window) {
       runtime,
       cameraEditor,
       photoScene,
+      environment,
       screenshotPath
     };
     writeJson(reportPath, report);
@@ -292,6 +303,7 @@ async function runLinkSmokeTest(window) {
     const pointer3dRuntime = await waitForPointerDiagnostics(window, pointer3dSet.requestId);
     const markerCameraSmoke = await window.webContents.executeJavaScript('window.runBlock3PlaneMarkerCameraSmoke()', true);
     const plane3dRuntime = await window.webContents.executeJavaScript('window.block3PlaneDiagnostics', true);
+    const environmentSmoke = await window.webContents.executeJavaScript('window.runBlock4DEnvironmentSmoke()', true);
 
     const sitePointerSetPromise = waitForClientMessage(
       photoshopClient,
@@ -408,7 +420,7 @@ async function runLinkSmokeTest(window) {
       photoSceneSmoke.allScenesReady === true && photoSceneSmoke.rapidLatestWins === true &&
       photoSceneSmoke.contentAspectExact === true && photoSceneSmoke.outsideContentRejected === true &&
       photoSceneSmoke.stressSwitchCount === 24 && photoSceneSmoke.stressLatestWins === true &&
-      photoSceneSmoke.rendererTextureCountAfterStress <= 2 &&
+      photoSceneSmoke.rendererTextureCountAfterStress <= photoSceneSmoke.rendererTextureBudget &&
       photoPointerRequest.command.requestId === photoPointerSet.requestId &&
       photoPointerRequest.canonical.x === photoPointerSet.x && photoPointerRequest.canonical.y === photoPointerSet.y &&
       photoPointerRequest.surfaceHit.surfaceRole === 'Front' && photoPointerRequest.surfaceHit.meshName.includes('LUUX_Front') &&
@@ -416,6 +428,12 @@ async function runLinkSmokeTest(window) {
       photoPointerRuntime.state === 'READY' && photoPointerRuntime.coordinateError === 0 &&
       photoPointerRuntime.marker?.view === 'site-3d' && photoPointerRuntime.marker?.status === 'acknowledged' &&
       photoPointerRuntime.marker?.visible === true && photoRuntime.ready === true && photoRuntime.sceneId === 'FRONT' &&
+      environmentSmoke.status === 'READY' && environmentSmoke.revisionChanged === false &&
+      environmentSmoke.meshCount === 18 && environmentSmoke.visibleMeshCount === 18 &&
+      environmentSmoke.excludedMeshCount === 0 && environmentSmoke.pointTargetCount === 0 &&
+      environmentSmoke.materialOverrideExact === true && environmentSmoke.rootTransformIdentity === true &&
+      environmentSmoke.allTransformsFinite === true && environmentSmoke.hiddenOutsideWorld3d === true &&
+      environmentSmoke.strictSignageStillActive === true && environmentSmoke.loadCount === 1 &&
       runtime.rendererTextureCount === 1 && runtime.contextLossCount === 0 &&
       runtime.textureGlError === 0 &&
       runtime.centerPixel.slice(0, 3).every((value) => value >= 188 && value <= 196) &&
@@ -439,6 +457,7 @@ async function runLinkSmokeTest(window) {
       pointer3d: { request: pointer3dRequest, set: pointer3dSet, ack: pointer3dAck, runtime: pointer3dRuntime },
       markerCameraSmoke,
       plane3dRuntime,
+      environmentSmoke,
       sitePointer: { request: sitePointerRequest, set: sitePointerSet, ack: sitePointerAck, runtime: sitePointerRuntime },
       siteMarkerCameraSmoke,
       site3dRuntime,

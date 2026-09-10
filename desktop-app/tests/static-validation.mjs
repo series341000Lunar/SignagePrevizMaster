@@ -14,6 +14,7 @@ const coordinateSource = await readFile(path.join(appRoot, 'src', 'canonical-coo
 const pointerQueueSource = await readFile(path.join(appRoot, 'src', 'pointer-command-queue.js'), 'utf8');
 const siteProfileSource = await readFile(path.join(appRoot, 'src', 'site-scene-profile.js'), 'utf8');
 const siteCalibrationSource = await readFile(path.join(appRoot, 'src', 'site-calibration-profile.js'), 'utf8');
+const siteEnvironmentSource = await readFile(path.join(appRoot, 'src', 'site-environment-profile.js'), 'utf8');
 const photoRuntimeSource = await readFile(path.join(appRoot, 'src', 'photo-scene-runtime.js'), 'utf8');
 const htmlSource = await readFile(path.join(appRoot, 'src', 'index.html'), 'utf8');
 const builtRenderer = await readFile(path.join(appRoot, 'build', 'renderer.js'), 'utf8');
@@ -49,7 +50,7 @@ assert(!/unpkg\.com|cdn\.jsdelivr\.net/i.test(`${rendererSource}\n${htmlSource}\
 assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
 assert(!/_TestSource/i.test(`${mainSource}\n${rendererSource}\n${htmlSource}`), 'Runtime references _TestSource.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.4.0-block4c', 'Package version must identify the Block 4C checkpoint.');
+assert(packageJson.version === '0.4.0-block4d', 'Package version must identify the Block 4D checkpoint.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
@@ -110,6 +111,12 @@ assert(/clientPointToContentNdc/.test(rendererSource) && /if \(state\.activeView
 assert(/class LatestWinsPhotoSceneController/.test(photoRuntimeSource) && /token !== this\.requestToken/.test(photoRuntimeSource), 'Photo scene switching must use an explicit latest-wins request token.');
 assert(/runtimeUrl: `\$\{PHOTO_RUNTIME_ROOT\}/.test(siteCalibrationSource) && /GENERATED_BUILD_ASSET/.test(siteCalibrationSource), 'Photo runtime URLs must resolve only to generated build assets.');
 assert(/marker\.documentId === live\.documentId/.test(rendererSource), 'Previz marker must be bound to the matching live Photoshop document.');
+assert(/Previz_3Dworld_Background_v02\.glb/.test(siteEnvironmentSource), 'Block 4D must select the corrected v02 environment revision.');
+assert(/MUTABLE_INFORMATIONAL_FINGERPRINT/.test(siteEnvironmentSource), 'Environment revision metadata must remain informational.');
+assert(/EXACT_ONLY_NO_FUZZY_SIGNAGE_SELECTOR/.test(siteEnvironmentSource), 'Environment exclusions must use exact names only.');
+assert(/new THREE\.MeshStandardMaterial/.test(rendererSource) && /roughness:[\s\S]*metalness:[\s\S]*side: THREE\.DoubleSide/.test(rendererSource), 'Environment meshes must receive the neutral double-sided runtime material.');
+assert(/child\.raycast = \(\) => \{\}/.test(rendererSource), 'Environment meshes must be excluded from runtime raycasting.');
+assert(/id="environment-presentation-select"/.test(htmlSource), 'Block 4D must expose DAY and NIGHT environment presentation modes.');
 assert(/pending/.test(rendererSource) && /acknowledged/.test(rendererSource) && /error/.test(rendererSource), 'Previz marker must expose pending, acknowledged, and error states.');
 assert(/event\.button === 1[\s\S]*beginPan\(event\)/.test(rendererSource), 'Middle-button drag must begin pan in both interaction modes.');
 assert(/state\.dragPointerId !== event\.pointerId/.test(rendererSource), 'Pan must track its initiating pointer ID.');
@@ -175,6 +182,11 @@ for (const photoAsset of manifest.photoAssets) {
   assert(photoDetails.size === photoAsset.byteLength, `Built photo size mismatch: ${photoAsset.runtimeFileName}`);
   assert(photoAsset.sourceVerified === true && photoAsset.buildCopyVerified === true, `Photo verification flags missing: ${photoAsset.runtimeFileName}`);
 }
+const environmentFile = path.join(appRoot, 'build', 'assets', 'environment', path.basename(manifest.environmentAsset.runtimeUrl));
+const environmentDetails = await stat(environmentFile);
+assert(environmentDetails.size === manifest.environmentAsset.observedFingerprint.byteLength, 'Built environment GLB size mismatch.');
+assert(manifest.environmentAsset.sourceVerified === true && manifest.environmentAsset.buildCopyVerified === true, 'Environment verification flags are missing.');
+assert(manifest.environmentAsset.revisionPolicy === 'MUTABLE_INFORMATIONAL_FINGERPRINT', 'Environment revision policy must remain mutable/informational.');
 
 const result = {
   pass: failures.length === 0,
@@ -206,7 +218,8 @@ const result = {
     latestWins: true
   },
   assets: manifest.assets,
-  photoAssets: manifest.photoAssets
+  photoAssets: manifest.photoAssets,
+  environmentAsset: manifest.environmentAsset
 };
 console.log(JSON.stringify(result, null, 2));
 if (failures.length > 0) process.exitCode = 1;

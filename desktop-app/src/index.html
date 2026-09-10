@@ -7,14 +7,14 @@
       content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file: ws://localhost:34100; object-src 'none'; base-uri 'none'; frame-src 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>LUUX Signage Previz — Block 4C</title>
+    <title>LUUX Signage Previz — Block 4D</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <div>
-        <h1>LUUX SIGNAGE PREVIZ — BLOCK 4C</h1>
-        <p>Photo-backed Legacy scenes · Full-resolution Photoshop signage overlay</p>
+        <h1>LUUX SIGNAGE PREVIZ — BLOCK 4D</h1>
+        <p>Neutral Site Environment · Photo-backed Legacy scenes · Full-resolution Photoshop signage</p>
       </div>
       <div id="full-resolution-badge" class="badge pending">WAITING</div>
     </header>
@@ -41,6 +41,13 @@
       <label class="site-control" hidden>
         Scene
         <select id="site-scene-select" aria-label="Legacy scene" disabled></select>
+      </label>
+      <label id="environment-presentation-control" class="site-control" hidden>
+        Presentation
+        <select id="environment-presentation-select" aria-label="Environment presentation" disabled>
+          <option value="day">DAY</option>
+          <option value="night">NIGHT</option>
+        </select>
       </label>
       <button id="legacy-camera-lock-button" class="site-control camera-lock-button locked" type="button" aria-pressed="true" hidden>CAMERA LOCKED</button>
       <span class="control-divider site-control" aria-hidden="true" hidden></span>

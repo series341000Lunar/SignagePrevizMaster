@@ -27,6 +27,7 @@ import {
   PHOTO_CONTENT_ASPECT
 } from './photo-scene-runtime.js';
 import { SITE_SCENE_PROFILE, resolveSurfaceSet } from './site-scene-profile.js';
+import { SITE_ENVIRONMENT_PROFILE } from './site-environment-profile.js';
 
 const canvas = document.querySelector('#three-canvas');
 const viewer = document.querySelector('#viewer');
@@ -49,6 +50,8 @@ const siteControls = [...document.querySelectorAll('.site-control')];
 const siteWorldSelect = document.querySelector('#site-world-select');
 const siteMappingSelect = document.querySelector('#site-mapping-select');
 const siteSceneSelect = document.querySelector('#site-scene-select');
+const environmentPresentationControl = document.querySelector('#environment-presentation-control');
+const environmentPresentationSelect = document.querySelector('#environment-presentation-select');
 const legacyCameraLockButton = document.querySelector('#legacy-camera-lock-button');
 const cameraEditor = document.querySelector('#camera-editor');
 const cameraEditorTitle = document.querySelector('#camera-editor-title');
@@ -108,6 +111,10 @@ const scene = new THREE.Scene();
 const scene3d = new THREE.Scene();
 const sceneSite = new THREE.Scene();
 const scenePhoto = new THREE.Scene();
+const environmentHemisphereLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
+const environmentDirectionalLight = new THREE.DirectionalLight(0xffffff, 1);
+environmentDirectionalLight.position.set(8, 16, 12);
+sceneSite.add(environmentHemisphereLight, environmentDirectionalLight);
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
 camera.position.z = 1;
 const camera3d = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
@@ -203,6 +210,20 @@ const state = {
     commitCount: 0,
     disposeCount: 0,
     error: ''
+  },
+  environment: {
+    status: 'LOADING',
+    error: '',
+    root: null,
+    meshes: [],
+    visibleMeshes: [],
+    excludedMeshes: [],
+    unmatchedExclusions: [],
+    presentation: SITE_ENVIRONMENT_PROFILE.defaultPresentation,
+    loadCount: 0,
+    sourceMaterialsDisposed: 0,
+    sourceTexturesDisposed: 0,
+    runtimeUrl: SITE_ENVIRONMENT_PROFILE.asset.runtimeUrl
   },
   site: {
     status: 'LOADING',
@@ -872,6 +893,7 @@ function applySiteSurfaceSelection({ resetCamera = true } = {}) {
   if (selection.camera) populateCameraEditorFromRecord();
   if (selection.photoScene) void activatePhotoScene(selection.photoScene);
   else deactivatePhotoScene('non-photo-site-selection');
+  applyEnvironmentVisibility();
   syncSiteCameraControls();
   siteSceneSelect.disabled = state.site.world !== 'legacy2d' || state.site.mappingMode !== 'normal';
   updateZoomReadout();
@@ -934,6 +956,119 @@ async function loadSiteScene() {
     state.site.status = 'ERROR';
     state.site.error = error.stack || error.message;
     state.site.surfaceSetAvailable = false;
+    updateDiagnostics();
+  }
+}
+
+function environmentPresentationContract() {
+  return SITE_ENVIRONMENT_PROFILE.presentations[state.environment.presentation] ||
+    SITE_ENVIRONMENT_PROFILE.presentations[SITE_ENVIRONMENT_PROFILE.defaultPresentation];
+}
+
+function syncEnvironmentControls() {
+  const available = state.activeView === 'site-3d' && state.site.world === 'world3d';
+  environmentPresentationControl.hidden = !available;
+  environmentPresentationSelect.disabled = !available || state.environment.status !== 'READY';
+  environmentPresentationSelect.value = state.environment.presentation;
+}
+
+function applyEnvironmentPresentation() {
+  const presentation = environmentPresentationContract();
+  for (const mesh of state.environment.visibleMeshes) {
+    mesh.material.color.setHex(presentation.materialColor);
+    mesh.material.needsUpdate = true;
+  }
+  environmentHemisphereLight.color.setHex(presentation.hemisphereSkyColor);
+  environmentHemisphereLight.groundColor.setHex(presentation.hemisphereGroundColor);
+  environmentHemisphereLight.intensity = presentation.hemisphereIntensity;
+  environmentDirectionalLight.color.setHex(presentation.directionalColor);
+  environmentDirectionalLight.intensity = presentation.directionalIntensity;
+}
+
+function applyEnvironmentVisibility() {
+  const environmentVisible = state.environment.status === 'READY' && state.site.world === 'world3d';
+  if (state.environment.root) state.environment.root.visible = environmentVisible;
+  for (const mesh of state.environment.visibleMeshes) mesh.visible = true;
+  for (const mesh of state.environment.excludedMeshes) mesh.visible = false;
+  environmentHemisphereLight.visible = environmentVisible;
+  environmentDirectionalLight.visible = environmentVisible;
+  syncEnvironmentControls();
+}
+
+function nodeTransformIsFinite(object) {
+  return [...object.position.toArray(), ...object.quaternion.toArray(), ...object.scale.toArray()].every(Number.isFinite);
+}
+
+async function loadEnvironmentScene() {
+  const loader = new GLTFLoader();
+  try {
+    const url = new URL(SITE_ENVIRONMENT_PROFILE.asset.runtimeUrl, import.meta.url).href;
+    const gltf = await loader.loadAsync(url);
+    if (!gltf.scene) throw new Error('Environment GLB has no runtime scene.');
+    const exactExclusions = new Set(SITE_ENVIRONMENT_PROFILE.visibility.excludedExactNodes);
+    const matchedExclusions = new Set();
+    const sourceMaterials = new Set();
+    const sourceTextures = new Set();
+    const meshes = [];
+    const visibleMeshes = [];
+    const excludedMeshes = [];
+    let transformsFinite = true;
+    gltf.scene.traverse((child) => {
+      transformsFinite = transformsFinite && nodeTransformIsFinite(child);
+      if (!child.isMesh) return;
+      meshes.push(child);
+      const materials = Array.isArray(child.material) ? child.material : [child.material];
+      for (const material of materials) {
+        if (!material) continue;
+        sourceMaterials.add(material);
+        for (const value of Object.values(material)) if (value?.isTexture) sourceTextures.add(value);
+      }
+      const excluded = exactExclusions.has(child.name);
+      child.userData.environmentRole = SITE_ENVIRONMENT_PROFILE.asset.assetRole;
+      child.userData.environmentExcluded = excluded;
+      child.raycast = () => {};
+      if (excluded) {
+        matchedExclusions.add(child.name);
+        child.visible = false;
+        excludedMeshes.push(child);
+      } else {
+        child.material = new THREE.MeshStandardMaterial({
+          color: environmentPresentationContract().materialColor,
+          roughness: SITE_ENVIRONMENT_PROFILE.material.roughness,
+          metalness: SITE_ENVIRONMENT_PROFILE.material.metalness,
+          side: THREE.DoubleSide,
+          depthTest: true,
+          depthWrite: true,
+          toneMapped: false
+        });
+        visibleMeshes.push(child);
+      }
+    });
+    if (!transformsFinite) throw new Error('Environment GLB contains a non-finite runtime transform.');
+    if (meshes.length === 0 || visibleMeshes.length === 0) throw new Error('Environment GLB has no renderable environment mesh.');
+    for (const texture of sourceTextures) texture.dispose();
+    for (const material of sourceMaterials) material.dispose();
+    gltf.scene.userData.environmentAssetId = SITE_ENVIRONMENT_PROFILE.asset.logicalId;
+    gltf.scene.userData.coordinatePolicy = SITE_ENVIRONMENT_PROFILE.asset.coordinatePolicy;
+    state.environment.root = gltf.scene;
+    state.environment.meshes = meshes;
+    state.environment.visibleMeshes = visibleMeshes;
+    state.environment.excludedMeshes = excludedMeshes;
+    state.environment.unmatchedExclusions = [...exactExclusions].filter((name) => !matchedExclusions.has(name));
+    state.environment.sourceMaterialsDisposed = sourceMaterials.size;
+    state.environment.sourceTexturesDisposed = sourceTextures.size;
+    state.environment.loadCount += 1;
+    state.environment.status = 'READY';
+    state.environment.error = '';
+    sceneSite.add(gltf.scene);
+    applyEnvironmentPresentation();
+    applyEnvironmentVisibility();
+    render();
+    updateDiagnostics();
+  } catch (error) {
+    state.environment.status = 'ERROR';
+    state.environment.error = error.stack || error.message;
+    applyEnvironmentVisibility();
     updateDiagnostics();
   }
 }
@@ -1127,6 +1262,7 @@ function setActiveView(view) {
   for (const control of siteControls) control.hidden = view !== 'site-3d';
   updatePhotoContentRect();
   syncSiteCameraControls();
+  applyEnvironmentVisibility();
   for (const button of [fitButton, oneButton, twoButton, fourButton]) button.disabled = view !== '2d';
   updateZoomReadout();
   render();
@@ -1139,7 +1275,9 @@ function render() {
   const photoActive = isPhotoViewportActive();
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, width, height);
-  renderer.setClearColor(0x090a0d, 1);
+  const environmentActive = state.activeView === 'site-3d' && state.site.world === 'world3d' &&
+    state.environment.status === 'READY';
+  renderer.setClearColor(environmentActive ? environmentPresentationContract().clearColor : 0x090a0d, 1);
   renderer.clear(true, true, true);
   if (state.activeView === 'site-3d' && photoActive) {
     const rect = state.photo.contentRect;
@@ -1481,6 +1619,42 @@ function updateDiagnostics() {
       contextLossCount: state.contextLossCount,
       error: state.photo.error
     },
+    environment: {
+      status: state.environment.status,
+      error: state.environment.error,
+      assetRole: SITE_ENVIRONMENT_PROFILE.asset.assetRole,
+      logicalId: SITE_ENVIRONMENT_PROFILE.asset.logicalId,
+      revisionPolicy: SITE_ENVIRONMENT_PROFILE.asset.revisionPolicy,
+      runtimeUrl: state.environment.runtimeUrl,
+      coordinatePolicy: SITE_ENVIRONMENT_PROFILE.asset.coordinatePolicy,
+      presentation: state.environment.presentation,
+      meshCount: state.environment.meshes.length,
+      visibleMeshCount: state.environment.visibleMeshes.length,
+      excludedMeshCount: state.environment.excludedMeshes.length,
+      excludedExactNodes: [...SITE_ENVIRONMENT_PROFILE.visibility.excludedExactNodes],
+      matchedExcludedNodes: state.environment.excludedMeshes.map((mesh) => mesh.name),
+      unmatchedExcludedNodes: [...state.environment.unmatchedExclusions],
+      allRuntimeTransformsFinite: state.environment.root
+        ? (() => {
+            let finite = true;
+            state.environment.root.traverse((object) => { finite = finite && nodeTransformIsFinite(object); });
+            return finite;
+          })()
+        : false,
+      rootTransformIdentity: Boolean(state.environment.root) &&
+        state.environment.root.position.lengthSq() === 0 &&
+        state.environment.root.quaternion.angleTo(new THREE.Quaternion()) === 0 &&
+        state.environment.root.scale.distanceTo(new THREE.Vector3(1, 1, 1)) === 0,
+      materialOverride: SITE_ENVIRONMENT_PROFILE.material,
+      sourceMaterialsDisposed: state.environment.sourceMaterialsDisposed,
+      sourceTexturesDisposed: state.environment.sourceTexturesDisposed,
+      raycastTargetCount: state.site.activeBindings.filter((binding) => state.environment.meshes.includes(binding.mesh)).length,
+      raycastDisabledCount: state.environment.meshes.filter((mesh) => mesh.userData.environmentRole && mesh.raycast).length,
+      loadCount: state.environment.loadCount,
+      observedFingerprint: state.manifest?.environmentAsset?.observedFingerprint || null,
+      revisionChanged: state.manifest?.environmentAsset?.revisionChanged ?? null,
+      pointPolicy: SITE_ENVIRONMENT_PROFILE.pointPolicy
+    },
     plane3d: {
       cameraType: camera3d.type,
       fov: camera3d.fov,
@@ -1609,6 +1783,7 @@ function updateDiagnostics() {
   window.block3PlaneDiagnostics = structuredClone(state.diagnostics.plane3d);
   window.block3SiteDiagnostics = structuredClone(state.diagnostics.site3d);
   window.block4CPhotoDiagnostics = structuredClone(state.diagnostics.photoScene);
+  window.block4DEnvironmentDiagnostics = structuredClone(state.diagnostics.environment);
 
   const rows = [
     ['Active View', state.activeView === 'site-3d' ? 'SITE 3D' : (state.activeView === '3d-plane' ? '3D PLANE' : '2D VIEW')],
@@ -1664,6 +1839,13 @@ function updateDiagnostics() {
     ['Photo Native Size', state.diagnostics.photoScene.nativeWidth ? `${state.diagnostics.photoScene.nativeWidth} × ${state.diagnostics.photoScene.nativeHeight}` : '—'],
     ['Photo Content Rect', state.photo.contentRect ? `${state.photo.contentRect.width.toFixed(1)} × ${state.photo.contentRect.height.toFixed(1)}` : '—'],
     ['Photo Resources', state.diagnostics.photoScene.resourceCount],
+    ['Environment Load', state.diagnostics.environment.status],
+    ['Environment Asset', SITE_ENVIRONMENT_PROFILE.asset.fileName],
+    ['Environment Revision', state.diagnostics.environment.revisionChanged === false ? 'CURRENT' : 'CHANGED'],
+    ['Environment Presentation', state.environment.presentation.toUpperCase()],
+    ['Environment Meshes', `${state.environment.visibleMeshes.length} visible / ${state.environment.excludedMeshes.length} excluded`],
+    ['Environment POINT Targets', state.diagnostics.environment.raycastTargetCount],
+    ['Environment Coordinates', SITE_ENVIRONMENT_PROFILE.asset.coordinatePolicy],
     ['Filter', state.diagnostics.filterMode.toUpperCase()],
     ['Last Link Error', state.link.lastError || '—'],
     ['Interaction Mode', state.interactionMode.toUpperCase()],
@@ -1903,6 +2085,13 @@ siteMappingSelect.addEventListener('change', () => {
   state.site.mappingMode = siteMappingSelect.value;
   if (state.site.world === 'legacy2d') state.site.legacyCameraLocked = true;
   applySiteSurfaceSelection();
+});
+environmentPresentationSelect.addEventListener('change', () => {
+  if (!SITE_ENVIRONMENT_PROFILE.presentations[environmentPresentationSelect.value]) return;
+  state.environment.presentation = environmentPresentationSelect.value;
+  applyEnvironmentPresentation();
+  render();
+  updateDiagnostics();
 });
 siteSceneSelect.addEventListener('change', () => {
   state.site.scene = siteSceneSelect.value;
@@ -2236,6 +2425,8 @@ window.runBlock4BCameraEditorSmoke = () => {
 
 window.runBlock4CPhotoSceneSmoke = async () => {
   setActiveView('site-3d');
+  const rendererTextureBaseline = renderer.info.memory.textures;
+  const rendererTextureBudget = rendererTextureBaseline + 1;
   state.site.world = 'legacy2d';
   state.site.mappingMode = 'normal';
   siteWorldSelect.value = state.site.world;
@@ -2292,7 +2483,7 @@ window.runBlock4CPhotoSceneSmoke = async () => {
     stressResults.slice(0, -1).every((result) => result.status === 'STALE') &&
     state.photo.sceneId === stressFinalSceneId && state.photo.activeResource &&
     photoPlane.material.map === state.photo.activeResource.texture &&
-    renderer.info.memory.textures <= 2;
+    renderer.info.memory.textures <= rendererTextureBudget;
 
   const contentRect = { ...state.photo.contentRect };
   const bounds = canvas.getBoundingClientRect();
@@ -2342,6 +2533,8 @@ window.runBlock4CPhotoSceneSmoke = async () => {
     stressSwitchCount: stressResults.length,
     stressLatestWins,
     rendererTextureCountAfterStress: renderer.info.memory.textures,
+    rendererTextureBaseline,
+    rendererTextureBudget,
     contentAspectExact: contentRect.width / contentRect.height === PHOTO_CONTENT_ASPECT,
     outsideContentRejected: outside === null,
     centerNdcExact: center?.x === 0 && center?.y === 0,
@@ -2395,6 +2588,88 @@ window.runBlock4CPhotoPointerSmokeRequest = async () => {
     photoSceneId: state.photo.sceneId,
     photoResourceCount: state.photo.activeResource ? 1 : 0,
     contentRect: { ...state.photo.contentRect }
+  };
+};
+
+async function waitForEnvironmentReady(timeoutMs = 15000) {
+  const started = performance.now();
+  while (state.environment.status === 'LOADING' && performance.now() - started < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  if (state.environment.status !== 'READY') {
+    throw new Error(state.environment.error || 'Environment runtime did not become ready.');
+  }
+}
+
+window.runBlock4DEnvironmentSmoke = async () => {
+  await waitForEnvironmentReady();
+  setActiveView('site-3d');
+  state.site.world = 'world3d';
+  state.site.mappingMode = 'normal';
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  applySiteSurfaceSelection();
+
+  state.environment.presentation = 'day';
+  applyEnvironmentPresentation();
+  render();
+  const day = {
+    clearColor: renderer.getClearColor(new THREE.Color()).getHex(),
+    hemisphereIntensity: environmentHemisphereLight.intensity,
+    directionalIntensity: environmentDirectionalLight.intensity
+  };
+  state.environment.presentation = 'night';
+  applyEnvironmentPresentation();
+  render();
+  const night = {
+    clearColor: renderer.getClearColor(new THREE.Color()).getHex(),
+    hemisphereIntensity: environmentHemisphereLight.intensity,
+    directionalIntensity: environmentDirectionalLight.intensity
+  };
+
+  state.site.world = 'legacy2d';
+  siteWorldSelect.value = state.site.world;
+  applySiteSurfaceSelection();
+  const hiddenOutsideWorld3d = state.environment.root.visible === false;
+  state.site.world = 'world3d';
+  siteWorldSelect.value = state.site.world;
+  state.environment.presentation = SITE_ENVIRONMENT_PROFILE.defaultPresentation;
+  applyEnvironmentPresentation();
+  applySiteSurfaceSelection();
+  updateDiagnostics();
+
+  const materialOverrideExact = state.environment.visibleMeshes.every((mesh) =>
+    mesh.material?.isMeshStandardMaterial && mesh.material.map === null &&
+    mesh.material.roughness === SITE_ENVIRONMENT_PROFILE.material.roughness &&
+    mesh.material.metalness === SITE_ENVIRONMENT_PROFILE.material.metalness &&
+    mesh.material.side === THREE.DoubleSide);
+  const rootTransformIdentity = state.environment.root.position.lengthSq() === 0 &&
+    state.environment.root.quaternion.angleTo(new THREE.Quaternion()) === 0 &&
+    state.environment.root.scale.distanceTo(new THREE.Vector3(1, 1, 1)) === 0;
+  return {
+    status: state.environment.status,
+    assetFile: SITE_ENVIRONMENT_PROFILE.asset.fileName,
+    revisionChanged: state.manifest.environmentAsset.revisionChanged,
+    coordinatePolicy: SITE_ENVIRONMENT_PROFILE.asset.coordinatePolicy,
+    meshCount: state.environment.meshes.length,
+    visibleMeshCount: state.environment.visibleMeshes.length,
+    excludedMeshCount: state.environment.excludedMeshes.length,
+    unmatchedExclusions: [...state.environment.unmatchedExclusions],
+    rootVisibleInWorld3d: state.environment.root.visible,
+    hiddenOutsideWorld3d,
+    rootTransformIdentity,
+    allTransformsFinite: state.diagnostics.environment.allRuntimeTransformsFinite,
+    materialOverrideExact,
+    pointTargetCount: state.diagnostics.environment.raycastTargetCount,
+    raycastDisabled: state.environment.meshes.every((mesh) => mesh.userData.environmentRole === 'SITE_ENVIRONMENT'),
+    loadCount: state.environment.loadCount,
+    day,
+    night,
+    nightDarker: night.hemisphereIntensity < day.hemisphereIntensity &&
+      night.directionalIntensity < day.directionalIntensity,
+    strictSignageStillActive: state.site.activeBindings.length === 2 &&
+      state.site.activeBindings.every((binding) => !state.environment.meshes.includes(binding.mesh)),
+    presentationControlVisible: !environmentPresentationControl.hidden
   };
 };
 
@@ -2476,10 +2751,12 @@ async function start() {
   populateSiteSceneOptions();
   siteWorldSelect.value = state.site.world;
   siteMappingSelect.value = state.site.mappingMode;
+  environmentPresentationSelect.value = state.environment.presentation;
   resizeRenderer();
   connectLiveLink();
   await Promise.all([
     loadSiteScene(),
+    loadEnvironmentScene(),
     loadAsset(state.manifest.primaryAssetId)
   ]);
 }

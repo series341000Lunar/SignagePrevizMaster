@@ -1,4 +1,4 @@
-# Desktop App — Block 4C Checkpoint
+# Desktop App — Block 4D Checkpoint
 
 Block 0 proves that a 4728 x 5760-class source can remain full resolution from
 disk decode through a Three.js GPU texture in both development and a Windows
@@ -55,6 +55,18 @@ content viewport remains 3:2, while the exact Legacy meshes keep the one master
 signage texture. Photo POINT rejects the letterbox/pillarbox area and continues
 through the existing canonical Photoshop reverse-link protocol.
 
+Block 4D adds `Previz_3Dworld_Background_v02.glb` as a separate mutable Site
+Environment layer in `3D WORLD`. Its 18 environment-only meshes retain direct
+GLB world coordinates and receive a light-gray, fully rough, non-metallic,
+double-sided `MeshStandardMaterial`. `Presentation` selects neutral DAY or
+darker NIGHT lighting. The source material is ignored, and its runtime resources
+are disposed after replacement.
+
+The environment may visually occlude the signage through normal depth testing,
+but its meshes are excluded from all raycasting. Canonical POINT continues to
+raycast only the exact Functional Signage bindings, so hidden signage remains
+pointable and the environment never receives the master Photoshop texture.
+
 ## Commands
 
 ```powershell
@@ -65,6 +77,7 @@ npm run test:protocol
 npm run test:block4a
 npm run test:block4b
 npm run test:block4c
+npm run test:block4d
 npm run test:runtime
 npm run test:link
 npm run dist

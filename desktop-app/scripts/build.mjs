@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { SITE_ASSETS } from '../src/site-scene-profile.js';
 import { PHOTO_SCENE_RECORDS } from '../src/site-calibration-profile.js';
+import { ENVIRONMENT_ASSET } from '../src/site-environment-profile.js';
+import { inspectEnvironmentGlb } from './glb-inspection.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(appRoot, '..');
@@ -58,6 +60,7 @@ await rm(buildRoot, { recursive: true, force: true });
 await mkdir(path.join(buildRoot, 'assets'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'site'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'photo'), { recursive: true });
+await mkdir(path.join(buildRoot, 'assets', 'environment'), { recursive: true });
 await Promise.all([
   copyFile(path.join(sourceRoot, 'index.html'), path.join(buildRoot, 'index.html')),
   copyFile(path.join(sourceRoot, 'styles.css'), path.join(buildRoot, 'styles.css')),
@@ -132,6 +135,34 @@ for (const photoScene of PHOTO_SCENE_RECORDS) {
     buildCopyVerified: true
   });
 }
+
+const environmentSourcePath = path.join(projectRoot, ENVIRONMENT_ASSET.sourcePath);
+const environmentDestinationPath = path.join(buildRoot, 'assets', 'environment', ENVIRONMENT_ASSET.fileName);
+const environmentSourceBytes = await readFile(environmentSourcePath);
+const environmentInspection = inspectEnvironmentGlb(environmentSourceBytes);
+if (!environmentInspection.scenePresent || !environmentInspection.renderableMeshPresent ||
+    !environmentInspection.nodeTransformsFinite) {
+  throw new Error(`Environment GLB failed soft-asset runtime compatibility: ${ENVIRONMENT_ASSET.sourcePath}`);
+}
+await copyFile(environmentSourcePath, environmentDestinationPath);
+const environmentDestinationBytes = await readFile(environmentDestinationPath);
+if (sha256(environmentDestinationBytes) !== environmentInspection.sha256 ||
+    environmentDestinationBytes.length !== environmentInspection.byteLength) {
+  throw new Error(`Environment GLB build copy mismatch: ${ENVIRONMENT_ASSET.fileName}`);
+}
+manifest.environmentAsset = {
+  assetRole: ENVIRONMENT_ASSET.assetRole,
+  logicalId: ENVIRONMENT_ASSET.logicalId,
+  sourcePath: ENVIRONMENT_ASSET.sourcePath,
+  runtimeUrl: ENVIRONMENT_ASSET.runtimeUrl,
+  revisionPolicy: ENVIRONMENT_ASSET.revisionPolicy,
+  observedFingerprint: environmentInspection,
+  profileFingerprint: ENVIRONMENT_ASSET.observedFingerprint,
+  revisionChanged: environmentInspection.byteLength !== ENVIRONMENT_ASSET.observedFingerprint.byteLength ||
+    environmentInspection.sha256 !== ENVIRONMENT_ASSET.observedFingerprint.sha256,
+  sourceVerified: true,
+  buildCopyVerified: true
+};
 
 const siteAssetSources = {
   world3d: path.join(projectRoot, '3DAsset', 'Signage', SITE_ASSETS.world3d.fileName),
