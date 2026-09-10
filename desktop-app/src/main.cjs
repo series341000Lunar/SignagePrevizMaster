@@ -78,6 +78,7 @@ async function runSmokeTest(window) {
     const runtime = await window.webContents.executeJavaScript('window.runBlock0SmokeActions()', true);
     await waitForSiteReady(window);
     const cameraEditor = await window.webContents.executeJavaScript('window.runBlock4BCameraEditorSmoke()', true);
+    const photoScene = await window.webContents.executeJavaScript('window.runBlock4CPhotoSceneSmoke()', true);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -92,6 +93,12 @@ async function runSmokeTest(window) {
       runtime.memoryStable &&
       allActionsPass &&
       Object.values(cameraEditor).every(Boolean) &&
+      photoScene.allScenesReady === true && photoScene.rapidLatestWins === true &&
+      photoScene.contentAspectExact === true && photoScene.outsideContentRejected === true &&
+      photoScene.centerNdcExact === true && photoScene.passiveRenderPreserved === true &&
+      photoScene.photoResourceCount === 1 && photoScene.stressSwitchCount === 24 &&
+      photoScene.stressLatestWins === true && photoScene.rendererTextureCountAfterStress <= 2 &&
+      photoScene.contextLossCount === 0 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -108,6 +115,7 @@ async function runSmokeTest(window) {
       criticalErrors,
       runtime,
       cameraEditor,
+      photoScene,
       screenshotPath
     };
     writeJson(reportPath, report);
@@ -307,6 +315,43 @@ async function runLinkSmokeTest(window) {
     const siteMarkerCameraSmoke = await window.webContents.executeJavaScript('window.runBlock3SiteMarkerCameraSmoke()', true);
     const site3dRuntime = await window.webContents.executeJavaScript('window.block3SiteDiagnostics', true);
     const missingAnamorphicSmoke = await window.webContents.executeJavaScript('window.runBlock3MissingAnamorphicSmoke()', true);
+    const photoSceneSmoke = await window.webContents.executeJavaScript('window.runBlock4CPhotoSceneSmoke()', true);
+    const photoPointerSetPromise = waitForClientMessage(
+      photoshopClient,
+      (message) => message.type === 'POINTER_SET'
+    );
+    const photoPointerRequest = await window.webContents.executeJavaScript('window.runBlock4CPhotoPointerSmokeRequest()', true);
+    const photoPointerSet = await photoPointerSetPromise;
+    const photoPointerAck = {
+      type: 'POINTER_ACK',
+      requestId: photoPointerSet.requestId,
+      documentId: photoPointerSet.documentId,
+      requestedX: photoPointerSet.x,
+      requestedY: photoPointerSet.y,
+      appliedX: photoPointerSet.x,
+      appliedY: photoPointerSet.y,
+      layerName: '__LUUX_POINTER__',
+      selectionRestored: true
+    };
+    photoshopClient.send(JSON.stringify(photoPointerAck));
+    const photoPointerRuntime = await waitForPointerDiagnostics(window, photoPointerSet.requestId);
+    const photoRuntime = await window.webContents.executeJavaScript('window.block4CPhotoDiagnostics', true);
+    const photoSyncBefore = await window.webContents.executeJavaScript(
+      '({ photo: window.block4CPhotoDiagnostics, site: window.block3SiteDiagnostics })',
+      true
+    );
+    frameBytes.fill(96);
+    const thirdAck = await sendSyntheticFrame(photoshopClient, 3, frameBytes, width, height);
+    const photoSyncAfter = await window.webContents.executeJavaScript(
+      '({ photo: window.block4CPhotoDiagnostics, site: window.block3SiteDiagnostics })',
+      true
+    );
+    const photoSyncPreserved =
+      photoSyncAfter.photo.sceneId === photoSyncBefore.photo.sceneId &&
+      photoSyncAfter.photo.runtimeUrl === photoSyncBefore.photo.runtimeUrl &&
+      photoSyncAfter.photo.loadCount === photoSyncBefore.photo.loadCount &&
+      JSON.stringify(photoSyncAfter.site.cameraCurrentValues) === JSON.stringify(photoSyncBefore.site.cameraCurrentValues) &&
+      JSON.stringify(photoSyncAfter.site.position) === JSON.stringify(photoSyncBefore.site.position);
     await new Promise((resolve) => setTimeout(resolve, 150));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -320,6 +365,9 @@ async function runLinkSmokeTest(window) {
       secondAck.receivedWidth === width && secondAck.receivedHeight === height &&
       secondAck.textureWidth === width && secondAck.textureHeight === height &&
       secondAck.receivedBytes === frameBytes.byteLength &&
+      thirdAck.receivedWidth === width && thirdAck.receivedHeight === height &&
+      thirdAck.textureWidth === width && thirdAck.textureHeight === height &&
+      thirdAck.receivedBytes === frameBytes.byteLength && photoSyncPreserved === true &&
       runtime.documentWidth === width && runtime.documentHeight === height &&
       runtime.captureWidth === width && runtime.captureHeight === height &&
       runtime.receivedWidth === width && runtime.receivedHeight === height &&
@@ -357,6 +405,17 @@ async function runLinkSmokeTest(window) {
       missingAnamorphicSmoke.visibleSurfaceCount === 0 && missingAnamorphicSmoke.pointDisabled === true &&
       missingAnamorphicSmoke.controlsDisabled === true &&
       missingAnamorphicSmoke.missingMeshes.join(',') === 'LUUX_Front_3Dworld_Anamorphic,ILMIN_Back_3Dworld_Anamorphic' &&
+      photoSceneSmoke.allScenesReady === true && photoSceneSmoke.rapidLatestWins === true &&
+      photoSceneSmoke.contentAspectExact === true && photoSceneSmoke.outsideContentRejected === true &&
+      photoSceneSmoke.stressSwitchCount === 24 && photoSceneSmoke.stressLatestWins === true &&
+      photoSceneSmoke.rendererTextureCountAfterStress <= 2 &&
+      photoPointerRequest.command.requestId === photoPointerSet.requestId &&
+      photoPointerRequest.canonical.x === photoPointerSet.x && photoPointerRequest.canonical.y === photoPointerSet.y &&
+      photoPointerRequest.surfaceHit.surfaceRole === 'Front' && photoPointerRequest.surfaceHit.meshName.includes('LUUX_Front') &&
+      photoPointerRequest.photoSceneId === 'FRONT' && photoPointerRequest.photoResourceCount === 1 &&
+      photoPointerRuntime.state === 'READY' && photoPointerRuntime.coordinateError === 0 &&
+      photoPointerRuntime.marker?.view === 'site-3d' && photoPointerRuntime.marker?.status === 'acknowledged' &&
+      photoPointerRuntime.marker?.visible === true && photoRuntime.ready === true && photoRuntime.sceneId === 'FRONT' &&
       runtime.rendererTextureCount === 1 && runtime.contextLossCount === 0 &&
       runtime.textureGlError === 0 &&
       runtime.centerPixel.slice(0, 3).every((value) => value >= 188 && value <= 196) &&
@@ -372,6 +431,7 @@ async function runLinkSmokeTest(window) {
       broker,
       firstAck,
       secondAck,
+      thirdAck,
       viewBeforeSecondFrame,
       viewAfterSecondFrame,
       liveViewPreserved,
@@ -383,6 +443,12 @@ async function runLinkSmokeTest(window) {
       siteMarkerCameraSmoke,
       site3dRuntime,
       missingAnamorphicSmoke,
+      photoSceneSmoke,
+      photoPointer: { request: photoPointerRequest, set: photoPointerSet, ack: photoPointerAck, runtime: photoPointerRuntime },
+      photoRuntime,
+      photoSyncBefore,
+      photoSyncAfter,
+      photoSyncPreserved,
       runtime,
       screenshotPath,
       criticalErrors

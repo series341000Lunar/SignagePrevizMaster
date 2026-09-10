@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { SITE_ASSETS } from '../src/site-scene-profile.js';
+import { PHOTO_SCENE_RECORDS } from '../src/site-calibration-profile.js';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(appRoot, '..');
@@ -56,6 +57,7 @@ function readDimensions(buffer, mime) {
 await rm(buildRoot, { recursive: true, force: true });
 await mkdir(path.join(buildRoot, 'assets'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'site'), { recursive: true });
+await mkdir(path.join(buildRoot, 'assets', 'photo'), { recursive: true });
 await Promise.all([
   copyFile(path.join(sourceRoot, 'index.html'), path.join(buildRoot, 'index.html')),
   copyFile(path.join(sourceRoot, 'styles.css'), path.join(buildRoot, 'styles.css')),
@@ -98,8 +100,38 @@ const manifest = {
   generatedAt: new Date().toISOString(),
   primaryAssetId: 'original-png',
   assets: manifestAssets,
-  siteAssets: SITE_ASSETS
+  siteAssets: SITE_ASSETS,
+  photoAssets: []
 };
+
+for (const photoScene of PHOTO_SCENE_RECORDS) {
+  const contract = photoScene.photoAsset;
+  const sourcePath = path.join(projectRoot, contract.path);
+  const destinationPath = path.join(buildRoot, 'assets', 'photo', contract.runtimeFileName);
+  const sourceBytes = await readFile(sourcePath);
+  const sourceDimensions = readJpegDimensions(sourceBytes);
+  const sourceHash = sha256(sourceBytes);
+  if (sourceBytes.length !== contract.byteLength || sourceHash !== contract.sha256 ||
+      sourceDimensions.width !== contract.nativeWidth || sourceDimensions.height !== contract.nativeHeight) {
+    throw new Error(`Photo source contract mismatch: ${contract.path}`);
+  }
+  await copyFile(sourcePath, destinationPath);
+  const destinationBytes = await readFile(destinationPath);
+  const destinationDimensions = readJpegDimensions(destinationBytes);
+  const destinationHash = sha256(destinationBytes);
+  if (destinationBytes.length !== contract.byteLength || destinationHash !== contract.sha256 ||
+      destinationDimensions.width !== contract.nativeWidth || destinationDimensions.height !== contract.nativeHeight) {
+    throw new Error(`Photo build copy contract mismatch: ${contract.runtimeFileName}`);
+  }
+  manifest.photoAssets.push({
+    sceneId: photoScene.sceneId,
+    cameraId: photoScene.cameraId,
+    exactMeshNames: photoScene.mapping.exactMeshNames,
+    ...contract,
+    sourceVerified: true,
+    buildCopyVerified: true
+  });
+}
 
 const siteAssetSources = {
   world3d: path.join(projectRoot, '3DAsset', 'Signage', SITE_ASSETS.world3d.fileName),

@@ -19,7 +19,13 @@ import {
   createThreeDirectCandidate,
   threePointToMaxLike
 } from './camera-input-adapter.js';
-import { createEditableCameraRecords } from './site-calibration-profile.js';
+import { createEditableCameraRecords, PHOTO_SCENE_RECORDS } from './site-calibration-profile.js';
+import {
+  clientPointToContentNdc,
+  computeContainedAspectRect,
+  LatestWinsPhotoSceneController,
+  PHOTO_CONTENT_ASPECT
+} from './photo-scene-runtime.js';
 import { SITE_SCENE_PROFILE, resolveSurfaceSet } from './site-scene-profile.js';
 
 const canvas = document.querySelector('#three-canvas');
@@ -89,23 +95,32 @@ const fourButton = document.querySelector('#four-button');
 const renderer = new THREE.WebGLRenderer({
   canvas,
   antialias: false,
-  alpha: false,
+  alpha: true,
   powerPreference: 'high-performance',
   preserveDrawingBuffer: true
 });
 renderer.setClearColor(0x090a0d, 1);
 renderer.setPixelRatio(window.devicePixelRatio);
+renderer.autoClear = false;
 
 const gl = renderer.getContext();
 const scene = new THREE.Scene();
 const scene3d = new THREE.Scene();
 const sceneSite = new THREE.Scene();
+const scenePhoto = new THREE.Scene();
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
 camera.position.z = 1;
 const camera3d = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
 camera3d.position.set(0, 0, 3);
 const cameraSite = new THREE.PerspectiveCamera(45, 1, 0.01, 10000);
 cameraSite.position.set(7, 6, 11);
+const cameraPhoto = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+cameraPhoto.position.z = 1;
+const photoPlane = new THREE.Mesh(
+  new THREE.PlaneGeometry(2, 2),
+  new THREE.MeshBasicMaterial({ toneMapped: false, depthTest: false, depthWrite: false })
+);
+scenePhoto.add(photoPlane);
 const raycaster = new THREE.Raycaster();
 const controls3d = new OrbitControls(camera3d, canvas);
 const controlsSite = new OrbitControls(cameraSite, canvas);
@@ -176,6 +191,19 @@ const state = {
     marker: null,
     markerVisible: false
   },
+  photo: {
+    status: 'INACTIVE',
+    sceneId: null,
+    requestedSceneId: null,
+    runtimeUrl: null,
+    contentRect: null,
+    activeResource: null,
+    activationPromise: null,
+    loadCount: 0,
+    commitCount: 0,
+    disposeCount: 0,
+    error: ''
+  },
   site: {
     status: 'LOADING',
     error: '',
@@ -204,6 +232,123 @@ const state = {
 };
 
 const pointerQueue = new LatestWinsPointerQueue((command) => sendLinkMessage(command));
+
+function photoSceneForLegacySelection() {
+  if (state.site.world !== 'legacy2d' || state.site.mappingMode !== 'normal') return null;
+  const legacyScene = SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes
+    .find((candidate) => candidate.id === state.site.scene);
+  if (!legacyScene) return null;
+  return PHOTO_SCENE_RECORDS.find((record) => record.sceneId === legacyScene.label.toUpperCase()) ?? null;
+}
+
+function isPhotoSceneContext() {
+  return state.site.world === 'legacy2d' && state.site.mappingMode === 'normal';
+}
+
+function isPhotoViewportActive() {
+  const selected = photoSceneForLegacySelection();
+  return state.activeView === 'site-3d' && Boolean(selected) &&
+    state.photo.status === 'READY' && state.photo.sceneId === selected.sceneId;
+}
+
+function updatePhotoContentRect() {
+  const width = Math.max(1, viewer.clientWidth);
+  const height = Math.max(1, viewer.clientHeight);
+  const rect = computeContainedAspectRect(width, height, PHOTO_CONTENT_ASPECT);
+  state.photo.contentRect = rect;
+}
+
+function createPhotoImageResource(record) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    const runtimeUrl = new URL(record.photoAsset.runtimeUrl, import.meta.url).href;
+    image.className = 'photo-background-image';
+    image.alt = '';
+    image.decoding = 'async';
+    image.onload = () => {
+      state.photo.loadCount += 1;
+      const texture = new THREE.Texture(image);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.generateMipmaps = false;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.needsUpdate = true;
+      resolve({
+        image,
+        texture,
+        runtimeUrl,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+        dispose() {
+          texture.dispose();
+          image.removeAttribute('src');
+          state.photo.disposeCount += 1;
+        }
+      });
+    };
+    image.onerror = () => reject(new Error(`Photo unavailable: ${record.photoAsset.runtimeUrl}`));
+    image.src = runtimeUrl;
+  });
+}
+
+const photoController = new LatestWinsPhotoSceneController({
+  load: (record) => createPhotoImageResource(record),
+  validate: (record, resource) => {
+    if (resource.width !== record.photoAsset.nativeWidth || resource.height !== record.photoAsset.nativeHeight) {
+      throw new Error(`Photo dimensions do not match the contract for ${record.sceneId}.`);
+    }
+  },
+  clear: () => {
+    photoPlane.material.map = null;
+    photoPlane.material.needsUpdate = true;
+    state.photo.activeResource = null;
+    state.photo.sceneId = null;
+    state.photo.runtimeUrl = null;
+  },
+  commit: ({ record, resource }) => {
+    state.photo.activeResource = resource;
+    state.photo.sceneId = record.sceneId;
+    state.photo.runtimeUrl = record.photoAsset.runtimeUrl;
+    state.photo.status = 'READY';
+    state.photo.error = '';
+    state.photo.commitCount += 1;
+    photoPlane.material.map = resource.texture;
+    photoPlane.material.needsUpdate = true;
+    if (isPhotoSceneContext() && photoSceneForLegacySelection()?.sceneId === record.sceneId) {
+      for (const binding of state.site.activeBindings) binding.mesh.visible = true;
+    }
+    updatePhotoContentRect();
+    updatePointerControls();
+    render();
+    updateDiagnostics();
+  },
+  fail: ({ record, error }) => {
+    state.photo.status = 'UNAVAILABLE';
+    state.photo.requestedSceneId = record.sceneId;
+    state.photo.error = error.stack || error.message;
+    updatePhotoContentRect();
+    updatePointerControls();
+    render();
+    updateDiagnostics();
+  }
+});
+
+function deactivatePhotoScene(reason = 'context-change') {
+  photoController.cancel(reason);
+  state.photo.status = 'INACTIVE';
+  state.photo.requestedSceneId = null;
+  state.photo.error = '';
+  updatePhotoContentRect();
+}
+
+function activatePhotoScene(record) {
+  state.photo.status = 'LOADING';
+  state.photo.requestedSceneId = record.sceneId;
+  state.photo.error = '';
+  const activation = photoController.activate(record);
+  state.photo.activationPromise = activation;
+  return activation;
+}
 
 function wire3dControlEvents(controls, view) {
   controls.addEventListener('start', () => {
@@ -249,6 +394,7 @@ function resizeRenderer() {
   const height = Math.max(1, viewer.clientHeight);
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(width, height, false);
+  updatePhotoContentRect();
   camera.left = -width / 2;
   camera.right = width / 2;
   camera.top = height / 2;
@@ -357,14 +503,20 @@ function selectedSiteContract() {
     return {
       contracts: state.site.world === 'world3d' ? world.anamorphicSurfaces : null,
       camera: null,
+      photoScene: null,
       label: 'ANAMORPHIC'
     };
   }
   if (state.site.world === 'world3d') {
-    return { contracts: world.normalSurfaces, camera: null, label: '3D WORLD / NORMAL' };
+    return { contracts: world.normalSurfaces, camera: null, photoScene: null, label: '3D WORLD / NORMAL' };
   }
   const sceneContract = world.normalScenes.find((candidate) => candidate.id === state.site.scene) || world.normalScenes[0];
-  return { contracts: sceneContract.surfaces, camera: sceneContract.camera, label: `LEGACY 2D WORLD / ${sceneContract.label}` };
+  return {
+    contracts: sceneContract.surfaces,
+    camera: sceneContract.camera,
+    photoScene: PHOTO_SCENE_RECORDS.find((record) => record.sceneId === sceneContract.label.toUpperCase()) ?? null,
+    label: `LEGACY 2D WORLD / ${sceneContract.label}`
+  };
 }
 
 function fitSiteCameraToActiveSurfaces() {
@@ -707,15 +859,19 @@ function applySiteSurfaceSelection({ resetCamera = true } = {}) {
     state.site.missingMeshes = [...resolution.missing];
     state.site.surfaceSetAvailable = resolution.available;
     state.site.activeBindings = resolution.available ? [...resolution.resolved] : [];
-    for (const binding of state.site.activeBindings) binding.mesh.visible = true;
+    if (!selection.photoScene) {
+      for (const binding of state.site.activeBindings) binding.mesh.visible = true;
+    }
   }
 
   if (state.pointer.marker?.view === 'site-3d') state.pointer.marker = null;
-  if (resetCamera && state.site.surfaceSetAvailable) {
+  if (resetCamera) {
     if (selection.camera) applyCurrentCameraRecordToRuntime();
-    else fitSiteCameraToActiveSurfaces();
+    else if (state.site.surfaceSetAvailable) fitSiteCameraToActiveSurfaces();
   }
   if (selection.camera) populateCameraEditorFromRecord();
+  if (selection.photoScene) void activatePhotoScene(selection.photoScene);
+  else deactivatePhotoScene('non-photo-site-selection');
   syncSiteCameraControls();
   siteSceneSelect.disabled = state.site.world !== 'legacy2d' || state.site.mappingMode !== 'normal';
   updateZoomReadout();
@@ -969,6 +1125,7 @@ function setActiveView(view) {
   view3dPlaneButton.classList.toggle('active', view === '3d-plane');
   viewSite3dButton.classList.toggle('active', view === 'site-3d');
   for (const control of siteControls) control.hidden = view !== 'site-3d';
+  updatePhotoContentRect();
   syncSiteCameraControls();
   for (const button of [fitButton, oneButton, twoButton, fourButton]) button.disabled = view !== '2d';
   updateZoomReadout();
@@ -977,7 +1134,25 @@ function setActiveView(view) {
 }
 
 function render() {
-  if (state.activeView === 'site-3d') renderer.render(sceneSite, cameraSite);
+  const width = Math.max(1, viewer.clientWidth);
+  const height = Math.max(1, viewer.clientHeight);
+  const photoActive = isPhotoViewportActive();
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, width, height);
+  renderer.setClearColor(0x090a0d, 1);
+  renderer.clear(true, true, true);
+  if (state.activeView === 'site-3d' && photoActive) {
+    const rect = state.photo.contentRect;
+    const bottom = height - rect.y - rect.height;
+    renderer.setScissor(rect.x, bottom, rect.width, rect.height);
+    renderer.setViewport(rect.x, bottom, rect.width, rect.height);
+    renderer.setScissorTest(true);
+    renderer.render(scenePhoto, cameraPhoto);
+    renderer.clearDepth();
+    renderer.render(sceneSite, cameraSite);
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, width, height);
+  } else if (state.activeView === 'site-3d') renderer.render(sceneSite, cameraSite);
   else if (state.activeView === '3d-plane') renderer.render(scene3d, camera3d);
   else renderer.render(scene, camera);
   updatePointerMarker();
@@ -1006,8 +1181,14 @@ function updatePointerMarker() {
   const visible = projected.z >= -1 && projected.z <= 1 &&
     projected.x >= -1 && projected.x <= 1 && projected.y >= -1 && projected.y <= 1;
   pointerMarker.className = `pointer-marker ${marker.status}${visible ? ' visible' : ''}`;
-  pointerMarker.style.left = `${(projected.x + 1) * 50}%`;
-  pointerMarker.style.top = `${(1 - projected.y) * 50}%`;
+  if (marker.view === 'site-3d' && isPhotoViewportActive()) {
+    const rect = state.photo.contentRect;
+    pointerMarker.style.left = `${rect.x + ((projected.x + 1) * 0.5 * rect.width)}px`;
+    pointerMarker.style.top = `${rect.y + ((1 - projected.y) * 0.5 * rect.height)}px`;
+  } else {
+    pointerMarker.style.left = `${(projected.x + 1) * 50}%`;
+    pointerMarker.style.top = `${(1 - projected.y) * 50}%`;
+  }
   state.pointer.markerVisible = visible;
 }
 
@@ -1023,7 +1204,8 @@ function formatMs(value) {
 function pointerRequirementsSatisfied() {
   const live = state.link.lastFrame;
   const pointerSurfaceAvailable = state.activeView === 'site-3d'
-    ? state.site.surfaceSetAvailable && state.site.activeBindings.length > 0
+    ? state.site.surfaceSetAvailable && state.site.activeBindings.length > 0 &&
+      (!isPhotoSceneContext() || isPhotoViewportActive())
     : Boolean(state.activeView === '3d-plane' ? state.plane3d : state.mesh);
   return state.asset?.kind === 'live' &&
     state.link.rendererHandshake && state.link.photoshopConnected &&
@@ -1083,9 +1265,13 @@ function mapClientPointToSurfaceHit(clientX, clientY) {
   if (!pointerRequirementsSatisfied()) return null;
   const bounds = canvas.getBoundingClientRect();
   if (clientX < bounds.left || clientX > bounds.right || clientY < bounds.top || clientY > bounds.bottom) return null;
+  const photoNdc = state.activeView === 'site-3d' && isPhotoSceneContext()
+    ? clientPointToContentNdc(clientX, clientY, bounds, state.photo.contentRect)
+    : null;
+  if (state.activeView === 'site-3d' && isPhotoSceneContext() && !photoNdc) return null;
   const ndc = new THREE.Vector2(
-    ((clientX - bounds.left) / bounds.width) * 2 - 1,
-    -((clientY - bounds.top) / bounds.height) * 2 + 1
+    photoNdc?.x ?? (((clientX - bounds.left) / bounds.width) * 2 - 1),
+    photoNdc?.y ?? (-((clientY - bounds.top) / bounds.height) * 2 + 1)
   );
   const pointerMeshes = state.activeView === 'site-3d'
     ? state.site.activeBindings.map((binding) => binding.mesh)
@@ -1279,6 +1465,22 @@ function updateDiagnostics() {
     filterMode: state.filterMode,
     contextLossCount: state.contextLossCount,
     rendererMemoryTextures: renderer.info.memory.textures,
+    photoScene: {
+      status: state.photo.status,
+      ready: isPhotoViewportActive(),
+      sceneId: state.photo.sceneId,
+      requestedSceneId: state.photo.requestedSceneId,
+      runtimeUrl: state.photo.runtimeUrl,
+      nativeWidth: state.photo.activeResource?.width || null,
+      nativeHeight: state.photo.activeResource?.height || null,
+      contentRect: state.photo.contentRect ? { ...state.photo.contentRect } : null,
+      resourceCount: state.photo.activeResource ? 1 : 0,
+      loadCount: state.photo.loadCount,
+      commitCount: state.photo.commitCount,
+      disposeCount: state.photo.disposeCount,
+      contextLossCount: state.contextLossCount,
+      error: state.photo.error
+    },
     plane3d: {
       cameraType: camera3d.type,
       fov: camera3d.fov,
@@ -1406,6 +1608,7 @@ function updateDiagnostics() {
   window.block2PointerDiagnostics = structuredClone(state.diagnostics.pointerLink);
   window.block3PlaneDiagnostics = structuredClone(state.diagnostics.plane3d);
   window.block3SiteDiagnostics = structuredClone(state.diagnostics.site3d);
+  window.block4CPhotoDiagnostics = structuredClone(state.diagnostics.photoScene);
 
   const rows = [
     ['Active View', state.activeView === 'site-3d' ? 'SITE 3D' : (state.activeView === '3d-plane' ? '3D PLANE' : '2D VIEW')],
@@ -1455,6 +1658,12 @@ function updateDiagnostics() {
     ['Site Active Surfaces', state.site.activeBindings.map((binding) => `${binding.contract.role}:${binding.mesh.name}`).join(' + ') || '—'],
     ['Site Missing Meshes', state.site.missingMeshes.join(', ') || '—'],
     ['Site Texture Shared', state.site.activeBindings.length > 0 && state.site.activeBindings.every((binding) => binding.mesh.material.map === state.texture) ? 'YES' : '—'],
+    ['Photo Scene', state.diagnostics.photoScene.sceneId || state.diagnostics.photoScene.requestedSceneId || '—'],
+    ['Photo Load', state.diagnostics.photoScene.status],
+    ['Photo Runtime URL', state.diagnostics.photoScene.runtimeUrl || '—'],
+    ['Photo Native Size', state.diagnostics.photoScene.nativeWidth ? `${state.diagnostics.photoScene.nativeWidth} × ${state.diagnostics.photoScene.nativeHeight}` : '—'],
+    ['Photo Content Rect', state.photo.contentRect ? `${state.photo.contentRect.width.toFixed(1)} × ${state.photo.contentRect.height.toFixed(1)}` : '—'],
+    ['Photo Resources', state.diagnostics.photoScene.resourceCount],
     ['Filter', state.diagnostics.filterMode.toUpperCase()],
     ['Last Link Error', state.link.lastError || '—'],
     ['Interaction Mode', state.interactionMode.toUpperCase()],
@@ -2022,6 +2231,170 @@ window.runBlock4BCameraEditorSmoke = () => {
     finalLocked: state.site.legacyCameraLocked,
     threeFieldsVisible: getComputedStyle(cameraThreeFields).display !== 'none',
     maxFieldsHidden: getComputedStyle(cameraMaxFields).display === 'none'
+  };
+};
+
+window.runBlock4CPhotoSceneSmoke = async () => {
+  setActiveView('site-3d');
+  state.site.world = 'legacy2d';
+  state.site.mappingMode = 'normal';
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  const sceneResults = [];
+  for (const sceneId of ['front', 'frontSweet', 'back', 'night']) {
+    state.site.scene = sceneId;
+    siteSceneSelect.value = sceneId;
+    lockLegacyCamera();
+    applySiteSurfaceSelection();
+    const activation = await state.photo.activationPromise;
+    updateDiagnostics();
+    sceneResults.push({
+      sceneId,
+      activationStatus: activation.status,
+      photoSceneId: state.photo.sceneId,
+      ready: isPhotoViewportActive(),
+      resourceCount: state.photo.activeResource ? 1 : 0,
+      photoTextureInstalled: photoPlane.material.map === state.photo.activeResource?.texture,
+      visibleSurfaceCount: state.site.activeBindings.filter((binding) => binding.mesh.visible).length,
+      expectedSurfaceCount: state.site.activeBindings.length,
+      cameraAspect: cameraSite.aspect,
+      cameraLocked: state.site.legacyCameraLocked,
+      runtimeUrl: state.photo.runtimeUrl
+    });
+  }
+
+  state.site.scene = 'front';
+  applySiteSurfaceSelection();
+  const rapidFront = state.photo.activationPromise;
+  state.site.scene = 'back';
+  applySiteSurfaceSelection();
+  const rapidBack = state.photo.activationPromise;
+  state.site.scene = 'night';
+  siteSceneSelect.value = 'night';
+  applySiteSurfaceSelection();
+  const rapidNight = state.photo.activationPromise;
+  const rapidResults = await Promise.all([rapidFront, rapidBack, rapidNight]);
+  updateDiagnostics();
+
+  const stressPromises = [];
+  const stressScenes = ['front', 'frontSweet', 'back', 'night'];
+  for (let index = 0; index < 24; index += 1) {
+    state.site.scene = stressScenes[index % stressScenes.length];
+    siteSceneSelect.value = state.site.scene;
+    applySiteSurfaceSelection();
+    stressPromises.push(state.photo.activationPromise);
+  }
+  const stressResults = await Promise.all(stressPromises);
+  await nextFrame();
+  render();
+  const stressFinalSceneId = photoSceneForLegacySelection()?.sceneId;
+  const stressLatestWins = stressResults.at(-1)?.status === 'READY' &&
+    stressResults.slice(0, -1).every((result) => result.status === 'STALE') &&
+    state.photo.sceneId === stressFinalSceneId && state.photo.activeResource &&
+    photoPlane.material.map === state.photo.activeResource.texture &&
+    renderer.info.memory.textures <= 2;
+
+  const contentRect = { ...state.photo.contentRect };
+  const bounds = canvas.getBoundingClientRect();
+  const outside = contentRect.y > 0
+    ? clientPointToContentNdc(
+      bounds.left + contentRect.x + contentRect.width / 2,
+      bounds.top + contentRect.y - 1,
+      bounds,
+      contentRect
+    )
+    : clientPointToContentNdc(
+      bounds.left + contentRect.x - 1,
+      bounds.top + contentRect.y + contentRect.height / 2,
+      bounds,
+      contentRect
+    );
+  const center = clientPointToContentNdc(
+    bounds.left + contentRect.x + contentRect.width / 2,
+    bounds.top + contentRect.y + contentRect.height / 2,
+    bounds,
+    contentRect
+  );
+  const beforePassiveRender = {
+    loadCount: state.photo.loadCount,
+    runtimeUrl: state.photo.runtimeUrl,
+    sceneId: state.photo.sceneId,
+    camera: snapshotSiteCameraRuntime()
+  };
+  render();
+  const passiveRenderPreserved = state.photo.loadCount === beforePassiveRender.loadCount &&
+    state.photo.runtimeUrl === beforePassiveRender.runtimeUrl &&
+    state.photo.sceneId === beforePassiveRender.sceneId &&
+    cameraSite.position.distanceTo(beforePassiveRender.camera.position) === 0 &&
+    cameraSite.quaternion.angleTo(beforePassiveRender.camera.quaternion) === 0;
+
+  return {
+    allScenesReady: sceneResults.every((result) =>
+      result.activationStatus === 'READY' && result.ready && result.resourceCount === 1 &&
+      result.photoTextureInstalled && result.visibleSurfaceCount === result.expectedSurfaceCount &&
+      result.cameraAspect === PHOTO_CONTENT_ASPECT && result.cameraLocked &&
+      result.runtimeUrl?.startsWith('./assets/photo/')),
+    sceneResults,
+    rapidLatestWins: rapidResults[2].status === 'READY' &&
+      rapidResults.slice(0, 2).every((result) => result.status === 'STALE') &&
+      state.photo.sceneId === 'NIGHT' && photoPlane.material.map === state.photo.activeResource?.texture,
+    rapidResults: rapidResults.map((result) => result.status),
+    stressSwitchCount: stressResults.length,
+    stressLatestWins,
+    rendererTextureCountAfterStress: renderer.info.memory.textures,
+    contentAspectExact: contentRect.width / contentRect.height === PHOTO_CONTENT_ASPECT,
+    outsideContentRejected: outside === null,
+    centerNdcExact: center?.x === 0 && center?.y === 0,
+    passiveRenderPreserved,
+    photoResourceCount: state.photo.activeResource ? 1 : 0,
+    photoRuntime: {
+      imageComplete: Boolean(state.photo.activeResource?.image.complete),
+      imageCurrentSrc: state.photo.activeResource?.image.currentSrc || '',
+      imageWidth: state.photo.activeResource?.image.naturalWidth || 0,
+      imageHeight: state.photo.activeResource?.image.naturalHeight || 0,
+      textureInstalled: photoPlane.material.map === state.photo.activeResource?.texture
+    },
+    contextLossCount: state.contextLossCount
+  };
+};
+
+window.runBlock4CPhotoPointerSmokeRequest = async () => {
+  setActiveView('site-3d');
+  state.site.world = 'legacy2d';
+  state.site.mappingMode = 'normal';
+  state.site.scene = 'front';
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  siteSceneSelect.value = state.site.scene;
+  lockLegacyCamera();
+  applySiteSurfaceSelection();
+  const activation = await state.photo.activationPromise;
+  if (activation.status !== 'READY' || !isPhotoViewportActive()) {
+    throw new Error('Synthetic photo pointer smoke requires a ready FRONT photo scene.');
+  }
+  if (!setInteractionMode('point')) throw new Error('Synthetic photo pointer smoke requires an active Photoshop Live source.');
+  const bounds = canvas.getBoundingClientRect();
+  const rect = state.photo.contentRect;
+  let surfaceHit = null;
+  for (const yFraction of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+    for (const xFraction of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+      surfaceHit = mapClientPointToSurfaceHit(
+        bounds.left + rect.x + rect.width * xFraction,
+        bounds.top + rect.y + rect.height * yFraction
+      );
+      if (surfaceHit) break;
+    }
+    if (surfaceHit) break;
+  }
+  if (!surfaceHit) throw new Error('Synthetic photo pointer scan did not intersect the exact FRONT signage mesh.');
+  const command = requestPointerAt(surfaceHit.canonical, surfaceHit);
+  return {
+    command,
+    canonical: surfaceHit.canonical,
+    surfaceHit,
+    photoSceneId: state.photo.sceneId,
+    photoResourceCount: state.photo.activeResource ? 1 : 0,
+    contentRect: { ...state.photo.contentRect }
   };
 };
 

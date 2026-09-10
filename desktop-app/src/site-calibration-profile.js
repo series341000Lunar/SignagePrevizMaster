@@ -1,4 +1,5 @@
 const UNRESOLVED = 'UNRESOLVED';
+const PHOTO_RUNTIME_ROOT = './assets/photo/';
 
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
@@ -138,6 +139,7 @@ const photoDefinitions = [
     label: 'Front',
     assetId: 'photo.front',
     path: '2DAsset/Photograph/BG_Front.jpg',
+    runtimeFileName: 'BG_Front.jpg',
     legacyPath: './assets/bg_front.jpg',
     byteLength: 9703784,
     sha256: '99DCAC1769226DAEDE7C4B3421FD7E11D4D82E38B1432E8E9BC520B74F4583EB',
@@ -150,6 +152,7 @@ const photoDefinitions = [
     label: 'Front_Sweet',
     assetId: 'photo.front-sweet',
     path: '2DAsset/Photograph/BG_FrontSweet.jpg',
+    runtimeFileName: 'BG_FrontSweet.jpg',
     legacyPath: './assets/bg_sweet.jpg',
     byteLength: 9322540,
     sha256: 'A83BD5024DC5B8FE39DAB2917E291604F1530FCCB486819E821C01F0541AE1A9',
@@ -162,6 +165,7 @@ const photoDefinitions = [
     label: 'Back',
     assetId: 'photo.back',
     path: '2DAsset/Photograph/BG_Back.jpg',
+    runtimeFileName: 'BG_Back.jpg',
     legacyPath: './assets/bg_back.jpg',
     byteLength: 12331761,
     sha256: '4F2DBA196AE5FCBB9D0F45D6A6D7FAB433D7A2C19371D42057A863B7312BB816',
@@ -174,6 +178,7 @@ const photoDefinitions = [
     label: 'Night',
     assetId: 'photo.night',
     path: '2DAsset/Photograph/BG_Night.jpg',
+    runtimeFileName: 'BG_Night.jpg',
     legacyPath: './assets/bg_night.jpg',
     byteLength: 10072925,
     sha256: 'B38AE38CEB929743803A61DA8AFA4D864A14ECDA4F3EDEFED11E4C7A04300873',
@@ -190,8 +195,9 @@ export const PHOTO_SCENE_RECORDS = deepFreeze(photoDefinitions.map((definition) 
     assetId: definition.assetId,
     path: definition.path,
     legacyPath: definition.legacyPath,
-    runtimeUrl: null,
-    runtimeUrlStatus: UNRESOLVED,
+    runtimeFileName: definition.runtimeFileName,
+    runtimeUrl: `${PHOTO_RUNTIME_ROOT}${definition.runtimeFileName}`,
+    runtimeUrlStatus: 'GENERATED_BUILD_ASSET',
     ...PHOTO_NATIVE_FRAME,
     byteLength: definition.byteLength,
     sha256: definition.sha256
@@ -204,7 +210,7 @@ export const PHOTO_SCENE_RECORDS = deepFreeze(photoDefinitions.map((definition) 
   },
   locationId: definition.locationId,
   pointSupport: true,
-  pointRuntimeStatus: 'DEFERRED_BLOCK_4C'
+  pointRuntimeStatus: 'ENABLED_BLOCK_4C'
 })));
 
 export const LOCATION_RECORDS = deepFreeze(photoDefinitions.map((definition) => ({
@@ -245,7 +251,7 @@ export const SITE_CALIBRATION_PROFILE = deepFreeze({
     maxLikeCalibration: 'BLOCK_4B_USER_GATE',
     maxLikeEulerImport: 'DEFERRED',
     maxLikeRoll: 'DEFERRED',
-    photoRuntimeUrl: 'BLOCK_4C',
+    photoRuntimeUrl: 'RESOLVED_BLOCK_4C_GENERATED_BUILD_ASSET',
     locationWorldPosition: 'BLOCK_4E',
     locationThumbnailAsset: 'BLOCK_4E',
     locationUiOffset: 'BLOCK_4E'

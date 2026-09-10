@@ -1,4 +1,4 @@
-# Desktop App — Block 4B Checkpoint
+# Desktop App — Block 4C Checkpoint
 
 Block 0 proves that a 4728 x 5760-class source can remain full resolution from
 disk decode through a Three.js GPU texture in both development and a Windows
@@ -49,6 +49,12 @@ horizontal FOV basis, then applies the candidate basis adapter only at the
 Camera input boundary. Locked cameras remain read-only; Reset View is safe
 while locked, while Apply and Reset to Legacy require an explicit unlock.
 
+Block 4C adds the four verified 8256×5504 photographs as independent background
+passes for Legacy `Front`, `Front_Sweet`, `Back`, and `Night`. The centered
+content viewport remains 3:2, while the exact Legacy meshes keep the one master
+signage texture. Photo POINT rejects the letterbox/pillarbox area and continues
+through the existing canonical Photoshop reverse-link protocol.
+
 ## Commands
 
 ```powershell
@@ -58,6 +64,7 @@ npm run test:static
 npm run test:protocol
 npm run test:block4a
 npm run test:block4b
+npm run test:block4c
 npm run test:runtime
 npm run test:link
 npm run dist

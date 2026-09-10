@@ -173,9 +173,9 @@ for (const record of PHOTO_SCENE_RECORDS) {
   assert.equal(record.mapping.strategy, 'LEGACY_MESH_MAPPING');
   assert.equal(record.mapping.legacyAssetId, 'legacy2d');
   assert.equal(record.pointSupport, true);
-  assert.equal(record.pointRuntimeStatus, 'DEFERRED_BLOCK_4C');
-  assert.equal(record.photoAsset.runtimeUrl, null);
-  assert.equal(record.photoAsset.runtimeUrlStatus, 'UNRESOLVED');
+  assert.equal(record.pointRuntimeStatus, 'ENABLED_BLOCK_4C');
+  assert.equal(record.photoAsset.runtimeUrl, `./assets/photo/${record.photoAsset.runtimeFileName}`);
+  assert.equal(record.photoAsset.runtimeUrlStatus, 'GENERATED_BUILD_ASSET');
 
   const projectPhoto = await readFile(path.join(projectRoot, record.photoAsset.path));
   const legacyPhoto = await readFile(path.join(legacyRoot, record.photoAsset.legacyPath.replace('./', '')));

@@ -48,3 +48,10 @@ and Reset to Legacy operations, and a candidate `3DS MAX-LIKE`
 Position/Target/FOV adapter. The Max-like axis calibration remains a user gate.
 See [`docs/BLOCK-4B-VALIDATION.md`](docs/BLOCK-4B-VALIDATION.md) and
 [`docs/BLOCK-4B-HANDOFF.md`](docs/BLOCK-4B-HANDOFF.md).
+
+Block 4C activates the four authoritative 8256×5504 photographs as independent
+3:2 background passes for the Legacy scenes. The existing master signage
+texture stays on the exact Legacy meshes, and Photo POINT uses the same
+content viewport, mesh UV, canonical coordinate, and Photoshop protocol path.
+See [`docs/BLOCK-4C-VALIDATION.md`](docs/BLOCK-4C-VALIDATION.md) and
+[`docs/BLOCK-4C-HANDOFF.md`](docs/BLOCK-4C-HANDOFF.md).
