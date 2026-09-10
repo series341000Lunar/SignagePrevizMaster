@@ -64,3 +64,10 @@ material with DAY/NIGHT presentation modes. Environment geometry participates
 in visual depth but never becomes a master-texture or Canonical POINT target.
 See [`docs/BLOCK-4D-VALIDATION.md`](docs/BLOCK-4D-VALIDATION.md) and
 [`docs/BLOCK-4D-HANDOFF.md`](docs/BLOCK-4D-HANDOFF.md).
+
+Block 4E adds four independent Site Location markers with build-generated
+450×300 photo proxies, marker visibility control, Location-to-PhotoScene
+navigation, and exact return to the pre-entry Site camera/orbit/environment
+state. The four Location coordinates, thumbnail offsets, one-third card scale,
+and semi-transparent presentation were user-validated on 2026-09-11. See
+[`docs/BLOCK-4E-VALIDATION-HANDOFF.md`](docs/BLOCK-4E-VALIDATION-HANDOFF.md).

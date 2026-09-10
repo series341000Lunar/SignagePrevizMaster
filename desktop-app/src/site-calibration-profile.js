@@ -213,16 +213,40 @@ export const PHOTO_SCENE_RECORDS = deepFreeze(photoDefinitions.map((definition) 
   pointRuntimeStatus: 'ENABLED_BLOCK_4C'
 })));
 
-export const LOCATION_RECORDS = deepFreeze(photoDefinitions.map((definition) => ({
-  locationId: definition.locationId,
-  sceneId: definition.sceneId,
-  worldPosition: null,
-  thumbnailAsset: null,
-  uiOffset: null,
-  enabled: false,
-  resolutionStatus: UNRESOLVED,
-  unresolvedReason: 'Location placement and marker UI are deferred to Block 4E.'
-})));
+const resolvedLocations = Object.freeze({
+  FRONT: Object.freeze({ worldPosition: Object.freeze({ x: -9.5, y: 0.15, z: 11 }), uiOffsetX: -88, uiOffsetY: -8 }),
+  FRONT_SWEET: Object.freeze({ worldPosition: Object.freeze({ x: -7, y: 0.15, z: 13 }), uiOffsetX: 88, uiOffsetY: -8 }),
+  BACK: Object.freeze({ worldPosition: Object.freeze({ x: -11.2, y: 0.15, z: -10.8 }), uiOffsetX: -88, uiOffsetY: -8 }),
+  NIGHT: Object.freeze({ worldPosition: Object.freeze({ x: -9.6, y: 0.15, z: -12.3 }), uiOffsetX: 88, uiOffsetY: -8 })
+});
+
+export const LOCATION_RECORDS = deepFreeze(photoDefinitions.map((definition) => {
+  const resolved = resolvedLocations[definition.sceneId];
+  const thumbnailFileName = `${definition.runtimeFileName.replace(/\.jpg$/i, '')}-thumb.jpg`;
+  return {
+    locationId: definition.locationId,
+    photoSceneId: definition.sceneId,
+    sceneId: definition.sceneId,
+    coordinateSpace: 'THREE_WORLD_DIRECT',
+    worldPosition: resolved.worldPosition,
+    marker: {
+      visibleByDefault: true,
+      uiOffsetX: resolved.uiOffsetX,
+      uiOffsetY: resolved.uiOffsetY
+    },
+    thumbnail: {
+      derivedFromPhotoScene: definition.sceneId,
+      proxyRuntimeUrl: `${PHOTO_RUNTIME_ROOT}thumb/${thumbnailFileName}`,
+      proxySize: { width: 450, height: 300 },
+      ownership: 'DERIVED_BUILD_ASSET'
+    },
+    enabled: true,
+    status: 'RESOLVED',
+    resolutionStatus: 'RESOLVED',
+    calibrationStatus: 'USER_VALIDATED',
+    validationDate: '2026-09-11'
+  };
+}));
 
 export const SITE_CALIBRATION_PROFILE = deepFreeze({
   id: 'luux-site-calibration-v1',
@@ -252,9 +276,9 @@ export const SITE_CALIBRATION_PROFILE = deepFreeze({
     maxLikeEulerImport: 'DEFERRED',
     maxLikeRoll: 'DEFERRED',
     photoRuntimeUrl: 'RESOLVED_BLOCK_4C_GENERATED_BUILD_ASSET',
-    locationWorldPosition: 'BLOCK_4E',
-    locationThumbnailAsset: 'BLOCK_4E',
-    locationUiOffset: 'BLOCK_4E'
+    locationWorldPosition: 'RESOLVED_BLOCK_4E_USER_VALIDATED',
+    locationThumbnailAsset: 'RESOLVED_BLOCK_4E_DERIVED_BUILD_ASSET',
+    locationUiOffset: 'RESOLVED_BLOCK_4E_USER_VALIDATED'
   }
 });
 

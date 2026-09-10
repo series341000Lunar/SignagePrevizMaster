@@ -19,7 +19,14 @@ import {
   createThreeDirectCandidate,
   threePointToMaxLike
 } from './camera-input-adapter.js';
-import { createEditableCameraRecords, PHOTO_SCENE_RECORDS } from './site-calibration-profile.js';
+import { createEditableCameraRecords, LOCATION_RECORDS, PHOTO_SCENE_RECORDS } from './site-calibration-profile.js';
+import {
+  createSiteReturnSnapshot,
+  LatestWinsLocationNavigation,
+  projectLocationToViewport,
+  restoreCameraFromSiteSnapshot,
+  validateLocationRecord
+} from './location-navigation-runtime.js';
 import {
   clientPointToContentNdc,
   computeContainedAspectRect,
@@ -52,6 +59,9 @@ const siteMappingSelect = document.querySelector('#site-mapping-select');
 const siteSceneSelect = document.querySelector('#site-scene-select');
 const environmentPresentationControl = document.querySelector('#environment-presentation-control');
 const environmentPresentationSelect = document.querySelector('#environment-presentation-select');
+const locationsToggleButton = document.querySelector('#locations-toggle-button');
+const returnToSiteButton = document.querySelector('#return-to-site-button');
+const locationOverlay = document.querySelector('#location-overlay');
 const legacyCameraLockButton = document.querySelector('#legacy-camera-lock-button');
 const cameraEditor = document.querySelector('#camera-editor');
 const cameraEditorTitle = document.querySelector('#camera-editor-title');
@@ -225,6 +235,15 @@ const state = {
     sourceTexturesDisposed: 0,
     runtimeUrl: SITE_ENVIRONMENT_PROFILE.asset.runtimeUrl
   },
+  locations: {
+    visible: LOCATION_RECORDS.every((record) => record.marker.visibleByDefault),
+    elements: new Map(),
+    projections: new Map(),
+    navigationStatus: 'IDLE',
+    activeLocationId: null,
+    lastResult: null,
+    lastError: ''
+  },
   site: {
     status: 'LOADING',
     error: '',
@@ -369,6 +388,236 @@ function activatePhotoScene(record) {
   const activation = photoController.activate(record);
   state.photo.activationPromise = activation;
   return activation;
+}
+
+function locationRecordById(locationId) {
+  return LOCATION_RECORDS.find((record) => record.locationId === locationId) ?? null;
+}
+
+function legacySceneIdForPhotoScene(photoSceneId) {
+  const scene = SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes
+    .find((candidate) => candidate.label.toUpperCase() === photoSceneId);
+  return scene?.id ?? null;
+}
+
+function isLocationMarkerContext() {
+  return state.activeView === 'site-3d' && state.site.world === 'world3d' &&
+    state.site.mappingMode === 'normal' && state.locations.visible;
+}
+
+function captureSiteReturnState() {
+  if (!isLocationMarkerContext()) throw new Error('Location navigation requires SITE 3D / 3D WORLD / NORMAL.');
+  return createSiteReturnSnapshot({
+    activeView: state.activeView,
+    siteWorldMode: state.site.world,
+    mappingMode: state.site.mappingMode,
+    camera: cameraSite,
+    orbitTarget: controlsSite.target,
+    environmentLightingMode: state.environment.presentation,
+    markerVisibility: state.locations.visible
+  });
+}
+
+function capturePhotoReturnRecoveryState() {
+  return {
+    activeView: state.activeView,
+    world: state.site.world,
+    mappingMode: state.site.mappingMode,
+    scene: state.site.scene,
+    camera: snapshotSiteCameraRuntime(),
+    legacyCameraLocked: state.site.legacyCameraLocked
+  };
+}
+
+async function activatePhotoForLocation(record, photoScene) {
+  const sceneId = legacySceneIdForPhotoScene(photoScene.sceneId);
+  if (!sceneId) return { status: 'UNAVAILABLE', error: new Error(`No Legacy scene for ${photoScene.sceneId}.`) };
+  state.site.world = 'legacy2d';
+  state.site.mappingMode = 'normal';
+  state.site.scene = sceneId;
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  siteSceneSelect.value = state.site.scene;
+  lockLegacyCamera();
+  applySiteSurfaceSelection({ resetCamera: false });
+  return state.photo.activationPromise;
+}
+
+async function commitLocationPhoto(record) {
+  if (photoSceneForLegacySelection()?.sceneId !== record.photoSceneId || !isPhotoViewportActive()) {
+    throw new Error(`Location PhotoScene commit mismatch for ${record.locationId}.`);
+  }
+  applyCurrentCameraRecordToRuntime();
+  lockLegacyCamera();
+  state.locations.activeLocationId = record.locationId;
+  render();
+}
+
+async function restoreSiteReturnState(snapshot) {
+  if (!snapshot || snapshot.viewMode !== 'site-3d' || snapshot.siteWorldMode !== 'world3d' || snapshot.mappingMode !== 'normal') {
+    throw new Error('SiteReturnSnapshot is incomplete or outside the Block 4E Site contract.');
+  }
+  state.site.world = snapshot.siteWorldMode;
+  state.site.mappingMode = snapshot.mappingMode;
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  state.environment.presentation = snapshot.environmentLightingMode;
+  environmentPresentationSelect.value = state.environment.presentation;
+  state.locations.visible = snapshot.markerVisibility;
+  setActiveView(snapshot.viewMode);
+  applyEnvironmentPresentation();
+  applySiteSurfaceSelection({ resetCamera: false });
+  restoreCameraFromSiteSnapshot(snapshot, cameraSite, controlsSite.target);
+  controlsSite.update();
+  restoreCameraFromSiteSnapshot(snapshot, cameraSite, controlsSite.target);
+  state.locations.activeLocationId = null;
+  syncLocationControls();
+  render();
+  updateDiagnostics();
+}
+
+async function restorePhotoRecoveryState(snapshot) {
+  if (!snapshot) return;
+  state.site.world = snapshot.world;
+  state.site.mappingMode = snapshot.mappingMode;
+  state.site.scene = snapshot.scene;
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  siteSceneSelect.value = state.site.scene;
+  setActiveView(snapshot.activeView);
+  applySiteSurfaceSelection({ resetCamera: false });
+  if (state.photo.activationPromise) await state.photo.activationPromise;
+  restoreSiteCameraRuntime(snapshot.camera);
+  state.site.legacyCameraLocked = snapshot.legacyCameraLocked;
+  syncSiteCameraControls();
+  render();
+}
+
+const locationNavigation = new LatestWinsLocationNavigation({
+  validate: (record) => validateLocationRecord(record, PHOTO_SCENE_RECORDS),
+  captureSite: captureSiteReturnState,
+  activatePhoto: activatePhotoForLocation,
+  commitPhoto: commitLocationPhoto,
+  restoreSite: restoreSiteReturnState,
+  capturePhoto: capturePhotoReturnRecoveryState,
+  restorePhoto: restorePhotoRecoveryState
+});
+
+function initializeLocationMarkers() {
+  locationOverlay.replaceChildren();
+  state.locations.elements.clear();
+  for (const record of LOCATION_RECORDS) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'location-anchor';
+    button.dataset.locationId = record.locationId;
+    button.setAttribute('aria-label', `Open ${record.photoSceneId} photo location`);
+    const builtPhoto = state.manifest.photoAssets.find((candidate) => candidate.sceneId === record.photoSceneId);
+    const thumbnail = builtPhoto?.thumbnail;
+    if (thumbnail?.status === 'READY' && thumbnail.runtimeUrl) {
+      const image = document.createElement('img');
+      image.className = 'location-thumbnail';
+      image.alt = '';
+      image.decoding = 'async';
+      image.src = new URL(thumbnail.runtimeUrl, import.meta.url).href;
+      image.addEventListener('error', () => {
+        image.replaceWith(Object.assign(document.createElement('span'), { className: 'location-thumbnail-placeholder' }));
+        updateDiagnostics();
+      }, { once: true });
+      button.append(image);
+    } else {
+      const placeholder = document.createElement('span');
+      placeholder.className = 'location-thumbnail-placeholder';
+      placeholder.setAttribute('aria-hidden', 'true');
+      button.append(placeholder);
+    }
+    const pin = document.createElement('span');
+    pin.className = 'location-pin';
+    pin.setAttribute('aria-hidden', 'true');
+    button.append(pin);
+    button.addEventListener('click', () => { void activateLocation(record.locationId); });
+    locationOverlay.append(button);
+    state.locations.elements.set(record.locationId, button);
+  }
+  updateLocationMarkers();
+}
+
+function updateLocationMarkers() {
+  const contextVisible = isLocationMarkerContext();
+  const viewport = { width: Math.max(1, viewer.clientWidth), height: Math.max(1, viewer.clientHeight) };
+  state.locations.projections.clear();
+  for (const record of LOCATION_RECORDS) {
+    const element = state.locations.elements.get(record.locationId);
+    if (!element) continue;
+    const projection = contextVisible
+      ? projectLocationToViewport(record.worldPosition, cameraSite, viewport, {
+        x: record.marker.uiOffsetX,
+        y: record.marker.uiOffsetY
+      })
+      : { visible: false, reason: 'CONTEXT_HIDDEN' };
+    state.locations.projections.set(record.locationId, projection);
+    element.hidden = !projection.visible;
+    element.style.left = projection.visible ? `${projection.x}px` : '';
+    element.style.top = projection.visible ? `${projection.y}px` : '';
+    const interactive = projection.visible && state.interactionMode === 'navigate';
+    element.classList.toggle('point-pass-through', !interactive);
+    element.tabIndex = interactive ? 0 : -1;
+    element.setAttribute('aria-disabled', String(!interactive));
+  }
+}
+
+function syncLocationControls() {
+  const markerScope = state.activeView === 'site-3d' && state.site.world === 'world3d' && state.site.mappingMode === 'normal';
+  locationsToggleButton.hidden = !markerScope;
+  locationsToggleButton.textContent = state.locations.visible ? 'LOCATIONS ON' : 'LOCATIONS OFF';
+  locationsToggleButton.setAttribute('aria-pressed', String(state.locations.visible));
+  locationsToggleButton.classList.toggle('active', state.locations.visible);
+  const returnAvailable = Boolean(locationNavigation.siteSnapshot) && state.activeView === 'site-3d' && isPhotoSceneContext();
+  returnToSiteButton.hidden = !returnAvailable;
+  returnToSiteButton.disabled = state.locations.navigationStatus === 'BUSY';
+  updateLocationMarkers();
+}
+
+async function activateLocation(locationId) {
+  const record = locationRecordById(locationId);
+  const rapidFollowupAllowed = state.locations.navigationStatus === 'BUSY' && Boolean(locationNavigation.siteSnapshot);
+  if (!record || state.interactionMode !== 'navigate' || (!isLocationMarkerContext() && !rapidFollowupAllowed)) {
+    return { status: 'REJECTED' };
+  }
+  state.locations.navigationStatus = 'BUSY';
+  state.locations.lastError = '';
+  syncLocationControls();
+  try {
+    const result = await locationNavigation.activate(record);
+    if (result.token === locationNavigation.requestToken) {
+      state.locations.lastResult = result.status;
+      state.locations.navigationStatus = result.status === 'READY' ? 'PHOTO_READY' : 'IDLE';
+      if (result.error) state.locations.lastError = result.error.message;
+    }
+    return result;
+  } catch (error) {
+    state.locations.navigationStatus = 'ERROR';
+    state.locations.lastError = error.stack || error.message;
+    return { status: 'ERROR', error };
+  } finally {
+    syncLocationControls();
+    render();
+    updateDiagnostics();
+  }
+}
+
+async function returnToSite() {
+  if (!locationNavigation.siteSnapshot) return { status: 'NO_SNAPSHOT' };
+  state.locations.navigationStatus = 'BUSY';
+  syncLocationControls();
+  const result = await locationNavigation.returnToSite();
+  state.locations.lastResult = result.status;
+  state.locations.navigationStatus = result.status === 'RETURN_FAILED' ? 'ERROR' : 'IDLE';
+  state.locations.lastError = result.error?.message || '';
+  syncLocationControls();
+  render();
+  updateDiagnostics();
+  return result;
 }
 
 function wire3dControlEvents(controls, view) {
@@ -895,6 +1144,7 @@ function applySiteSurfaceSelection({ resetCamera = true } = {}) {
   else deactivatePhotoScene('non-photo-site-selection');
   applyEnvironmentVisibility();
   syncSiteCameraControls();
+  syncLocationControls();
   siteSceneSelect.disabled = state.site.world !== 'legacy2d' || state.site.mappingMode !== 'normal';
   updateZoomReadout();
   render();
@@ -1263,6 +1513,7 @@ function setActiveView(view) {
   updatePhotoContentRect();
   syncSiteCameraControls();
   applyEnvironmentVisibility();
+  syncLocationControls();
   for (const button of [fitButton, oneButton, twoButton, fourButton]) button.disabled = view !== '2d';
   updateZoomReadout();
   render();
@@ -1294,6 +1545,7 @@ function render() {
   else if (state.activeView === '3d-plane') renderer.render(scene3d, camera3d);
   else renderer.render(scene, camera);
   updatePointerMarker();
+  updateLocationMarkers();
 }
 
 function updatePointerMarker() {
@@ -1362,6 +1614,7 @@ function updatePointerControls() {
   navigateButton.classList.toggle('active', state.interactionMode === 'navigate');
   pointButton.classList.toggle('active', state.interactionMode === 'point');
   canvas.classList.toggle('point-mode', state.interactionMode === 'point');
+  updateLocationMarkers();
   if (state.activeView === 'site-3d') {
     dragHint.textContent = state.site.surfaceSetAvailable
       ? (isLegacyCameraContext() && state.site.legacyCameraLocked
@@ -1619,6 +1872,36 @@ function updateDiagnostics() {
       contextLossCount: state.contextLossCount,
       error: state.photo.error
     },
+    locationNavigation: {
+      visible: state.locations.visible,
+      markerContext: isLocationMarkerContext(),
+      navigationStatus: state.locations.navigationStatus,
+      activeLocationId: state.locations.activeLocationId,
+      lastResult: state.locations.lastResult,
+      lastError: state.locations.lastError,
+      returnSnapshotAvailable: Boolean(locationNavigation.siteSnapshot),
+      returnButtonVisible: !returnToSiteButton.hidden,
+      records: LOCATION_RECORDS.map((record) => {
+        const element = state.locations.elements.get(record.locationId);
+        const builtPhoto = state.manifest?.photoAssets?.find((candidate) => candidate.sceneId === record.photoSceneId);
+        const projection = state.locations.projections.get(record.locationId) || null;
+        return {
+          locationId: record.locationId,
+          photoSceneId: record.photoSceneId,
+          worldPosition: { ...record.worldPosition },
+          uiOffset: { x: record.marker.uiOffsetX, y: record.marker.uiOffsetY },
+          resolutionStatus: record.resolutionStatus,
+          calibrationStatus: record.calibrationStatus,
+          proxyRuntimeUrl: record.thumbnail.proxyRuntimeUrl,
+          proxyStatus: builtPhoto?.thumbnail?.status || 'UNAVAILABLE',
+          projectedVisible: Boolean(projection?.visible),
+          projectionReason: projection?.reason || null,
+          domVisible: Boolean(element && !element.hidden),
+          pointerEvents: element ? getComputedStyle(element).pointerEvents : 'none'
+        };
+      }),
+      snapshot: locationNavigation.siteSnapshot ? structuredClone(locationNavigation.siteSnapshot) : null
+    },
     environment: {
       status: state.environment.status,
       error: state.environment.error,
@@ -1784,6 +2067,7 @@ function updateDiagnostics() {
   window.block3SiteDiagnostics = structuredClone(state.diagnostics.site3d);
   window.block4CPhotoDiagnostics = structuredClone(state.diagnostics.photoScene);
   window.block4DEnvironmentDiagnostics = structuredClone(state.diagnostics.environment);
+  window.block4ELocationDiagnostics = structuredClone(state.diagnostics.locationNavigation);
 
   const rows = [
     ['Active View', state.activeView === 'site-3d' ? 'SITE 3D' : (state.activeView === '3d-plane' ? '3D PLANE' : '2D VIEW')],
@@ -1839,6 +2123,10 @@ function updateDiagnostics() {
     ['Photo Native Size', state.diagnostics.photoScene.nativeWidth ? `${state.diagnostics.photoScene.nativeWidth} × ${state.diagnostics.photoScene.nativeHeight}` : '—'],
     ['Photo Content Rect', state.photo.contentRect ? `${state.photo.contentRect.width.toFixed(1)} × ${state.photo.contentRect.height.toFixed(1)}` : '—'],
     ['Photo Resources', state.diagnostics.photoScene.resourceCount],
+    ['Locations', state.locations.visible ? 'ON' : 'OFF'],
+    ['Location Navigation', state.locations.navigationStatus],
+    ['Location Return', locationNavigation.siteSnapshot ? 'AVAILABLE' : '—'],
+    ['Location Markers Visible', state.diagnostics.locationNavigation.records.filter((record) => record.domVisible).length],
     ['Environment Load', state.diagnostics.environment.status],
     ['Environment Asset', SITE_ENVIRONMENT_PROFILE.asset.fileName],
     ['Environment Revision', state.diagnostics.environment.revisionChanged === false ? 'CURRENT' : 'CHANGED'],
@@ -2093,6 +2381,13 @@ environmentPresentationSelect.addEventListener('change', () => {
   render();
   updateDiagnostics();
 });
+locationsToggleButton.addEventListener('click', () => {
+  state.locations.visible = !state.locations.visible;
+  syncLocationControls();
+  render();
+  updateDiagnostics();
+});
+returnToSiteButton.addEventListener('click', () => { void returnToSite(); });
 siteSceneSelect.addEventListener('change', () => {
   state.site.scene = siteSceneSelect.value;
   lockLegacyCamera();
@@ -2673,6 +2968,138 @@ window.runBlock4DEnvironmentSmoke = async () => {
   };
 };
 
+function siteSnapshotMatchesRuntime(snapshot) {
+  return cameraSite.position.toArray().every((value, index) => value === snapshot.camera.position[index]) &&
+    cameraSite.quaternion.toArray().every((value, index) => value === snapshot.camera.quaternion[index]) &&
+    cameraSite.up.toArray().every((value, index) => value === snapshot.camera.up[index]) &&
+    controlsSite.target.toArray().every((value, index) => value === snapshot.orbitControls.target[index]) &&
+    cameraSite.fov === snapshot.camera.fov && cameraSite.zoom === snapshot.camera.zoom &&
+    cameraSite.near === snapshot.camera.near && cameraSite.far === snapshot.camera.far &&
+    state.environment.presentation === snapshot.environmentLightingMode &&
+    state.locations.visible === snapshot.markerVisibility;
+}
+
+window.runBlock4ELocationSmoke = async () => {
+  await waitForEnvironmentReady();
+  setActiveView('site-3d');
+  state.site.world = 'world3d';
+  state.site.mappingMode = 'normal';
+  state.locations.visible = true;
+  state.interactionMode = 'navigate';
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  applySiteSurfaceSelection({ resetCamera: false });
+
+  const bounds = new THREE.Box3();
+  for (const record of LOCATION_RECORDS) {
+    bounds.expandByPoint(new THREE.Vector3(record.worldPosition.x, record.worldPosition.y, record.worldPosition.z));
+  }
+  const center = bounds.getCenter(new THREE.Vector3());
+  const radius = Math.max(1, bounds.getSize(new THREE.Vector3()).length() * 0.5);
+  cameraSite.position.copy(center).add(new THREE.Vector3(radius * 0.9, radius * 1.05, radius * 1.5));
+  cameraSite.fov = 50;
+  cameraSite.zoom = 1;
+  cameraSite.up.set(0, 1, 0);
+  controlsSite.target.copy(center);
+  controlsSite.update();
+  state.environment.presentation = 'night';
+  applyEnvironmentPresentation();
+  render();
+  updateDiagnostics();
+  await Promise.all([...state.locations.elements.values()].map(async (element) => {
+    const image = element.querySelector('img');
+    if (image && !image.complete) await image.decode().catch(() => {});
+  }));
+  render();
+
+  const visibleBeforeToggle = [...state.locations.elements.values()].filter((element) => !element.hidden).length;
+  state.locations.visible = false;
+  syncLocationControls();
+  render();
+  const allHiddenWhenOff = [...state.locations.elements.values()].every((element) => element.hidden);
+  state.locations.visible = true;
+  syncLocationControls();
+  render();
+  const visibleAfterToggle = [...state.locations.elements.values()].filter((element) => !element.hidden).length;
+
+  state.interactionMode = 'point';
+  updateLocationMarkers();
+  const pointPassThrough = [...state.locations.elements.values()].every((element) => getComputedStyle(element).pointerEvents === 'none');
+  state.interactionMode = 'navigate';
+  updateLocationMarkers();
+
+  const initialSiteSnapshot = captureSiteReturnState();
+  const sceneResults = [];
+  for (const record of LOCATION_RECORDS) {
+    const activation = await activateLocation(record.locationId);
+    const photoSceneId = state.photo.sceneId;
+    const locked = state.site.legacyCameraLocked;
+    const returnResult = await returnToSite();
+    sceneResults.push({
+      locationId: record.locationId,
+      expectedPhotoSceneId: record.photoSceneId,
+      photoSceneId,
+      activationStatus: activation.status,
+      locked,
+      returnStatus: returnResult.status,
+      exactReturn: siteSnapshotMatchesRuntime(initialSiteSnapshot)
+    });
+  }
+
+  const rapidA = activateLocation(LOCATION_RECORDS[0].locationId);
+  const rapidB = activateLocation(LOCATION_RECORDS[3].locationId);
+  const rapidResults = await Promise.all([rapidA, rapidB]);
+  const rapidLatestWins = rapidResults[0].status === 'STALE' && rapidResults[1].status === 'READY' &&
+    state.photo.sceneId === LOCATION_RECORDS[3].photoSceneId;
+  const rapidReturn = await returnToSite();
+
+  state.site.world = 'legacy2d';
+  state.site.mappingMode = 'normal';
+  state.site.scene = 'front';
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  siteSceneSelect.value = state.site.scene;
+  applySiteSurfaceSelection();
+  await state.photo.activationPromise;
+  syncLocationControls();
+  const directEntryHasNoFakeReturn = !locationNavigation.siteSnapshot && returnToSiteButton.hidden;
+  await restoreSiteReturnState(initialSiteSnapshot);
+
+  const records = LOCATION_RECORDS.map((record) => {
+    const builtPhoto = state.manifest.photoAssets.find((candidate) => candidate.sceneId === record.photoSceneId);
+    const element = state.locations.elements.get(record.locationId);
+    const image = element?.querySelector('img');
+    return {
+      locationId: record.locationId,
+      photoSceneId: record.photoSceneId,
+      proxyReady: builtPhoto?.thumbnail?.status === 'READY' && image?.naturalWidth === 450 && image?.naturalHeight === 300,
+      visualTextLabel: element?.textContent.trim() || ''
+    };
+  });
+  updateDiagnostics();
+  return {
+    records,
+    fourIndependent: records.length === 4 && new Set(records.map((record) => record.locationId)).size === 4,
+    allProxiesReady: records.every((record) => record.proxyReady),
+    noVisualTextLabels: records.every((record) => record.visualTextLabel === ''),
+    visibleBeforeToggle,
+    allHiddenWhenOff,
+    visibleAfterToggle,
+    pointPassThrough,
+    sceneResults,
+    allLocationsNavigate: sceneResults.every((result) => result.activationStatus === 'READY' &&
+      result.photoSceneId === result.expectedPhotoSceneId && result.locked),
+    exactReturns: sceneResults.every((result) => result.returnStatus === 'RETURNED' && result.exactReturn),
+    rapidResults: rapidResults.map((result) => result.status),
+    rapidLatestWins,
+    rapidReturn: rapidReturn.status,
+    directEntryHasNoFakeReturn,
+    finalSiteExact: siteSnapshotMatchesRuntime(initialSiteSnapshot),
+    contextLossCount: state.contextLossCount,
+    userValidation: 'REQUIRED_OPEN'
+  };
+};
+
 window.runBlock0SmokeActions = async () => {
   const actions = {};
   applyFit();
@@ -2738,6 +3165,7 @@ async function start() {
     if (!response.ok) throw new Error(`Manifest load failed: ${response.status}`);
     return response.json();
   });
+  initializeLocationMarkers();
   const liveOption = document.createElement('option');
   liveOption.value = 'photoshop-live';
   liveOption.textContent = 'Photoshop Live — DISCONNECTED';

@@ -7,14 +7,14 @@
       content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file: ws://localhost:34100; object-src 'none'; base-uri 'none'; frame-src 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>LUUX Signage Previz — Block 4D</title>
+    <title>LUUX Signage Previz — Block 4E</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <div>
-        <h1>LUUX SIGNAGE PREVIZ — BLOCK 4D</h1>
-        <p>Neutral Site Environment · Photo-backed Legacy scenes · Full-resolution Photoshop signage</p>
+        <h1>LUUX SIGNAGE PREVIZ — BLOCK 4E</h1>
+        <p>Site location navigation · Exact Site return · Full-resolution Photoshop signage</p>
       </div>
       <div id="full-resolution-badge" class="badge pending">WAITING</div>
     </header>
@@ -49,6 +49,8 @@
           <option value="night">NIGHT</option>
         </select>
       </label>
+      <button id="locations-toggle-button" class="site-control location-toggle-button active" type="button" aria-pressed="true" hidden>LOCATIONS ON</button>
+      <button id="return-to-site-button" class="site-control return-to-site-button" type="button" hidden>RETURN TO SITE</button>
       <button id="legacy-camera-lock-button" class="site-control camera-lock-button locked" type="button" aria-pressed="true" hidden>CAMERA LOCKED</button>
       <span class="control-divider site-control" aria-hidden="true" hidden></span>
       <label>
@@ -72,6 +74,7 @@
     <main>
       <section id="viewer" aria-label="Full-resolution texture viewer">
         <canvas id="three-canvas"></canvas>
+        <div id="location-overlay" class="location-overlay" aria-label="Site photo locations"></div>
         <div id="pointer-marker" class="pointer-marker" aria-hidden="true">
           <span class="pointer-marker-ring"></span>
           <span class="pointer-marker-label">POINT</span>

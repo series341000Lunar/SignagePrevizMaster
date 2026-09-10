@@ -50,7 +50,7 @@ assert(!/unpkg\.com|cdn\.jsdelivr\.net/i.test(`${rendererSource}\n${htmlSource}\
 assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
 assert(!/_TestSource/i.test(`${mainSource}\n${rendererSource}\n${htmlSource}`), 'Runtime references _TestSource.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.4.0-block4d', 'Package version must identify the Block 4D checkpoint.');
+assert(packageJson.version === '0.4.0-block4e', 'Package version must identify the Block 4E checkpoint.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
@@ -64,7 +64,13 @@ assert(liveLinkConfig.chunkSizeBytes >= 1048576 && liveLinkConfig.chunkSizeBytes
 assert(liveLinkConfig.backpressureHighWaterMarkBytes > liveLinkConfig.chunkSizeBytes, 'Backpressure high-water mark must exceed one chunk.');
 assert(/new WebSocketServer\(options\)/.test(brokerSource), 'Broker must instantiate a WebSocket server.');
 assert(/replaceExistingRoles:\s*linkSmokeTest/.test(mainSource), 'Only the isolated link smoke test may replace an already connected role.');
-assert(/if\s*\(!replaceExistingRoles\)/.test(brokerSource), 'Production broker must reject duplicate client roles.');
+assert(/isolatedSmokeTestClient:\s*true/.test(mainSource), 'Synthetic Photoshop must identify itself as the isolated smoke-test client.');
+assert(
+  /incomingIsIsolatedTestClient\s*=\s*replaceExistingRoles\s*&&\s*message\.isolatedSmokeTestClient\s*===\s*true/.test(brokerSource) &&
+  /if\s*\(!incomingIsIsolatedTestClient\)/.test(brokerSource) &&
+  /ROLE_IN_USE/.test(brokerSource),
+  'Production broker must reject duplicate client roles; replacement must require an explicitly isolated smoke client.'
+);
 assert(/maxPayload:\s*config\.chunkSizeBytes/.test(brokerSource), 'Broker maxPayload must be bounded by chunk configuration.');
 assert(/bufferedAmount\s*>\s*config\.backpressureHighWaterMarkBytes/.test(brokerSource), 'Broker must apply relay backpressure.');
 assert(/new THREE\.DataTexture/.test(rendererSource), 'Renderer must create a THREE.DataTexture for live frames.');

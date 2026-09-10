@@ -3,6 +3,7 @@ import { rm, mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import sharp from 'sharp';
 import { SITE_ASSETS } from '../src/site-scene-profile.js';
 import { PHOTO_SCENE_RECORDS } from '../src/site-calibration-profile.js';
 import { ENVIRONMENT_ASSET } from '../src/site-environment-profile.js';
@@ -60,6 +61,7 @@ await rm(buildRoot, { recursive: true, force: true });
 await mkdir(path.join(buildRoot, 'assets'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'site'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'photo'), { recursive: true });
+await mkdir(path.join(buildRoot, 'assets', 'photo', 'thumb'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'environment'), { recursive: true });
 await Promise.all([
   copyFile(path.join(sourceRoot, 'index.html'), path.join(buildRoot, 'index.html')),
@@ -126,13 +128,57 @@ for (const photoScene of PHOTO_SCENE_RECORDS) {
       destinationDimensions.width !== contract.nativeWidth || destinationDimensions.height !== contract.nativeHeight) {
     throw new Error(`Photo build copy contract mismatch: ${contract.runtimeFileName}`);
   }
+  const thumbnailFileName = `${path.parse(contract.runtimeFileName).name}-thumb.jpg`;
+  const thumbnailPath = path.join(buildRoot, 'assets', 'photo', 'thumb', thumbnailFileName);
+  let thumbnail;
+  try {
+    const thumbnailBytes = await sharp(sourceBytes)
+      .rotate()
+      .resize({ width: 450, height: 300, fit: 'contain', withoutEnlargement: true })
+      .jpeg({ quality: 82, chromaSubsampling: '4:2:0' })
+      .toBuffer();
+    const thumbnailDimensions = readJpegDimensions(thumbnailBytes);
+    if (thumbnailDimensions.width !== 450 || thumbnailDimensions.height !== 300) {
+      throw new Error(`Generated thumbnail dimensions differ from 450x300: ${thumbnailFileName}`);
+    }
+    await writeFile(thumbnailPath, thumbnailBytes);
+    thumbnail = {
+      status: 'READY',
+      derivedFromAssetId: contract.assetId,
+      runtimeFileName: thumbnailFileName,
+      runtimeUrl: `./assets/photo/thumb/${thumbnailFileName}`,
+      width: 450,
+      height: 300,
+      aspect: 1.5,
+      bytes: thumbnailBytes.length,
+      sha256: sha256(thumbnailBytes),
+      generation: {
+        implementation: `sharp ${sharp.versions.sharp}`,
+        fit: 'contain',
+        crop: false,
+        stretch: false,
+        jpegQuality: 82
+      }
+    };
+  } catch (error) {
+    thumbnail = {
+      status: 'UNAVAILABLE',
+      derivedFromAssetId: contract.assetId,
+      runtimeFileName: thumbnailFileName,
+      runtimeUrl: null,
+      width: null,
+      height: null,
+      error: error.message
+    };
+  }
   manifest.photoAssets.push({
     sceneId: photoScene.sceneId,
     cameraId: photoScene.cameraId,
     exactMeshNames: photoScene.mapping.exactMeshNames,
     ...contract,
     sourceVerified: true,
-    buildCopyVerified: true
+    buildCopyVerified: true,
+    thumbnail
   });
 }
 

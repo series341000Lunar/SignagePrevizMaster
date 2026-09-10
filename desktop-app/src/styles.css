@@ -115,9 +115,15 @@ button:disabled {
 }
 
 .mode-button.active,
-.view-button.active {
+.view-button.active,
+.location-toggle-button.active {
   border-color: #62daa1;
   color: #62daa1;
+}
+
+.return-to-site-button {
+  border-color: #efc66b;
+  color: #efc66b;
 }
 
 .camera-lock-button.locked {
@@ -186,6 +192,79 @@ main {
 
 #three-canvas.point-mode.dragging {
   cursor: grabbing;
+}
+
+.location-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.location-anchor {
+  position: absolute;
+  display: block;
+  width: clamp(50px, 4.333vw, 68px);
+  min-height: 38px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translate(-50%, -100%);
+  filter: drop-shadow(0 2px 3px rgb(0 0 0 / 65%));
+  opacity: 0.72;
+  transition: opacity 120ms ease;
+}
+
+.location-anchor:hover,
+.location-anchor:focus-visible {
+  opacity: 0.94;
+}
+
+.location-anchor[hidden] {
+  display: none;
+}
+
+.location-anchor.point-pass-through {
+  pointer-events: none;
+}
+
+.location-thumbnail,
+.location-thumbnail-placeholder {
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 2;
+  border: 1px solid #c62d38;
+  border-radius: 2px;
+  background: #20242c;
+  object-fit: contain;
+}
+
+.location-thumbnail-placeholder {
+  background:
+    linear-gradient(135deg, transparent 47%, #c62d38 48%, #c62d38 52%, transparent 53%),
+    #20242c;
+}
+
+.location-pin {
+  display: block;
+  width: 7px;
+  height: 7px;
+  margin: 2px auto 0;
+  border: 1px solid #fff;
+  border-radius: 50% 50% 50% 0;
+  background: #d92f3d;
+  transform: rotate(-45deg);
+  box-shadow: 0 0 0 1px #d92f3d;
+}
+
+.location-anchor:hover .location-thumbnail,
+.location-anchor:focus-visible .location-thumbnail {
+  border-color: #ff5d68;
+  outline: 1px solid #fff;
+  outline-offset: 1px;
 }
 
 .pointer-marker {

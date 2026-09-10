@@ -232,7 +232,8 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       return;
     }
     if (isOpen(clients[message.role]) && clients[message.role] !== socket) {
-      if (!replaceExistingRoles) {
+      const incomingIsIsolatedTestClient = replaceExistingRoles && message.isolatedSmokeTestClient === true;
+      if (!incomingIsIsolatedTestClient) {
         sendError(socket, 'ROLE_IN_USE', `The ${message.role} role is already connected.`);
         socket.close(1008, 'Role already connected');
         return;
@@ -249,6 +250,7 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       emit('client-replaced-for-test', { role: message.role });
     }
     socket.luuxRole = message.role;
+    socket.luuxIsolatedSmokeTestClient = replaceExistingRoles && message.isolatedSmokeTestClient === true;
     clients[message.role] = socket;
     sendJson(socket, {
       type: 'HELLO_ACK',

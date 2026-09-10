@@ -195,11 +195,14 @@ for (const record of PHOTO_SCENE_RECORDS) {
 }
 
 for (const record of LOCATION_RECORDS) {
-  assert.equal(record.worldPosition, null);
-  assert.equal(record.thumbnailAsset, null);
-  assert.equal(record.uiOffset, null);
-  assert.equal(record.enabled, false);
-  assert.equal(record.resolutionStatus, 'UNRESOLVED');
+  assert.ok(['x', 'y', 'z'].every((axis) => Number.isFinite(record.worldPosition[axis])));
+  assert.equal(record.photoSceneId, record.sceneId);
+  assert.equal(record.thumbnail.derivedFromPhotoScene, record.sceneId);
+  assert.equal(record.thumbnail.ownership, 'DERIVED_BUILD_ASSET');
+  assert.equal(record.enabled, true);
+  assert.equal(record.resolutionStatus, 'RESOLVED');
+  assert.equal(record.calibrationStatus, 'USER_VALIDATED');
+  assert.equal(record.validationDate, '2026-09-11');
 }
 
 assert.equal(SITE_CALIBRATION_PROFILE.coordinatePolicy.functionalSignageGlb, 'DIRECT_NO_CONVERSION');
@@ -271,7 +274,7 @@ console.log(JSON.stringify({
   resetToLegacy: true,
   lockPolicy: LEGACY_CAMERA_LOCK_POLICY,
   lockedPointAvailable: true,
-  locations: '4 independent records; placement fields UNRESOLVED for Block 4E',
+  locations: '4 independent records; placement fields USER VALIDATED in Block 4E',
   maxLikeAdapter: 'CANDIDATE math implemented in Block 4B; USER CALIBRATION OPEN',
   block3Assets,
   userVisualValidation: 'REQUIRED / NOT AUTO-PASSED'

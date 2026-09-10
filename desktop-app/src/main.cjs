@@ -49,6 +49,15 @@ async function waitForDiagnostics(window) {
   throw new Error('Timed out waiting for renderer diagnostics.');
 }
 
+async function waitForBrokerRenderer() {
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    if (liveLinkBroker?.getSnapshot()?.rendererConnected === true) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error('Timed out waiting for Electron renderer broker connection.');
+}
+
 async function waitForPointerDiagnostics(window, requestId) {
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
@@ -80,6 +89,7 @@ async function runSmokeTest(window) {
     const cameraEditor = await window.webContents.executeJavaScript('window.runBlock4BCameraEditorSmoke()', true);
     const photoScene = await window.webContents.executeJavaScript('window.runBlock4CPhotoSceneSmoke()', true);
     const environment = await window.webContents.executeJavaScript('window.runBlock4DEnvironmentSmoke()', true);
+    const locations = await window.webContents.executeJavaScript('window.runBlock4ELocationSmoke()', true);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -109,6 +119,13 @@ async function runSmokeTest(window) {
       environment.pointTargetCount === 0 && environment.raycastDisabled === true &&
       environment.loadCount === 1 && environment.nightDarker === true &&
       environment.strictSignageStillActive === true && environment.presentationControlVisible === true &&
+      locations.fourIndependent === true && locations.allProxiesReady === true &&
+      locations.noVisualTextLabels === true && locations.visibleBeforeToggle === 4 &&
+      locations.allHiddenWhenOff === true && locations.visibleAfterToggle === 4 &&
+      locations.pointPassThrough === true && locations.allLocationsNavigate === true &&
+      locations.exactReturns === true && locations.rapidLatestWins === true &&
+      locations.rapidReturn === 'RETURNED' && locations.directEntryHasNoFakeReturn === true &&
+      locations.finalSiteExact === true && locations.contextLossCount === 0 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -127,6 +144,7 @@ async function runSmokeTest(window) {
       cameraEditor,
       photoScene,
       environment,
+      locations,
       screenshotPath
     };
     writeJson(reportPath, report);
@@ -151,16 +169,29 @@ async function runSmokeTest(window) {
   }
 }
 
-function waitForClientMessage(socket, predicate, timeoutMs = liveLinkConfig.ackTimeoutMs) {
+function waitForClientMessage(
+  socket,
+  predicate,
+  timeoutMs = liveLinkConfig.ackTimeoutMs,
+  responseLabel = 'synthetic live-link response'
+) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       socket.off('message', onMessage);
-      reject(new Error('Timed out waiting for synthetic live-link response.'));
+      reject(new Error(`Timed out waiting for ${responseLabel}.`));
     }, timeoutMs);
     function onMessage(data, isBinary) {
       if (isBinary) return;
       try {
         const message = JSON.parse(data.toString('utf8'));
+        if (message.type === 'ERROR' || message.type === 'FRAME_ABORT') {
+          clearTimeout(timer);
+          socket.off('message', onMessage);
+          reject(new Error(
+            `${responseLabel} failed: ${message.code || message.type}: ${message.message || 'No message.'}`
+          ));
+          return;
+        }
         if (!predicate(message)) return;
         clearTimeout(timer);
         socket.off('message', onMessage);
@@ -209,13 +240,19 @@ async function sendSyntheticFrame(socket, frameId, bytes, width, height) {
     captureStartedAtEpochMs,
     captureEndedAtEpochMs: Date.now()
   };
+  const ackPromise = waitForClientMessage(
+    socket,
+    (message) => message.type === 'FRAME_ACK' && message.frameId === frameId,
+    liveLinkConfig.ackTimeoutMs,
+    `FRAME_ACK ${frameId}`
+  );
+  ackPromise.catch(() => {});
   socket.send(JSON.stringify(metadata));
   for (let offset = 0; offset < bytes.byteLength; offset += liveLinkConfig.chunkSizeBytes) {
     await waitForSocketBuffer(socket, liveLinkConfig.backpressureHighWaterMarkBytes);
     socket.send(bytes.subarray(offset, Math.min(offset + liveLinkConfig.chunkSizeBytes, bytes.byteLength)));
   }
   await waitForSocketBuffer(socket, liveLinkConfig.chunkSizeBytes);
-  const ackPromise = waitForClientMessage(socket, (message) => message.type === 'FRAME_ACK' && message.frameId === frameId);
   socket.send(JSON.stringify({ type: 'FRAME_END', frameId }));
   return ackPromise;
 }
@@ -226,17 +263,24 @@ async function runLinkSmokeTest(window) {
   let photoshopClient = null;
   try {
     await waitForDiagnostics(window);
+    await waitForBrokerRenderer();
     photoshopClient = new WebSocket(liveLinkConfig.endpoint);
     await new Promise((resolve, reject) => {
       photoshopClient.once('open', resolve);
       photoshopClient.once('error', reject);
     });
-    const helloPromise = waitForClientMessage(photoshopClient, (message) => message.type === 'HELLO_ACK');
+    const helloPromise = waitForClientMessage(
+      photoshopClient,
+      (message) => message.type === 'HELLO_ACK',
+      liveLinkConfig.ackTimeoutMs,
+      'HELLO_ACK'
+    );
     photoshopClient.send(JSON.stringify({
       type: 'HELLO',
       protocol: liveLinkConfig.protocol,
       protocolVersion: liveLinkConfig.protocolVersion,
-      role: 'photoshop'
+      role: 'photoshop',
+      isolatedSmokeTestClient: true
     }));
     await helloPromise;
 
@@ -264,7 +308,9 @@ async function runLinkSmokeTest(window) {
 
     const pointer2dSetPromise = waitForClientMessage(
       photoshopClient,
-      (message) => message.type === 'POINTER_SET'
+      (message) => message.type === 'POINTER_SET',
+      liveLinkConfig.ackTimeoutMs,
+      '2D POINTER_SET'
     );
     const pointer2dRequest = await window.webContents.executeJavaScript('window.runBlock2PointerSmokeRequest()', true);
     const pointer2dSet = await pointer2dSetPromise;
@@ -284,7 +330,9 @@ async function runLinkSmokeTest(window) {
 
     const pointer3dSetPromise = waitForClientMessage(
       photoshopClient,
-      (message) => message.type === 'POINTER_SET'
+      (message) => message.type === 'POINTER_SET',
+      liveLinkConfig.ackTimeoutMs,
+      '3D PLANE POINTER_SET'
     );
     const pointer3dRequest = await window.webContents.executeJavaScript('window.runBlock3PlanePointerSmokeRequest()', true);
     const pointer3dSet = await pointer3dSetPromise;
@@ -307,7 +355,9 @@ async function runLinkSmokeTest(window) {
 
     const sitePointerSetPromise = waitForClientMessage(
       photoshopClient,
-      (message) => message.type === 'POINTER_SET'
+      (message) => message.type === 'POINTER_SET',
+      liveLinkConfig.ackTimeoutMs,
+      'SITE 3D POINTER_SET'
     );
     const sitePointerRequest = await window.webContents.executeJavaScript('window.runBlock3SitePointerSmokeRequest()', true);
     const sitePointerSet = await sitePointerSetPromise;
@@ -330,7 +380,9 @@ async function runLinkSmokeTest(window) {
     const photoSceneSmoke = await window.webContents.executeJavaScript('window.runBlock4CPhotoSceneSmoke()', true);
     const photoPointerSetPromise = waitForClientMessage(
       photoshopClient,
-      (message) => message.type === 'POINTER_SET'
+      (message) => message.type === 'POINTER_SET',
+      liveLinkConfig.ackTimeoutMs,
+      'PHOTO POINTER_SET'
     );
     const photoPointerRequest = await window.webContents.executeJavaScript('window.runBlock4CPhotoPointerSmokeRequest()', true);
     const photoPointerSet = await photoPointerSetPromise;
@@ -364,6 +416,7 @@ async function runLinkSmokeTest(window) {
       photoSyncAfter.photo.loadCount === photoSyncBefore.photo.loadCount &&
       JSON.stringify(photoSyncAfter.site.cameraCurrentValues) === JSON.stringify(photoSyncBefore.site.cameraCurrentValues) &&
       JSON.stringify(photoSyncAfter.site.position) === JSON.stringify(photoSyncBefore.site.position);
+    const locationSmoke = await window.webContents.executeJavaScript('window.runBlock4ELocationSmoke()', true);
     await new Promise((resolve) => setTimeout(resolve, 150));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -434,6 +487,12 @@ async function runLinkSmokeTest(window) {
       environmentSmoke.materialOverrideExact === true && environmentSmoke.rootTransformIdentity === true &&
       environmentSmoke.allTransformsFinite === true && environmentSmoke.hiddenOutsideWorld3d === true &&
       environmentSmoke.strictSignageStillActive === true && environmentSmoke.loadCount === 1 &&
+      locationSmoke.fourIndependent === true && locationSmoke.allProxiesReady === true &&
+      locationSmoke.noVisualTextLabels === true && locationSmoke.allHiddenWhenOff === true &&
+      locationSmoke.pointPassThrough === true && locationSmoke.allLocationsNavigate === true &&
+      locationSmoke.exactReturns === true && locationSmoke.rapidLatestWins === true &&
+      locationSmoke.rapidReturn === 'RETURNED' && locationSmoke.directEntryHasNoFakeReturn === true &&
+      locationSmoke.finalSiteExact === true && locationSmoke.contextLossCount === 0 &&
       runtime.rendererTextureCount === 1 && runtime.contextLossCount === 0 &&
       runtime.textureGlError === 0 &&
       runtime.centerPixel.slice(0, 3).every((value) => value >= 188 && value <= 196) &&
@@ -458,6 +517,7 @@ async function runLinkSmokeTest(window) {
       markerCameraSmoke,
       plane3dRuntime,
       environmentSmoke,
+      locationSmoke,
       sitePointer: { request: sitePointerRequest, set: sitePointerSet, ack: sitePointerAck, runtime: sitePointerRuntime },
       siteMarkerCameraSmoke,
       site3dRuntime,
@@ -484,6 +544,8 @@ async function runLinkSmokeTest(window) {
       syntheticSource: true,
       externalNetworkRequests,
       loopbackRequests,
+      broker: liveLinkBroker?.getSnapshot() || null,
+      liveLinkEvents,
       criticalErrors,
       error: error.stack || error.message
     });
