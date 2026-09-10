@@ -17,6 +17,11 @@ const criticalErrors = [];
 const liveLinkEvents = [];
 let liveLinkBroker = null;
 
+if (smokeTest || linkSmokeTest) {
+  const profileName = linkSmokeTest ? 'link-smoke-profile' : 'runtime-smoke-profile';
+  app.setPath('userData', path.resolve(process.cwd(), '.runtime', profileName));
+}
+
 const securityPreferences = Object.freeze({
   nodeIntegration: false,
   contextIsolation: true,
@@ -223,25 +228,70 @@ async function runLinkSmokeTest(window) {
       viewAfterSecondFrame.zoom === viewBeforeSecondFrame.zoom &&
       viewAfterSecondFrame.viewMode === viewBeforeSecondFrame.viewMode;
 
-    const pointerSetPromise = waitForClientMessage(
+    const pointer2dSetPromise = waitForClientMessage(
       photoshopClient,
       (message) => message.type === 'POINTER_SET'
     );
-    const pointerRequest = await window.webContents.executeJavaScript('window.runBlock2PointerSmokeRequest()', true);
-    const pointerSet = await pointerSetPromise;
-    const pointerAck = {
+    const pointer2dRequest = await window.webContents.executeJavaScript('window.runBlock2PointerSmokeRequest()', true);
+    const pointer2dSet = await pointer2dSetPromise;
+    const pointer2dAck = {
       type: 'POINTER_ACK',
-      requestId: pointerSet.requestId,
-      documentId: pointerSet.documentId,
-      requestedX: pointerSet.x,
-      requestedY: pointerSet.y,
-      appliedX: pointerSet.x,
-      appliedY: pointerSet.y,
+      requestId: pointer2dSet.requestId,
+      documentId: pointer2dSet.documentId,
+      requestedX: pointer2dSet.x,
+      requestedY: pointer2dSet.y,
+      appliedX: pointer2dSet.x,
+      appliedY: pointer2dSet.y,
       layerName: '__LUUX_POINTER__',
       selectionRestored: true
     };
-    photoshopClient.send(JSON.stringify(pointerAck));
-    const pointerRuntime = await waitForPointerDiagnostics(window, pointerSet.requestId);
+    photoshopClient.send(JSON.stringify(pointer2dAck));
+    const pointer2dRuntime = await waitForPointerDiagnostics(window, pointer2dSet.requestId);
+
+    const pointer3dSetPromise = waitForClientMessage(
+      photoshopClient,
+      (message) => message.type === 'POINTER_SET'
+    );
+    const pointer3dRequest = await window.webContents.executeJavaScript('window.runBlock3PlanePointerSmokeRequest()', true);
+    const pointer3dSet = await pointer3dSetPromise;
+    const pointer3dAck = {
+      type: 'POINTER_ACK',
+      requestId: pointer3dSet.requestId,
+      documentId: pointer3dSet.documentId,
+      requestedX: pointer3dSet.x,
+      requestedY: pointer3dSet.y,
+      appliedX: pointer3dSet.x,
+      appliedY: pointer3dSet.y,
+      layerName: '__LUUX_POINTER__',
+      selectionRestored: true
+    };
+    photoshopClient.send(JSON.stringify(pointer3dAck));
+    const pointer3dRuntime = await waitForPointerDiagnostics(window, pointer3dSet.requestId);
+    const markerCameraSmoke = await window.webContents.executeJavaScript('window.runBlock3PlaneMarkerCameraSmoke()', true);
+    const plane3dRuntime = await window.webContents.executeJavaScript('window.block3PlaneDiagnostics', true);
+
+    const sitePointerSetPromise = waitForClientMessage(
+      photoshopClient,
+      (message) => message.type === 'POINTER_SET'
+    );
+    const sitePointerRequest = await window.webContents.executeJavaScript('window.runBlock3SitePointerSmokeRequest()', true);
+    const sitePointerSet = await sitePointerSetPromise;
+    const sitePointerAck = {
+      type: 'POINTER_ACK',
+      requestId: sitePointerSet.requestId,
+      documentId: sitePointerSet.documentId,
+      requestedX: sitePointerSet.x,
+      requestedY: sitePointerSet.y,
+      appliedX: sitePointerSet.x,
+      appliedY: sitePointerSet.y,
+      layerName: '__LUUX_POINTER__',
+      selectionRestored: true
+    };
+    photoshopClient.send(JSON.stringify(sitePointerAck));
+    const sitePointerRuntime = await waitForPointerDiagnostics(window, sitePointerSet.requestId);
+    const siteMarkerCameraSmoke = await window.webContents.executeJavaScript('window.runBlock3SiteMarkerCameraSmoke()', true);
+    const site3dRuntime = await window.webContents.executeJavaScript('window.block3SiteDiagnostics', true);
+    const missingAnamorphicSmoke = await window.webContents.executeJavaScript('window.runBlock3MissingAnamorphicSmoke()', true);
     await new Promise((resolve) => setTimeout(resolve, 150));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -261,13 +311,37 @@ async function runLinkSmokeTest(window) {
       runtime.textureWidth === width && runtime.textureHeight === height &&
       runtime.framesReceived === 2 && runtime.framesDropped === 0 && runtime.framesReplaced === 1 &&
       liveViewPreserved &&
-      pointerRequest.command.requestId === pointerSet.requestId &&
-      pointerRequest.canonical.x === pointerSet.x && pointerRequest.canonical.y === pointerSet.y &&
-      pointerSet.sourceFrameId === 2 && pointerSet.documentId === 9001 &&
-      pointerRuntime.state === 'READY' && pointerRuntime.coordinateError === 0 &&
-      pointerRuntime.applied.x === pointerSet.x && pointerRuntime.applied.y === pointerSet.y &&
-      pointerRuntime.marker?.requestId === pointerSet.requestId &&
-      pointerRuntime.marker?.status === 'acknowledged' && pointerRuntime.marker?.visible === true &&
+      pointer2dRequest.command.requestId === pointer2dSet.requestId &&
+      pointer2dRequest.canonical.x === pointer2dSet.x && pointer2dRequest.canonical.y === pointer2dSet.y &&
+      pointer2dSet.sourceFrameId === 2 && pointer2dSet.documentId === 9001 &&
+      pointer2dRuntime.state === 'READY' && pointer2dRuntime.coordinateError === 0 &&
+      pointer2dRuntime.applied.x === pointer2dSet.x && pointer2dRuntime.applied.y === pointer2dSet.y &&
+      pointer3dRequest.command.requestId === pointer3dSet.requestId &&
+      pointer3dRequest.canonical.x === pointer3dSet.x && pointer3dRequest.canonical.y === pointer3dSet.y &&
+      pointer3dSet.x === 1053 && pointer3dSet.y === 739 &&
+      pointer3dSet.sourceFrameId === 2 && pointer3dSet.documentId === 9001 &&
+      pointer3dRuntime.state === 'READY' && pointer3dRuntime.coordinateError === 0 &&
+      pointer3dRuntime.applied.x === pointer3dSet.x && pointer3dRuntime.applied.y === pointer3dSet.y &&
+      pointer3dRuntime.marker?.requestId === pointer3dSet.requestId &&
+      pointer3dRuntime.marker?.view === '3d-plane' &&
+      pointer3dRuntime.marker?.status === 'acknowledged' && pointer3dRuntime.marker?.visible === true &&
+      markerCameraSmoke.screenPositionChanged === true && markerCameraSmoke.canonicalPreserved === true &&
+      markerCameraSmoke.after.visible === true &&
+      plane3dRuntime.cameraType === 'PerspectiveCamera' && plane3dRuntime.textureShared === true &&
+      sitePointerRequest.command.requestId === sitePointerSet.requestId &&
+      sitePointerRequest.canonical.x === sitePointerSet.x && sitePointerRequest.canonical.y === sitePointerSet.y &&
+      sitePointerSet.sourceFrameId === 2 && sitePointerSet.documentId === 9001 &&
+      sitePointerRuntime.state === 'READY' && sitePointerRuntime.coordinateError === 0 &&
+      sitePointerRuntime.marker?.view === 'site-3d' && sitePointerRuntime.marker?.status === 'acknowledged' &&
+      Boolean(sitePointerRuntime.marker?.surfaceRole) && Boolean(sitePointerRuntime.marker?.meshName) &&
+      siteMarkerCameraSmoke.screenPositionChanged === true && siteMarkerCameraSmoke.canonicalPreserved === true &&
+      siteMarkerCameraSmoke.meshPreserved === true && siteMarkerCameraSmoke.after.visible === true &&
+      site3dRuntime.status === 'READY' && site3dRuntime.surfaceSetAvailable === true &&
+      site3dRuntime.activeSurfaces.length === 2 && site3dRuntime.activeSurfaces.every((surface) => surface.textureShared) &&
+      missingAnamorphicSmoke.surfaceSetAvailable === false && missingAnamorphicSmoke.activeSurfaceCount === 0 &&
+      missingAnamorphicSmoke.visibleSurfaceCount === 0 && missingAnamorphicSmoke.pointDisabled === true &&
+      missingAnamorphicSmoke.controlsDisabled === true &&
+      missingAnamorphicSmoke.missingMeshes.join(',') === 'LUUX_Front_3Dworld_Anamorphic,ILMIN_Back_3Dworld_Anamorphic' &&
       runtime.rendererTextureCount === 1 && runtime.contextLossCount === 0 &&
       runtime.textureGlError === 0 &&
       runtime.centerPixel.slice(0, 3).every((value) => value >= 188 && value <= 196) &&
@@ -286,17 +360,21 @@ async function runLinkSmokeTest(window) {
       viewBeforeSecondFrame,
       viewAfterSecondFrame,
       liveViewPreserved,
-      pointerRequest,
-      pointerSet,
-      pointerAck,
-      pointerRuntime,
+      pointer2d: { request: pointer2dRequest, set: pointer2dSet, ack: pointer2dAck, runtime: pointer2dRuntime },
+      pointer3d: { request: pointer3dRequest, set: pointer3dSet, ack: pointer3dAck, runtime: pointer3dRuntime },
+      markerCameraSmoke,
+      plane3dRuntime,
+      sitePointer: { request: sitePointerRequest, set: sitePointerSet, ack: sitePointerAck, runtime: sitePointerRuntime },
+      siteMarkerCameraSmoke,
+      site3dRuntime,
+      missingAnamorphicSmoke,
       runtime,
       screenshotPath,
       criticalErrors
     };
     writeJson(reportPath, report);
-    console.log(`BLOCK2_POINTER_LINK_REPORT=${reportPath}`);
-    console.log(`BLOCK2_SYNTHETIC_POINTER_PASS=${technicalPass}`);
+    console.log(`BLOCK3C_SITE_LINK_REPORT=${reportPath}`);
+    console.log(`BLOCK3C_SYNTHETIC_SITE_PASS=${technicalPass}`);
     photoshopClient.close();
     app.exit(technicalPass ? 0 : 2);
   } catch (error) {

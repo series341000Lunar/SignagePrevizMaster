@@ -1,11 +1,17 @@
 import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import liveLinkConfig from './live-link-config.json';
 import {
   CANONICAL_COORDINATE_SYSTEM,
   canonicalToLocalPoint,
-  localPointToCanonical
+  canonicalToSurfaceLocalPoint,
+  localPointToCanonical,
+  normalizedPointToCanonical,
+  surfaceLocalPointToCanonical
 } from './canonical-coordinate.js';
 import { LatestWinsPointerQueue } from './pointer-command-queue.js';
+import { SITE_SCENE_PROFILE, resolveSurfaceSet } from './site-scene-profile.js';
 
 const canvas = document.querySelector('#three-canvas');
 const viewer = document.querySelector('#viewer');
@@ -21,6 +27,17 @@ const pointButton = document.querySelector('#point-button');
 const clearPointerButton = document.querySelector('#clear-pointer-button');
 const dragHint = document.querySelector('#drag-hint');
 const pointerMarker = document.querySelector('#pointer-marker');
+const view2dButton = document.querySelector('#view-2d-button');
+const view3dPlaneButton = document.querySelector('#view-3d-plane-button');
+const viewSite3dButton = document.querySelector('#view-site-3d-button');
+const siteControls = [...document.querySelectorAll('.site-control')];
+const siteWorldSelect = document.querySelector('#site-world-select');
+const siteMappingSelect = document.querySelector('#site-mapping-select');
+const siteSceneSelect = document.querySelector('#site-scene-select');
+const fitButton = document.querySelector('#fit-button');
+const oneButton = document.querySelector('#one-button');
+const twoButton = document.querySelector('#two-button');
+const fourButton = document.querySelector('#four-button');
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -34,15 +51,46 @@ renderer.setPixelRatio(window.devicePixelRatio);
 
 const gl = renderer.getContext();
 const scene = new THREE.Scene();
+const scene3d = new THREE.Scene();
+const sceneSite = new THREE.Scene();
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
 camera.position.z = 1;
+const camera3d = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+camera3d.position.set(0, 0, 3);
+const cameraSite = new THREE.PerspectiveCamera(45, 1, 0.01, 10000);
+cameraSite.position.set(7, 6, 11);
 const raycaster = new THREE.Raycaster();
+const controls3d = new OrbitControls(camera3d, canvas);
+const controlsSite = new OrbitControls(cameraSite, canvas);
+
+function configure3dControls(controls, minDistance, maxDistance) {
+  controls.enabled = false;
+  controls.enableDamping = false;
+  controls.screenSpacePanning = true;
+  controls.minDistance = minDistance;
+  controls.maxDistance = maxDistance;
+  controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+  controls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
+  controls.mouseButtons.RIGHT = null;
+}
+
+configure3dControls(controls3d, 0.8, 12);
+configure3dControls(controlsSite, 0.1, 100);
+controls3d.target.set(0, 0, 0);
+controls3d.update();
+controlsSite.target.set(0, 4, -1.5);
+controlsSite.update();
 
 const state = {
   manifest: null,
   asset: null,
   mesh: null,
+  plane3d: null,
+  plane3dFrame: null,
+  plane3dWidth: 1,
+  plane3dHeight: 1,
   texture: null,
+  activeView: '2d',
   zoom: 1,
   viewMode: 'fit',
   filterMode: 'normal',
@@ -78,10 +126,42 @@ const state = {
     lastError: '',
     marker: null,
     markerVisible: false
+  },
+  site: {
+    status: 'LOADING',
+    error: '',
+    roots: { world3d: null, legacy2d: null },
+    meshesByWorld: { world3d: [], legacy2d: [] },
+    meshes: [],
+    bindings: [],
+    activeBindings: [],
+    missingMeshes: [],
+    world: 'world3d',
+    mappingMode: 'normal',
+    scene: 'front',
+    surfaceSetAvailable: false
   }
 };
 
 const pointerQueue = new LatestWinsPointerQueue((command) => sendLinkMessage(command));
+
+function wire3dControlEvents(controls, view) {
+  controls.addEventListener('start', () => {
+    if (state.activeView === view) canvas.classList.add('dragging');
+  });
+  controls.addEventListener('change', () => {
+    if (state.activeView !== view) return;
+    updateZoomReadout();
+    render();
+  });
+  controls.addEventListener('end', () => {
+    canvas.classList.remove('dragging');
+    if (state.activeView === view) updateDiagnostics();
+  });
+}
+
+wire3dControlEvents(controls3d, '3d-plane');
+wire3dControlEvents(controlsSite, 'site-3d');
 
 canvas.addEventListener('webglcontextlost', (event) => {
   event.preventDefault();
@@ -114,7 +194,11 @@ function resizeRenderer() {
   camera.top = height / 2;
   camera.bottom = -height / 2;
   camera.updateProjectionMatrix();
-  if (state.viewMode === 'fit' && state.asset) applyFit();
+  camera3d.aspect = width / height;
+  camera3d.updateProjectionMatrix();
+  cameraSite.aspect = width / height;
+  cameraSite.updateProjectionMatrix();
+  if (state.activeView === '2d' && state.viewMode === 'fit' && state.asset) applyFit();
   else render();
 }
 
@@ -124,8 +208,26 @@ function disposeCurrentTexture() {
     state.mesh.geometry.dispose();
     state.mesh.material.dispose();
   }
+  if (state.plane3d) {
+    scene3d.remove(state.plane3d);
+    state.plane3d.geometry.dispose();
+    state.plane3d.material.dispose();
+  }
+  if (state.plane3dFrame) {
+    scene3d.remove(state.plane3dFrame);
+    state.plane3dFrame.geometry.dispose();
+    state.plane3dFrame.material.dispose();
+  }
+  for (const binding of state.site.bindings) {
+    if (binding.mesh.material?.map === state.texture) {
+      binding.mesh.material.map = null;
+      binding.mesh.material.needsUpdate = true;
+    }
+  }
   if (state.texture) state.texture.dispose();
   state.mesh = null;
+  state.plane3d = null;
+  state.plane3dFrame = null;
   state.texture = null;
   renderer.renderLists.dispose();
 }
@@ -150,12 +252,172 @@ function createGeometry(width, height, flipVerticalUv) {
 }
 
 function installTexture(texture, width, height, flipVerticalUv) {
-  const geometry = createGeometry(width, height, flipVerticalUv);
-  const material = new THREE.MeshBasicMaterial({ map: texture, toneMapped: false });
-  const mesh = new THREE.Mesh(geometry, material);
+  const geometry2d = createGeometry(width, height, flipVerticalUv);
+  const material2d = new THREE.MeshBasicMaterial({ map: texture, toneMapped: false });
+  const mesh = new THREE.Mesh(geometry2d, material2d);
   scene.add(mesh);
+
+  const planeWidth = 1;
+  const planeHeight = height / width;
+  const geometry3d = createGeometry(planeWidth, planeHeight, flipVerticalUv);
+  const material3d = new THREE.MeshBasicMaterial({
+    map: texture,
+    side: THREE.DoubleSide,
+    toneMapped: false
+  });
+  const plane3d = new THREE.Mesh(geometry3d, material3d);
+  plane3d.name = 'BLOCK_3A_SIGNAGE_PLANE';
+  scene3d.add(plane3d);
+  const frame = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry3d),
+    new THREE.LineBasicMaterial({ color: 0x62daa1 })
+  );
+  frame.position.z = 0.001;
+  scene3d.add(frame);
+
   state.texture = texture;
   state.mesh = mesh;
+  state.plane3d = plane3d;
+  state.plane3dFrame = frame;
+  state.plane3dWidth = planeWidth;
+  state.plane3dHeight = planeHeight;
+  if (state.pointer.marker?.view === '3d-plane') state.pointer.marker.meshUuid = plane3d.uuid;
+  for (const binding of state.site.bindings) {
+    binding.mesh.material.map = texture;
+    binding.mesh.material.needsUpdate = true;
+  }
+}
+
+function selectedSiteContract() {
+  const world = SITE_SCENE_PROFILE.worlds[state.site.world];
+  if (state.site.mappingMode === 'anamorphic') {
+    return {
+      contracts: state.site.world === 'world3d' ? world.anamorphicSurfaces : null,
+      camera: null,
+      label: 'ANAMORPHIC'
+    };
+  }
+  if (state.site.world === 'world3d') {
+    return { contracts: world.normalSurfaces, camera: null, label: '3D WORLD / NORMAL' };
+  }
+  const sceneContract = world.normalScenes.find((candidate) => candidate.id === state.site.scene) || world.normalScenes[0];
+  return { contracts: sceneContract.surfaces, camera: sceneContract.camera, label: `LEGACY 2D WORLD / ${sceneContract.label}` };
+}
+
+function fitSiteCameraToActiveSurfaces() {
+  if (state.site.activeBindings.length === 0) return;
+  const bounds = new THREE.Box3();
+  for (const binding of state.site.activeBindings) bounds.expandByObject(binding.mesh);
+  const center = bounds.getCenter(new THREE.Vector3());
+  const size = bounds.getSize(new THREE.Vector3());
+  const radius = Math.max(1, size.length() * 0.5);
+  cameraSite.fov = 45;
+  cameraSite.near = 0.01;
+  cameraSite.far = 10000;
+  cameraSite.position.copy(center).add(new THREE.Vector3(radius * 1.15, radius * 0.45, radius * 1.9));
+  cameraSite.rotation.set(0, 0, 0);
+  cameraSite.updateProjectionMatrix();
+  controlsSite.target.copy(center);
+  controlsSite.update();
+}
+
+function applyLegacySiteCamera(cameraContract) {
+  cameraSite.fov = cameraContract.fov;
+  cameraSite.near = cameraContract.near;
+  cameraSite.far = cameraContract.far;
+  cameraSite.position.fromArray(cameraContract.position);
+  cameraSite.rotation.order = 'XYZ';
+  cameraSite.rotation.set(...cameraContract.eulerXyzDegrees.map(THREE.MathUtils.degToRad));
+  cameraSite.updateProjectionMatrix();
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraSite.quaternion);
+  controlsSite.target.copy(cameraSite.position).addScaledVector(forward, 10);
+}
+
+function applySiteSurfaceSelection({ resetCamera = true } = {}) {
+  if (!state.site.roots.world3d || !state.site.roots.legacy2d) return;
+  for (const mesh of state.site.meshes) mesh.visible = false;
+  const selection = selectedSiteContract();
+  if (!selection.contracts) {
+    state.site.activeBindings = [];
+    state.site.missingMeshes = ['Legacy 2D World anamorphic surface contract'];
+    state.site.surfaceSetAvailable = false;
+  } else {
+    const resolution = resolveSurfaceSet(state.site.meshesByWorld[state.site.world], selection.contracts);
+    state.site.missingMeshes = [...resolution.missing];
+    state.site.surfaceSetAvailable = resolution.available;
+    state.site.activeBindings = resolution.available ? [...resolution.resolved] : [];
+    for (const binding of state.site.activeBindings) binding.mesh.visible = true;
+  }
+
+  if (state.pointer.marker?.view === 'site-3d') state.pointer.marker = null;
+  if (resetCamera && state.site.surfaceSetAvailable) {
+    if (selection.camera) applyLegacySiteCamera(selection.camera);
+    else fitSiteCameraToActiveSurfaces();
+  }
+  controlsSite.enabled = state.activeView === 'site-3d' && state.site.surfaceSetAvailable;
+  siteSceneSelect.disabled = state.site.world !== 'legacy2d' || state.site.mappingMode !== 'normal';
+  updateZoomReadout();
+  render();
+  updateDiagnostics();
+}
+
+function populateSiteSceneOptions() {
+  siteSceneSelect.replaceChildren();
+  for (const sceneContract of SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes) {
+    const option = document.createElement('option');
+    option.value = sceneContract.id;
+    option.textContent = sceneContract.label;
+    siteSceneSelect.append(option);
+  }
+  siteSceneSelect.value = state.site.scene;
+}
+
+async function loadSiteScene() {
+  const loader = new GLTFLoader();
+  try {
+    const assetEntries = Object.entries(SITE_SCENE_PROFILE.assets);
+    const loadedAssets = await Promise.all(assetEntries.map(async ([assetId, asset]) => {
+      const url = new URL(asset.relativeUrl, import.meta.url).href;
+      return [assetId, await loader.loadAsync(url)];
+    }));
+    state.site.meshes = [];
+    state.site.bindings = [];
+    const oldMaterials = new Set();
+    for (const [assetId, gltf] of loadedAssets) {
+      state.site.roots[assetId] = gltf.scene;
+      state.site.meshesByWorld[assetId] = [];
+      gltf.scene.traverse((child) => {
+        if (!child.isMesh) return;
+        state.site.meshes.push(child);
+        state.site.meshesByWorld[assetId].push(child);
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        for (const material of materials) if (material) oldMaterials.add(material);
+        child.material = new THREE.MeshBasicMaterial({
+          map: state.texture,
+          color: 0xffffff,
+          transparent: true,
+          opacity: 1,
+          side: THREE.DoubleSide,
+          depthTest: true,
+          depthWrite: true,
+          toneMapped: false
+        });
+        child.visible = false;
+      });
+      gltf.scene.userData.siteAssetId = assetId;
+      sceneSite.add(gltf.scene);
+    }
+    for (const material of oldMaterials) material.dispose();
+    state.site.bindings = state.site.meshes.map((mesh) => ({ mesh }));
+    state.site.status = 'READY';
+    state.site.error = '';
+    applySiteSurfaceSelection();
+  } catch (error) {
+    state.site.status = 'ERROR';
+    state.site.error = error.stack || error.message;
+    state.site.surfaceSetAvailable = false;
+    updateDiagnostics();
+  }
 }
 
 async function loadAsset(assetId) {
@@ -294,6 +556,7 @@ async function installLiveFrame(frame) {
 }
 
 function setZoom(zoom, viewMode) {
+  if (state.activeView !== '2d') return;
   state.zoom = Math.min(8, Math.max(0.02, zoom));
   state.viewMode = viewMode;
   camera.zoom = state.zoom;
@@ -304,7 +567,7 @@ function setZoom(zoom, viewMode) {
 }
 
 function applyFit() {
-  if (!state.asset) return;
+  if (!state.asset || state.activeView !== '2d') return;
   const width = Math.max(1, viewer.clientWidth);
   const height = Math.max(1, viewer.clientHeight);
   const fitZoom = Math.min(width / state.asset.sourceWidth, height / state.asset.sourceHeight) * 0.96;
@@ -313,15 +576,53 @@ function applyFit() {
   setZoom(fitZoom, 'fit');
 }
 
+function updateZoomReadout() {
+  if (state.activeView === '3d-plane') {
+    zoomReadout.textContent = `Dolly ${camera3d.position.distanceTo(controls3d.target).toFixed(2)}`;
+  } else if (state.activeView === 'site-3d') {
+    zoomReadout.textContent = state.site.surfaceSetAvailable
+      ? `Dolly ${cameraSite.position.distanceTo(controlsSite.target).toFixed(2)}`
+      : 'Surface NONE';
+  } else {
+    zoomReadout.textContent = `Zoom ${(state.zoom * 100).toFixed(1)}%`;
+  }
+}
+
+function isThreeDimensionalView() {
+  return state.activeView === '3d-plane' || state.activeView === 'site-3d';
+}
+
+function setActiveView(view) {
+  if (!['2d', '3d-plane', 'site-3d'].includes(view)) throw new Error(`Unknown view: ${view}`);
+  state.activeView = view;
+  controls3d.enabled = view === '3d-plane';
+  controlsSite.enabled = view === 'site-3d' && state.site.surfaceSetAvailable;
+  view2dButton.classList.toggle('active', view === '2d');
+  view3dPlaneButton.classList.toggle('active', view === '3d-plane');
+  viewSite3dButton.classList.toggle('active', view === 'site-3d');
+  for (const control of siteControls) control.hidden = view !== 'site-3d';
+  for (const button of [fitButton, oneButton, twoButton, fourButton]) button.disabled = view !== '2d';
+  updateZoomReadout();
+  render();
+  updateDiagnostics();
+}
+
 function render() {
-  renderer.render(scene, camera);
+  if (state.activeView === 'site-3d') renderer.render(sceneSite, cameraSite);
+  else if (state.activeView === '3d-plane') renderer.render(scene3d, camera3d);
+  else renderer.render(scene, camera);
   updatePointerMarker();
 }
 
 function updatePointerMarker() {
   const marker = state.pointer.marker;
   const live = state.link.lastFrame;
-  const matchesCurrentDocument = marker && state.asset?.kind === 'live' && state.mesh && live &&
+  const markerMesh = marker?.view === 'site-3d'
+    ? state.site.meshes.find((mesh) => mesh.uuid === marker.meshUuid)
+    : (marker?.view === '3d-plane' ? state.plane3d : state.mesh);
+  const markerCamera = marker?.view === 'site-3d' ? cameraSite : (marker?.view === '3d-plane' ? camera3d : camera);
+  const matchesCurrentDocument = marker && marker.view === state.activeView &&
+    state.asset?.kind === 'live' && markerMesh && live &&
     marker.documentId === live.documentId &&
     marker.width === live.documentWidth &&
     marker.height === live.documentHeight;
@@ -331,8 +632,8 @@ function updatePointerMarker() {
     return;
   }
 
-  const local = canonicalToLocalPoint(marker.canonical, marker.width, marker.height);
-  const projected = state.mesh.localToWorld(new THREE.Vector3(local.x, local.y, 0)).project(camera);
+  const local = marker.localPoint || canonicalToLocalPoint(marker.canonical, marker.width, marker.height);
+  const projected = markerMesh.localToWorld(new THREE.Vector3(local.x, local.y, local.z || 0)).project(markerCamera);
   const visible = projected.z >= -1 && projected.z <= 1 &&
     projected.x >= -1 && projected.x <= 1 && projected.y >= -1 && projected.y <= 1;
   pointerMarker.className = `pointer-marker ${marker.status}${visible ? ' visible' : ''}`;
@@ -352,13 +653,16 @@ function formatMs(value) {
 
 function pointerRequirementsSatisfied() {
   const live = state.link.lastFrame;
+  const pointerSurfaceAvailable = state.activeView === 'site-3d'
+    ? state.site.surfaceSetAvailable && state.site.activeBindings.length > 0
+    : Boolean(state.activeView === '3d-plane' ? state.plane3d : state.mesh);
   return state.asset?.kind === 'live' &&
     state.link.rendererHandshake && state.link.photoshopConnected &&
     Number.isSafeInteger(live?.frameId) && live.frameId > 0 &&
     Number.isSafeInteger(live?.documentId) && live.documentId > 0 &&
     Number.isSafeInteger(live?.documentWidth) && live.documentWidth > 0 &&
     Number.isSafeInteger(live?.documentHeight) && live.documentHeight > 0 &&
-    state.mesh;
+    pointerSurfaceAvailable;
 }
 
 function updatePointerControls() {
@@ -369,9 +673,21 @@ function updatePointerControls() {
   navigateButton.classList.toggle('active', state.interactionMode === 'navigate');
   pointButton.classList.toggle('active', state.interactionMode === 'point');
   canvas.classList.toggle('point-mode', state.interactionMode === 'point');
-  dragHint.textContent = state.interactionMode === 'point'
-    ? 'POINT: Left click · Middle drag: pan · Wheel: zoom'
-    : 'NAVIGATE: Left/Middle drag: pan · Wheel: zoom';
+  if (state.activeView === 'site-3d') {
+    dragHint.textContent = state.site.surfaceSetAvailable
+      ? (state.interactionMode === 'point'
+        ? 'SITE POINT: Left click · Left drag: orbit · Middle drag: pan · Wheel: dolly'
+        : 'SITE NAVIGATE: Left drag: orbit · Middle drag: pan · Wheel: dolly')
+      : `SITE SURFACE: NONE · Missing: ${state.site.missingMeshes.join(', ') || 'contract unavailable'}`;
+  } else if (state.activeView === '3d-plane') {
+    dragHint.textContent = state.interactionMode === 'point'
+      ? '3D POINT: Left click · Left drag: orbit · Middle drag: pan · Wheel: dolly'
+      : '3D NAVIGATE: Left drag: orbit · Middle drag: pan · Wheel: dolly';
+  } else {
+    dragHint.textContent = state.interactionMode === 'point'
+      ? '2D POINT: Left click · Middle drag: pan · Wheel: zoom'
+      : '2D NAVIGATE: Left/Middle drag: pan · Wheel: zoom';
+  }
   if (!available && !pointerQueue.snapshot().activeRequestId) state.pointer.state = 'UNAVAILABLE';
   else if (available && state.pointer.state === 'UNAVAILABLE') state.pointer.state = 'READY';
 }
@@ -390,7 +706,7 @@ function setInteractionMode(mode) {
   return true;
 }
 
-function mapClientPointToCanonical(clientX, clientY) {
+function mapClientPointToSurfaceHit(clientX, clientY) {
   if (!pointerRequirementsSatisfied()) return null;
   const bounds = canvas.getBoundingClientRect();
   if (clientX < bounds.left || clientX > bounds.right || clientY < bounds.top || clientY > bounds.bottom) return null;
@@ -398,11 +714,41 @@ function mapClientPointToCanonical(clientX, clientY) {
     ((clientX - bounds.left) / bounds.width) * 2 - 1,
     -((clientY - bounds.top) / bounds.height) * 2 + 1
   );
-  raycaster.setFromCamera(ndc, camera);
-  const hit = raycaster.intersectObject(state.mesh, false)[0];
+  const pointerMeshes = state.activeView === 'site-3d'
+    ? state.site.activeBindings.map((binding) => binding.mesh)
+    : [state.activeView === '3d-plane' ? state.plane3d : state.mesh];
+  const pointerCamera = state.activeView === 'site-3d' ? cameraSite : (state.activeView === '3d-plane' ? camera3d : camera);
+  raycaster.setFromCamera(ndc, pointerCamera);
+  const hit = state.activeView === 'site-3d'
+    ? raycaster.intersectObjects(pointerMeshes, false)[0]
+    : raycaster.intersectObject(pointerMeshes[0], false)[0];
   if (!hit) return null;
-  const local = state.mesh.worldToLocal(hit.point.clone());
-  return localPointToCanonical(local.x, local.y, state.asset.sourceWidth, state.asset.sourceHeight);
+  if (state.activeView === 'site-3d' && !hit.uv) return null;
+  const pointerMesh = hit.object;
+  const local = pointerMesh.worldToLocal(hit.point.clone());
+  const canonical = state.activeView === 'site-3d'
+    ? normalizedPointToCanonical(hit.uv.x, hit.uv.y, state.asset.sourceWidth, state.asset.sourceHeight)
+    : (state.activeView === '3d-plane'
+      ? surfaceLocalPointToCanonical(
+      local.x,
+      local.y,
+      state.plane3dWidth,
+      state.plane3dHeight,
+      state.asset.sourceWidth,
+      state.asset.sourceHeight
+    )
+      : localPointToCanonical(local.x, local.y, state.asset.sourceWidth, state.asset.sourceHeight));
+  const siteBinding = state.activeView === 'site-3d'
+    ? state.site.activeBindings.find((binding) => binding.mesh === pointerMesh)
+    : null;
+  return {
+    canonical,
+    view: state.activeView,
+    meshUuid: pointerMesh.uuid,
+    meshName: pointerMesh.name,
+    surfaceRole: siteBinding?.contract.role || null,
+    localPoint: { x: local.x, y: local.y, z: local.z }
+  };
 }
 
 function pointerCommandBase() {
@@ -440,7 +786,7 @@ function queuePointerCommand(command) {
   return command;
 }
 
-function requestPointerAt(canonical) {
+function requestPointerAt(canonical, surfaceHit = null) {
   const command = {
     type: 'POINTER_SET',
     ...pointerCommandBase(),
@@ -459,6 +805,11 @@ function requestPointerAt(canonical) {
     width: command.width,
     height: command.height,
     canonical,
+    view: surfaceHit?.view || state.activeView,
+    meshUuid: surfaceHit?.meshUuid || (state.activeView === '3d-plane' ? state.plane3d?.uuid : (state.activeView === 'site-3d' ? null : state.mesh?.uuid)),
+    meshName: surfaceHit?.meshName || null,
+    surfaceRole: surfaceHit?.surfaceRole || null,
+    localPoint: surfaceHit?.localPoint || null,
     status: 'pending'
   };
   updatePointerMarker();
@@ -549,11 +900,56 @@ function updateDiagnostics() {
     dimensionsMatch,
     textureLimitPass,
     fullResolution,
+    activeView: state.activeView,
     zoom: state.zoom,
     viewMode: state.viewMode,
     filterMode: state.filterMode,
     contextLossCount: state.contextLossCount,
     rendererMemoryTextures: renderer.info.memory.textures,
+    plane3d: {
+      cameraType: camera3d.type,
+      fov: camera3d.fov,
+      near: camera3d.near,
+      far: camera3d.far,
+      position: camera3d.position.toArray(),
+      target: controls3d.target.toArray(),
+      distance: camera3d.position.distanceTo(controls3d.target),
+      width: state.plane3dWidth,
+      height: state.plane3dHeight,
+      aspect: state.plane3dWidth > 0 ? state.plane3dHeight / state.plane3dWidth : null,
+      meshUuid: state.plane3d?.uuid || null,
+      textureShared: Boolean(
+        state.texture &&
+        state.mesh?.material.map === state.texture &&
+        state.plane3d?.material.map === state.texture
+      )
+    },
+    site3d: {
+      status: state.site.status,
+      error: state.site.error,
+      assetFile: SITE_SCENE_PROFILE.assets[state.site.world].fileName,
+      expectedSha256: SITE_SCENE_PROFILE.assets[state.site.world].sha256,
+      loadedAssets: Object.values(SITE_SCENE_PROFILE.assets).map((asset) => asset.fileName),
+      world: state.site.world,
+      mappingMode: state.site.mappingMode,
+      legacyScene: state.site.world === 'legacy2d' ? state.site.scene : null,
+      surfaceSetAvailable: state.site.surfaceSetAvailable,
+      missingMeshes: [...state.site.missingMeshes],
+      meshCount: state.site.meshes.length,
+      activeWorldMeshCount: state.site.meshesByWorld[state.site.world].length,
+      activeSurfaces: state.site.activeBindings.map((binding) => ({
+        role: binding.contract.role,
+        meshName: binding.mesh.name,
+        meshUuid: binding.mesh.uuid,
+        textureShared: binding.mesh.material.map === state.texture
+      })),
+      cameraType: cameraSite.type,
+      fov: cameraSite.fov,
+      near: cameraSite.near,
+      far: cameraSite.far,
+      position: cameraSite.position.toArray(),
+      target: controlsSite.target.toArray()
+    },
     liveLink: {
       endpoint: liveLinkConfig.endpoint,
       rendererConnected: state.link.rendererHandshake,
@@ -608,6 +1004,11 @@ function updateDiagnostics() {
       marker: state.pointer.marker ? {
         requestId: state.pointer.marker.requestId,
         documentId: state.pointer.marker.documentId,
+        view: state.pointer.marker.view,
+        meshUuid: state.pointer.marker.meshUuid,
+        meshName: state.pointer.marker.meshName,
+        surfaceRole: state.pointer.marker.surfaceRole,
+        localPoint: state.pointer.marker.localPoint,
         status: state.pointer.marker.status,
         visible: state.pointer.markerVisible
       } : null,
@@ -617,8 +1018,11 @@ function updateDiagnostics() {
   window.block0Diagnostics = structuredClone(state.diagnostics);
   window.block1Diagnostics = structuredClone(state.diagnostics.liveLink);
   window.block2PointerDiagnostics = structuredClone(state.diagnostics.pointerLink);
+  window.block3PlaneDiagnostics = structuredClone(state.diagnostics.plane3d);
+  window.block3SiteDiagnostics = structuredClone(state.diagnostics.site3d);
 
   const rows = [
+    ['Active View', state.activeView === 'site-3d' ? 'SITE 3D' : (state.activeView === '3d-plane' ? '3D PLANE' : '2D VIEW')],
     ['Photoshop Link', state.link.photoshopConnected ? 'CONNECTED' : 'DISCONNECTED'],
     ['Endpoint', liveLinkConfig.endpoint],
     ['Document', live?.documentName || '—'],
@@ -649,6 +1053,18 @@ function updateDiagnostics() {
     ['GPU Upload', state.diagnostics.gpuUploadObserved ? 'OBSERVED' : 'WAITING'],
     ['Texture Count', state.diagnostics.rendererMemoryTextures],
     ['Context Loss', state.diagnostics.contextLossCount],
+    ['3D Camera', state.diagnostics.plane3d.cameraType],
+    ['3D Plane W / H', `${state.plane3dWidth.toFixed(4)} / ${state.plane3dHeight.toFixed(4)}`],
+    ['3D Texture Shared', state.diagnostics.plane3d.textureShared ? 'YES' : 'NO'],
+    ['3D Camera Distance', state.diagnostics.plane3d.distance.toFixed(3)],
+    ['Site Asset', state.diagnostics.site3d.assetFile],
+    ['Site Load', state.diagnostics.site3d.status],
+    ['Site World / Mapping', `${state.site.world.toUpperCase()} / ${state.site.mappingMode.toUpperCase()}`],
+    ['Site Scene', state.site.world === 'legacy2d' ? state.site.scene : '—'],
+    ['Site Surface Set', state.site.surfaceSetAvailable ? 'READY' : 'NONE'],
+    ['Site Active Surfaces', state.site.activeBindings.map((binding) => `${binding.contract.role}:${binding.mesh.name}`).join(' + ') || '—'],
+    ['Site Missing Meshes', state.site.missingMeshes.join(', ') || '—'],
+    ['Site Texture Shared', state.site.activeBindings.length > 0 && state.site.activeBindings.every((binding) => binding.mesh.material.map === state.texture) ? 'YES' : '—'],
     ['Filter', state.diagnostics.filterMode.toUpperCase()],
     ['Last Link Error', state.link.lastError || '—'],
     ['Interaction Mode', state.interactionMode.toUpperCase()],
@@ -664,6 +1080,7 @@ function updateDiagnostics() {
     ['Pointer Replacements', pointerQueue.snapshot().replacements],
     ['Last Pointer ACK', state.pointer.lastAck?.type || '—'],
     ['Last Pointer Error', state.pointer.lastError || '—'],
+    ['Pointer Surface', state.pointer.marker?.surfaceRole ? `${state.pointer.marker.surfaceRole} / ${state.pointer.marker.meshName}` : '—'],
     ['Previz Marker', state.pointer.marker ? `${state.pointer.marker.status.toUpperCase()} / ${state.pointer.markerVisible ? 'VISIBLE' : 'OFFSCREEN'}` : 'CLEARED']
   ];
   diagnosticsElement.replaceChildren();
@@ -875,10 +1292,25 @@ function selectLiveSource() {
   updateDiagnostics();
 }
 
-document.querySelector('#fit-button').addEventListener('click', applyFit);
-document.querySelector('#one-button').addEventListener('click', () => setZoom(1, '1:1'));
-document.querySelector('#two-button').addEventListener('click', () => setZoom(2, '200%'));
-document.querySelector('#four-button').addEventListener('click', () => setZoom(4, '400%'));
+view2dButton.addEventListener('click', () => setActiveView('2d'));
+view3dPlaneButton.addEventListener('click', () => setActiveView('3d-plane'));
+viewSite3dButton.addEventListener('click', () => setActiveView('site-3d'));
+siteWorldSelect.addEventListener('change', () => {
+  state.site.world = siteWorldSelect.value;
+  applySiteSurfaceSelection();
+});
+siteMappingSelect.addEventListener('change', () => {
+  state.site.mappingMode = siteMappingSelect.value;
+  applySiteSurfaceSelection();
+});
+siteSceneSelect.addEventListener('change', () => {
+  state.site.scene = siteSceneSelect.value;
+  applySiteSurfaceSelection();
+});
+fitButton.addEventListener('click', applyFit);
+oneButton.addEventListener('click', () => setZoom(1, '1:1'));
+twoButton.addEventListener('click', () => setZoom(2, '200%'));
+fourButton.addEventListener('click', () => setZoom(4, '400%'));
 document.querySelector('#reload-button').addEventListener('click', () => {
   if (state.asset?.kind === 'local') void loadAsset(state.asset.id);
   else {
@@ -896,6 +1328,7 @@ sourceSelect.addEventListener('change', () => {
 });
 
 canvas.addEventListener('wheel', (event) => {
+  if (isThreeDimensionalView()) return;
   event.preventDefault();
   const factor = Math.exp(-event.deltaY * 0.0015);
   setZoom(state.zoom * factor, 'wheel');
@@ -912,6 +1345,12 @@ function beginPan(event) {
 }
 
 canvas.addEventListener('pointerdown', (event) => {
+  if (isThreeDimensionalView()) {
+    if (event.button === 0 && state.interactionMode === 'point') {
+      state.pointer.down = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    }
+    return;
+  }
   if (event.button === 1) {
     beginPan(event);
     return;
@@ -926,6 +1365,7 @@ canvas.addEventListener('pointerdown', (event) => {
 });
 
 canvas.addEventListener('pointermove', (event) => {
+  if (isThreeDimensionalView()) return;
   if (!state.dragging || state.dragPointerId !== event.pointerId) return;
   const deltaX = event.clientX - state.pointerX;
   const deltaY = event.clientY - state.pointerY;
@@ -947,6 +1387,16 @@ function endDrag(event) {
 }
 
 canvas.addEventListener('pointerup', (event) => {
+  if (isThreeDimensionalView()) {
+    const down = state.pointer.down;
+    if (state.interactionMode !== 'point' || !down || down.pointerId !== event.pointerId) return;
+    state.pointer.down = null;
+    const movement = Math.hypot(event.clientX - down.x, event.clientY - down.y);
+    if (movement > 4) return;
+    const surfaceHit = mapClientPointToSurfaceHit(event.clientX, event.clientY);
+    if (surfaceHit) requestPointerAt(surfaceHit.canonical, surfaceHit);
+    return;
+  }
   if (state.dragging && state.dragPointerId === event.pointerId) {
     endDrag(event);
     return;
@@ -958,8 +1408,8 @@ canvas.addEventListener('pointerup', (event) => {
     if (!down || down.pointerId !== event.pointerId) return;
     const movement = Math.hypot(event.clientX - down.x, event.clientY - down.y);
     if (movement > 4) return;
-    const canonical = mapClientPointToCanonical(event.clientX, event.clientY);
-    if (canonical) requestPointerAt(canonical);
+    const surfaceHit = mapClientPointToSurfaceHit(event.clientX, event.clientY);
+    if (surfaceHit) requestPointerAt(surfaceHit.canonical, surfaceHit);
     return;
   }
 });
@@ -973,6 +1423,7 @@ canvas.addEventListener('auxclick', (event) => {
 window.addEventListener('resize', resizeRenderer);
 
 window.runBlock2PointerSmokeRequest = () => {
+  setActiveView('2d');
   if (!setInteractionMode('point')) throw new Error('Synthetic pointer smoke requires an active Photoshop Live source.');
   const sourceX = Math.floor(state.asset.sourceWidth / 2);
   const sourceY = Math.floor(state.asset.sourceHeight / 2);
@@ -985,10 +1436,134 @@ window.runBlock2PointerSmokeRequest = () => {
   const bounds = canvas.getBoundingClientRect();
   const clientX = bounds.left + ((projected.x + 1) / 2) * bounds.width;
   const clientY = bounds.top + ((1 - projected.y) / 2) * bounds.height;
-  const canonical = mapClientPointToCanonical(clientX, clientY);
-  if (!canonical) throw new Error('Synthetic pointer point did not intersect the image plane.');
-  const command = requestPointerAt(canonical);
-  return { command, canonical };
+  const surfaceHit = mapClientPointToSurfaceHit(clientX, clientY);
+  if (!surfaceHit) throw new Error('Synthetic pointer point did not intersect the image plane.');
+  const command = requestPointerAt(surfaceHit.canonical, surfaceHit);
+  return { command, canonical: surfaceHit.canonical };
+};
+
+window.runBlock3PlanePointerSmokeRequest = () => {
+  setActiveView('3d-plane');
+  if (!setInteractionMode('point')) throw new Error('Synthetic 3D pointer smoke requires an active Photoshop Live source.');
+  const canonicalSeed = {
+    u: (1053.25 / state.asset.sourceWidth),
+    v: (739.25 / state.asset.sourceHeight)
+  };
+  const local = canonicalToSurfaceLocalPoint(canonicalSeed, state.plane3dWidth, state.plane3dHeight);
+  const projected = state.plane3d.localToWorld(new THREE.Vector3(local.x, local.y, 0)).project(camera3d);
+  const bounds = canvas.getBoundingClientRect();
+  const clientX = bounds.left + ((projected.x + 1) / 2) * bounds.width;
+  const clientY = bounds.top + ((1 - projected.y) / 2) * bounds.height;
+  const surfaceHit = mapClientPointToSurfaceHit(clientX, clientY);
+  if (!surfaceHit) throw new Error('Synthetic 3D pointer point did not intersect the plane.');
+  const command = requestPointerAt(surfaceHit.canonical, surfaceHit);
+  return { command, canonical: surfaceHit.canonical, surfaceHit };
+};
+
+window.runBlock3PlaneMarkerCameraSmoke = () => {
+  if (state.activeView !== '3d-plane' || !state.pointer.marker || !state.pointer.markerVisible) {
+    throw new Error('3D marker camera smoke requires a visible 3D marker.');
+  }
+  const before = {
+    left: pointerMarker.style.left,
+    top: pointerMarker.style.top,
+    meshUuid: state.pointer.marker.meshUuid,
+    canonical: state.pointer.marker.canonical
+  };
+  camera3d.position.set(-0.8, 0.35, 2.5);
+  controls3d.target.set(0, 0, 0);
+  controls3d.update();
+  render();
+  updateDiagnostics();
+  const after = {
+    left: pointerMarker.style.left,
+    top: pointerMarker.style.top,
+    visible: state.pointer.markerVisible,
+    meshUuid: state.pointer.marker.meshUuid,
+    canonical: state.pointer.marker.canonical
+  };
+  return {
+    before,
+    after,
+    screenPositionChanged: before.left !== after.left || before.top !== after.top,
+    canonicalPreserved: before.canonical.x === after.canonical.x && before.canonical.y === after.canonical.y
+  };
+};
+
+window.runBlock3SitePointerSmokeRequest = () => {
+  state.site.world = 'world3d';
+  state.site.mappingMode = 'normal';
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  applySiteSurfaceSelection();
+  setActiveView('site-3d');
+  if (!setInteractionMode('point')) throw new Error('Synthetic site pointer smoke requires an active Photoshop Live source.');
+  const bounds = canvas.getBoundingClientRect();
+  let surfaceHit = null;
+  for (const yFraction of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+    for (const xFraction of [0.5, 0.35, 0.65, 0.2, 0.8]) {
+      surfaceHit = mapClientPointToSurfaceHit(
+        bounds.left + bounds.width * xFraction,
+        bounds.top + bounds.height * yFraction
+      );
+      if (surfaceHit) break;
+    }
+    if (surfaceHit) break;
+  }
+  if (!surfaceHit) throw new Error('Synthetic site pointer scan did not intersect a registered signage mesh.');
+  const command = requestPointerAt(surfaceHit.canonical, surfaceHit);
+  return { command, canonical: surfaceHit.canonical, surfaceHit };
+};
+
+window.runBlock3SiteMarkerCameraSmoke = () => {
+  if (state.activeView !== 'site-3d' || !state.pointer.marker || !state.pointer.markerVisible) {
+    throw new Error('Site marker camera smoke requires a visible site marker.');
+  }
+  const before = {
+    left: pointerMarker.style.left,
+    top: pointerMarker.style.top,
+    meshUuid: state.pointer.marker.meshUuid,
+    canonical: state.pointer.marker.canonical
+  };
+  cameraSite.position.add(new THREE.Vector3(0.4, 0.2, -0.35));
+  controlsSite.update();
+  render();
+  updateDiagnostics();
+  const after = {
+    left: pointerMarker.style.left,
+    top: pointerMarker.style.top,
+    visible: state.pointer.markerVisible,
+    meshUuid: state.pointer.marker.meshUuid,
+    canonical: state.pointer.marker.canonical
+  };
+  return {
+    before,
+    after,
+    screenPositionChanged: before.left !== after.left || before.top !== after.top,
+    canonicalPreserved: before.canonical.x === after.canonical.x && before.canonical.y === after.canonical.y,
+    meshPreserved: before.meshUuid === after.meshUuid
+  };
+};
+
+window.runBlock3MissingAnamorphicSmoke = () => {
+  setActiveView('site-3d');
+  state.site.world = 'world3d';
+  state.site.mappingMode = 'anamorphic';
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  applySiteSurfaceSelection();
+  const result = {
+    surfaceSetAvailable: state.site.surfaceSetAvailable,
+    activeSurfaceCount: state.site.activeBindings.length,
+    visibleSurfaceCount: state.site.meshes.filter((mesh) => mesh.visible).length,
+    missingMeshes: [...state.site.missingMeshes],
+    pointDisabled: pointButton.disabled,
+    controlsDisabled: !controlsSite.enabled
+  };
+  state.site.mappingMode = 'normal';
+  siteMappingSelect.value = state.site.mappingMode;
+  applySiteSurfaceSelection();
+  return result;
 };
 
 window.runBlock0SmokeActions = async () => {
@@ -1066,9 +1641,15 @@ async function start() {
     option.textContent = `${asset.label} — ${asset.sourceWidth} × ${asset.sourceHeight}`;
     sourceSelect.append(option);
   }
+  populateSiteSceneOptions();
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
   resizeRenderer();
   connectLiveLink();
-  await loadAsset(state.manifest.primaryAssetId);
+  await Promise.all([
+    loadSiteScene(),
+    loadAsset(state.manifest.primaryAssetId)
+  ]);
 }
 
 start().catch((error) => {

@@ -7,19 +7,42 @@
       content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file: ws://localhost:34100; object-src 'none'; base-uri 'none'; frame-src 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>LUUX Signage Previz — Block 2</title>
+    <title>LUUX Signage Previz — Block 3C</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <div>
-        <h1>LUUX SIGNAGE PREVIZ — BLOCK 2</h1>
-        <p>Full-resolution Photoshop live link · Canonical reverse point link</p>
+        <h1>LUUX SIGNAGE PREVIZ — BLOCK 3C</h1>
+        <p>Full-resolution Photoshop link · Plane and actual GLB signage surfaces</p>
       </div>
       <div id="full-resolution-badge" class="badge pending">WAITING</div>
     </header>
 
     <section class="controls" aria-label="Viewer controls">
+      <button id="view-2d-button" class="view-button active" type="button">2D VIEW</button>
+      <button id="view-3d-plane-button" class="view-button" type="button">3D PLANE</button>
+      <button id="view-site-3d-button" class="view-button" type="button">SITE 3D</button>
+      <span class="control-divider" aria-hidden="true"></span>
+      <label class="site-control" hidden>
+        World
+        <select id="site-world-select" aria-label="Site world">
+          <option value="world3d">3D WORLD</option>
+          <option value="legacy2d">LEGACY 2D WORLD</option>
+        </select>
+      </label>
+      <label class="site-control" hidden>
+        Mapping
+        <select id="site-mapping-select" aria-label="Site mapping mode">
+          <option value="normal">NORMAL</option>
+          <option value="anamorphic">ANAMORPHIC (NONE)</option>
+        </select>
+      </label>
+      <label class="site-control" hidden>
+        Scene
+        <select id="site-scene-select" aria-label="Legacy scene" disabled></select>
+      </label>
+      <span class="control-divider site-control" aria-hidden="true" hidden></span>
       <label>
         Source
         <select id="source-select" aria-label="Source image"></select>
@@ -45,7 +68,7 @@
           <span class="pointer-marker-ring"></span>
           <span class="pointer-marker-label">POINT</span>
         </div>
-        <div id="drag-hint">NAVIGATE: Wheel zoom · Drag pan</div>
+        <div id="drag-hint">2D NAVIGATE: Left/Middle drag: pan · Wheel: zoom</div>
       </section>
 
       <aside>

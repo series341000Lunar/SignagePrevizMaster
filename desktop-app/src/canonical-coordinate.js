@@ -10,39 +10,72 @@ function clamp(value, minimum, maximum) {
 }
 
 export function localPointToCanonical(localX, localY, width, height) {
-  if (![localX, localY, width, height].every(Number.isFinite)) {
-    throw new TypeError('Local coordinates and dimensions must be finite numbers.');
-  }
-  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
-    throw new RangeError('Canonical dimensions must be positive safe integers.');
-  }
+  return surfaceLocalPointToCanonical(localX, localY, width, height, width, height);
+}
 
-  const imageX = clamp(localX + width / 2, 0, width);
-  const imageY = clamp(height / 2 - localY, 0, height);
+export function normalizedPointToCanonical(uInput, vInput, pixelWidth, pixelHeight) {
+  if (![uInput, vInput, pixelWidth, pixelHeight].every(Number.isFinite)) {
+    throw new TypeError('Normalized coordinates and pixel dimensions must be finite numbers.');
+  }
+  if (!Number.isSafeInteger(pixelWidth) || !Number.isSafeInteger(pixelHeight) || pixelWidth <= 0 || pixelHeight <= 0) {
+    throw new RangeError('Canonical pixel dimensions must be positive safe integers.');
+  }
+  const u = clamp(uInput, 0, 1);
+  const v = clamp(vInput, 0, 1);
   return Object.freeze({
-    x: clamp(Math.floor(imageX), 0, width - 1),
-    y: clamp(Math.floor(imageY), 0, height - 1),
-    u: imageX / width,
-    v: imageY / height,
-    width,
-    height,
+    x: clamp(Math.floor(u * pixelWidth), 0, pixelWidth - 1),
+    y: clamp(Math.floor(v * pixelHeight), 0, pixelHeight - 1),
+    u,
+    v,
+    width: pixelWidth,
+    height: pixelHeight,
     origin: CANONICAL_COORDINATE_SYSTEM.origin
   });
 }
 
-export function canonicalToLocalPoint(canonical, width, height) {
-  if (!canonical || ![canonical.u, canonical.v, width, height].every(Number.isFinite)) {
-    throw new TypeError('Canonical coordinates and dimensions must be finite numbers.');
+export function surfaceLocalPointToCanonical(
+  localX,
+  localY,
+  surfaceWidth,
+  surfaceHeight,
+  pixelWidth,
+  pixelHeight
+) {
+  if (![localX, localY, surfaceWidth, surfaceHeight, pixelWidth, pixelHeight].every(Number.isFinite)) {
+    throw new TypeError('Surface coordinates and dimensions must be finite numbers.');
   }
-  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
-    throw new RangeError('Canonical dimensions must be positive safe integers.');
+  if (surfaceWidth <= 0 || surfaceHeight <= 0) {
+    throw new RangeError('Surface dimensions must be positive.');
+  }
+  if (!Number.isSafeInteger(pixelWidth) || !Number.isSafeInteger(pixelHeight) || pixelWidth <= 0 || pixelHeight <= 0) {
+    throw new RangeError('Canonical pixel dimensions must be positive safe integers.');
+  }
+
+  return normalizedPointToCanonical(
+    localX / surfaceWidth + 0.5,
+    0.5 - localY / surfaceHeight,
+    pixelWidth,
+    pixelHeight
+  );
+}
+
+export function canonicalToLocalPoint(canonical, width, height) {
+  return canonicalToSurfaceLocalPoint(canonical, width, height);
+}
+
+export function canonicalToSurfaceLocalPoint(canonical, surfaceWidth, surfaceHeight) {
+  if (!canonical || ![canonical.u, canonical.v, surfaceWidth, surfaceHeight].every(Number.isFinite)) {
+    throw new TypeError('Canonical coordinates and surface dimensions must be finite numbers.');
+  }
+  if (surfaceWidth <= 0 || surfaceHeight <= 0) {
+    throw new RangeError('Surface dimensions must be positive.');
   }
   if (canonical.u < 0 || canonical.u > 1 || canonical.v < 0 || canonical.v > 1) {
     throw new RangeError('Canonical normalized coordinates must be within 0..1.');
   }
 
   return Object.freeze({
-    x: canonical.u * width - width / 2,
-    y: height / 2 - canonical.v * height
+    x: (canonical.u - 0.5) * surfaceWidth,
+    y: (0.5 - canonical.v) * surfaceHeight
   });
 }

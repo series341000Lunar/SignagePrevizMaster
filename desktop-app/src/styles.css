@@ -72,6 +72,7 @@ header p {
 .controls {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 9px 12px;
   border-bottom: 1px solid #343a45;
@@ -113,7 +114,8 @@ button:disabled {
   background: #4b5565;
 }
 
-.mode-button.active {
+.mode-button.active,
+.view-button.active {
   border-color: #62daa1;
   color: #62daa1;
 }

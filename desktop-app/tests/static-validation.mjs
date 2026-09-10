@@ -12,6 +12,7 @@ const liveLinkConfig = JSON.parse(await readFile(path.join(appRoot, 'src', 'live
 const rendererSource = await readFile(path.join(appRoot, 'src', 'renderer.js'), 'utf8');
 const coordinateSource = await readFile(path.join(appRoot, 'src', 'canonical-coordinate.js'), 'utf8');
 const pointerQueueSource = await readFile(path.join(appRoot, 'src', 'pointer-command-queue.js'), 'utf8');
+const siteProfileSource = await readFile(path.join(appRoot, 'src', 'site-scene-profile.js'), 'utf8');
 const htmlSource = await readFile(path.join(appRoot, 'src', 'index.html'), 'utf8');
 const builtRenderer = await readFile(path.join(appRoot, 'build', 'renderer.js'), 'utf8');
 const manifest = JSON.parse(await readFile(path.join(appRoot, 'build', 'assets-manifest.json'), 'utf8'));
@@ -46,7 +47,7 @@ assert(!/unpkg\.com|cdn\.jsdelivr\.net/i.test(`${rendererSource}\n${htmlSource}\
 assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
 assert(!/_TestSource/i.test(`${mainSource}\n${rendererSource}\n${htmlSource}`), 'Runtime references _TestSource.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.2.0-block2', 'Package version must identify the Block 2 baseline.');
+assert(packageJson.version === '0.3.0-block3c', 'Package version must identify the Block 3C checkpoint.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
@@ -64,6 +65,7 @@ assert(/if\s*\(!replaceExistingRoles\)/.test(brokerSource), 'Production broker m
 assert(/maxPayload:\s*config\.chunkSizeBytes/.test(brokerSource), 'Broker maxPayload must be bounded by chunk configuration.');
 assert(/bufferedAmount\s*>\s*config\.backpressureHighWaterMarkBytes/.test(brokerSource), 'Broker must apply relay backpressure.');
 assert(/new THREE\.DataTexture/.test(rendererSource), 'Renderer must create a THREE.DataTexture for live frames.');
+assert((rendererSource.match(/new THREE\.DataTexture/g) || []).length === 1, '2D and 3D views must not create duplicate live DataTextures.');
 assert(/if\s*\(!replacingLiveTexture\)\s*applyFit\(\)/.test(rendererSource), 'Live texture replacement must preserve the current zoom, pan, and view mode.');
 assert(/THREE\.RGBFormat/.test(rendererSource) && /THREE\.RGBAFormat/.test(rendererSource), 'Renderer must preserve RGB and RGBA layouts.');
 assert(/texture\.internalFormat\s*=\s*sourceIsSrgb\s*\?\s*'SRGB8'\s*:\s*'RGB8'/.test(rendererSource), 'RGB DataTexture must use a WebGL2 sized internal format without RGB-to-RGBA expansion.');
@@ -72,11 +74,28 @@ assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an 
 assert(/new Uint8Array\(metadata\.totalBytes\)/.test(rendererSource), 'Renderer must preallocate the exact declared frame size.');
 assert(/uv\.setY\(index,\s*1\s*-\s*uv\.getY\(index\)\)/.test(rendererSource), 'Live orientation must be corrected without flipping the full pixel buffer.');
 assert(htmlSource.includes(`connect-src 'self' file: ${liveLinkConfig.endpoint}`), 'Renderer CSP must permit only the configured loopback WebSocket endpoint.');
-assert(/new THREE\.Raycaster/.test(rendererSource) && /intersectObject\(state\.mesh/.test(rendererSource), 'Pointer mapping must raycast the current image plane.');
+assert(/new THREE\.Raycaster/.test(rendererSource) && /intersectObject\(pointerMesh/.test(rendererSource), 'Pointer mapping must raycast only the active signage surface.');
 assert(/worldToLocal\(hit\.point\.clone\(\)\)/.test(rendererSource), 'Pointer mapping must use the mesh local intersection point.');
-assert(/localX \+ width \/ 2/.test(coordinateSource) && /height \/ 2 - localY/.test(coordinateSource), 'Canonical mapping must use top-left image coordinates from centered mesh-local coordinates.');
+assert(/localX \/ surfaceWidth \+ 0\.5/.test(coordinateSource) && /0\.5 - localY \/ surfaceHeight/.test(coordinateSource), 'Canonical mapping must use top-left normalized coordinates from centered surface-local coordinates.');
 assert(/origin:\s*'top-left'/.test(coordinateSource), 'Canonical Signage Coordinate origin must be top-left.');
 assert(/canonicalToLocalPoint/.test(rendererSource) && /id="pointer-marker"/.test(htmlSource), 'Previz must project a persistent marker from canonical source coordinates.');
+assert(/new THREE\.PerspectiveCamera/.test(rendererSource), 'Block 3A must use a PerspectiveCamera for the 3D plane view.');
+assert(/new OrbitControls\(camera3d, canvas\)/.test(rendererSource), 'Block 3A must use bundled OrbitControls.');
+assert(/controls\.mouseButtons\.LEFT = THREE\.MOUSE\.ROTATE/.test(rendererSource), '3D left drag must orbit.');
+assert(/controls\.mouseButtons\.MIDDLE = THREE\.MOUSE\.PAN/.test(rendererSource), '3D middle drag must pan.');
+assert(/surfaceLocalPointToCanonical/.test(rendererSource), '3D hit mapping must use the surface-to-canonical contract.');
+assert(/state\.mesh\?\.material\.map === state\.texture/.test(rendererSource) && /state\.plane3d\?\.material\.map === state\.texture/.test(rendererSource), '2D and 3D materials must share one texture object.');
+assert(/id="view-2d-button"/.test(htmlSource) && /id="view-3d-plane-button"/.test(htmlSource), 'Renderer must expose separate 2D VIEW and 3D PLANE controls.');
+assert(/movement > 4/.test(rendererSource) && /runBlock3PlanePointerSmokeRequest/.test(rendererSource), '3D POINT mode must preserve the click/drag threshold and smoke entrypoint.');
+assert(/runBlock3PlaneMarkerCameraSmoke/.test(rendererSource) && /screenPositionChanged/.test(rendererSource), '3D marker must be smoke-tested across camera movement.');
+assert(/new GLTFLoader/.test(rendererSource) && /Object\.entries\(SITE_SCENE_PROFILE\.assets\)/.test(rendererSource), 'SITE 3D must load both tracked GLBs through bundled GLTFLoader.');
+assert(/intersectObjects\(pointerMeshes, false\)/.test(rendererSource), 'SITE 3D must raycast only registered active signage surfaces.');
+assert(/normalizedPointToCanonical\(hit\.uv\.x, hit\.uv\.y/.test(rendererSource), 'GLB ordinary planar UV hits must map through the canonical adapter.');
+assert(/id="view-site-3d-button"/.test(htmlSource) && /id="site-mapping-select"/.test(htmlSource), 'Renderer must expose SITE 3D and NORMAL/ANAMORPHIC controls.');
+assert(/LUUX_Front_3Dworld_Anamorphic/.test(siteProfileSource) && /ILMIN_Back_3Dworld_Anamorphic/.test(siteProfileSource), 'SceneProfile must reserve the named 3D World anamorphic meshes.');
+assert(/LUUX_Front_3Dworld_Basic/.test(siteProfileSource) && /ILMIN_Back_3Dworld_Basic/.test(siteProfileSource), 'SceneProfile must select only the named 3D World basic-mapping meshes.');
+assert(/anamorphicScenes:\s*null/.test(siteProfileSource), 'Legacy anamorphic scene meshes must remain unguessed and unavailable.');
+assert(/runBlock3MissingAnamorphicSmoke/.test(rendererSource) && /visibleSurfaceCount/.test(rendererSource), 'Missing anamorphic surfaces must have an explicit safety smoke test.');
 assert(/marker\.documentId === live\.documentId/.test(rendererSource), 'Previz marker must be bound to the matching live Photoshop document.');
 assert(/pending/.test(rendererSource) && /acknowledged/.test(rendererSource) && /error/.test(rendererSource), 'Previz marker must expose pending, acknowledged, and error states.');
 assert(/event\.button === 1[\s\S]*beginPan\(event\)/.test(rendererSource), 'Middle-button drag must begin pan in both interaction modes.');
@@ -131,6 +150,11 @@ for (const asset of manifest.assets) {
   const file = path.join(appRoot, 'build', 'assets', asset.fileName);
   const details = await stat(file);
   assert(details.size === asset.bytes, `Built asset size mismatch: ${asset.fileName}`);
+}
+for (const siteAsset of Object.values(manifest.siteAssets)) {
+  const siteAssetFile = path.join(appRoot, 'build', 'assets', 'site', siteAsset.fileName);
+  const siteAssetDetails = await stat(siteAssetFile);
+  assert(siteAssetDetails.size === siteAsset.byteLength, `Built site GLB size mismatch: ${siteAsset.fileName}`);
 }
 
 const result = {

@@ -3,8 +3,10 @@ import { rm, mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
+import { SITE_ASSETS } from '../src/site-scene-profile.js';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const projectRoot = path.resolve(appRoot, '..');
 const sourceRoot = path.join(appRoot, 'src');
 const assetRoot = path.join(appRoot, 'assets');
 const buildRoot = path.join(appRoot, 'build');
@@ -53,6 +55,7 @@ function readDimensions(buffer, mime) {
 
 await rm(buildRoot, { recursive: true, force: true });
 await mkdir(path.join(buildRoot, 'assets'), { recursive: true });
+await mkdir(path.join(buildRoot, 'assets', 'site'), { recursive: true });
 await Promise.all([
   copyFile(path.join(sourceRoot, 'index.html'), path.join(buildRoot, 'index.html')),
   copyFile(path.join(sourceRoot, 'styles.css'), path.join(buildRoot, 'styles.css')),
@@ -94,7 +97,26 @@ for (const asset of assets) {
 const manifest = {
   generatedAt: new Date().toISOString(),
   primaryAssetId: 'original-png',
-  assets: manifestAssets
+  assets: manifestAssets,
+  siteAssets: SITE_ASSETS
 };
+
+const siteAssetSources = {
+  world3d: path.join(projectRoot, '3DAsset', 'Signage', SITE_ASSETS.world3d.fileName),
+  legacy2d: path.join(assetRoot, 'site', SITE_ASSETS.legacy2d.fileName)
+};
+for (const [assetId, siteAsset] of Object.entries(SITE_ASSETS)) {
+  const siteSourcePath = siteAssetSources[assetId];
+  const siteDestinationPath = path.join(buildRoot, 'assets', 'site', siteAsset.fileName);
+  const siteSourceBytes = await readFile(siteSourcePath);
+  if (siteSourceBytes.length !== siteAsset.byteLength || sha256(siteSourceBytes) !== siteAsset.sha256) {
+    throw new Error(`Site asset source contract mismatch: ${siteAsset.fileName}`);
+  }
+  await copyFile(siteSourcePath, siteDestinationPath);
+  const siteDestinationBytes = await readFile(siteDestinationPath);
+  if (sha256(siteDestinationBytes) !== siteAsset.sha256) {
+    throw new Error(`Site asset copy hash mismatch: ${siteAsset.fileName}`);
+  }
+}
 await writeFile(path.join(buildRoot, 'assets-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 console.log(JSON.stringify(manifest, null, 2));

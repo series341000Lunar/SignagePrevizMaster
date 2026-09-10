@@ -20,3 +20,18 @@ pointer queuing, Previz point feedback, and POINT-mode middle-button pan. Block
 [`docs/BLOCK-2-HANDOFF.md`](docs/BLOCK-2-HANDOFF.md) for the design-stage handoff
 and [`docs/BLOCK-2-POINTER-VALIDATION.md`](docs/BLOCK-2-POINTER-VALIDATION.md)
 for the evidence record.
+
+Block 3A adds a separate Perspective 3D plane prototype while preserving the
+2D viewer. Both views share one Full-Resolution texture, and the 3D surface
+implements the same canonical pointer contract. Its automated evidence and
+manual checkpoint are in
+[`docs/BLOCK-3A-PLANE-VALIDATION.md`](docs/BLOCK-3A-PLANE-VALIDATION.md).
+
+Block 3B extracts the actual legacy GLB, selector, camera, and planar-UV
+contracts without modifying the ignored reference implementation. Block 3C
+adds a `SITE 3D` checkpoint with separate 3D World and Legacy assets. `NORMAL`
+uses `LUUX_Front_3Dworld_Basic + ILMIN_Back_3Dworld_Basic` in 3D World; the
+future `ANAMORPHIC` mode safely reports `NONE` until its reserved meshes are
+supplied. See
+[`docs/BLOCK-3B-LEGACY-SCENE-CONTRACT.md`](docs/BLOCK-3B-LEGACY-SCENE-CONTRACT.md)
+and [`docs/BLOCK-3C-GLB-SURFACE-VALIDATION.md`](docs/BLOCK-3C-GLB-SURFACE-VALIDATION.md).
