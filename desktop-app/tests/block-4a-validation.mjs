@@ -205,7 +205,15 @@ for (const record of LOCATION_RECORDS) {
 assert.equal(SITE_CALIBRATION_PROFILE.coordinatePolicy.functionalSignageGlb, 'DIRECT_NO_CONVERSION');
 assert.equal(SITE_CALIBRATION_PROFILE.coordinatePolicy.environmentGlb, 'DIRECT_NO_CONVERSION');
 assert.equal(SITE_CALIBRATION_PROFILE.coordinatePolicy.legacyCamera, 'DIRECT_THREE_VALUES');
-assert.equal(SITE_CALIBRATION_PROFILE.coordinatePolicy.maxLikeCameraInputAdapter, 'UNRESOLVED');
+assert.deepEqual(SITE_CALIBRATION_PROFILE.coordinatePolicy.maxLikeCameraInputAdapter, {
+  status: 'CANDIDATE_USER_CALIBRATION_OPEN',
+  scope: 'CAMERA_INPUT_ONLY',
+  forward: 'Three=(Max.x,Max.z,-Max.y)',
+  inverse: 'Max=(Three.x,-Three.z,Three.y)',
+  fov: 'VERTICAL_DIRECT_OR_HORIZONTAL_TO_VERTICAL',
+  eulerImport: 'DEFERRED',
+  roll: 'DEFERRED'
+});
 assert(CAMERA_RECORDS.every((record) => record.role === 'PHOTO_REFERENCE_CAMERA'));
 
 const rendererSource = await readFile(rendererPath, 'utf8');
@@ -264,7 +272,7 @@ console.log(JSON.stringify({
   lockPolicy: LEGACY_CAMERA_LOCK_POLICY,
   lockedPointAvailable: true,
   locations: '4 independent records; placement fields UNRESOLVED for Block 4E',
-  maxLikeAdapter: 'UNRESOLVED for Block 4B',
+  maxLikeAdapter: 'CANDIDATE math implemented in Block 4B; USER CALIBRATION OPEN',
   block3Assets,
   userVisualValidation: 'REQUIRED / NOT AUTO-PASSED'
 }, null, 2));

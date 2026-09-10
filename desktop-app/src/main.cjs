@@ -59,12 +59,25 @@ async function waitForPointerDiagnostics(window, requestId) {
   throw new Error(`Timed out waiting for pointer diagnostics for request ${requestId}.`);
 }
 
+async function waitForSiteReady(window) {
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    const result = await window.webContents.executeJavaScript('window.block3SiteDiagnostics ?? null', true);
+    if (result?.status === 'READY') return result;
+    if (result?.status === 'ERROR') throw new Error(result.error || 'Site scene load failed.');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('Timed out waiting for Site scene readiness.');
+}
+
 async function runSmokeTest(window) {
   const reportPath = resolveArgumentPath(reportArgument, 'runtime.json');
   const screenshotPath = resolveArgumentPath(screenshotArgument, 'runtime.png');
   try {
     await waitForDiagnostics(window);
     const runtime = await window.webContents.executeJavaScript('window.runBlock0SmokeActions()', true);
+    await waitForSiteReady(window);
+    const cameraEditor = await window.webContents.executeJavaScript('window.runBlock4BCameraEditorSmoke()', true);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -78,6 +91,7 @@ async function runSmokeTest(window) {
       runtime.contextLossCount === 0 &&
       runtime.memoryStable &&
       allActionsPass &&
+      Object.values(cameraEditor).every(Boolean) &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -93,6 +107,7 @@ async function runSmokeTest(window) {
       liveLink: { config: liveLinkConfig, broker, events: liveLinkEvents },
       criticalErrors,
       runtime,
+      cameraEditor,
       screenshotPath
     };
     writeJson(reportPath, report);

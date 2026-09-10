@@ -11,6 +11,15 @@ import {
   surfaceLocalPointToCanonical
 } from './canonical-coordinate.js';
 import { LatestWinsPointerQueue } from './pointer-command-queue.js';
+import {
+  CAMERA_INPUT_MODES,
+  cloneCameraValues,
+  commitCameraRecordTransaction,
+  createMaxLikeCandidate,
+  createThreeDirectCandidate,
+  threePointToMaxLike
+} from './camera-input-adapter.js';
+import { createEditableCameraRecords } from './site-calibration-profile.js';
 import { SITE_SCENE_PROFILE, resolveSurfaceSet } from './site-scene-profile.js';
 
 const canvas = document.querySelector('#three-canvas');
@@ -35,6 +44,43 @@ const siteWorldSelect = document.querySelector('#site-world-select');
 const siteMappingSelect = document.querySelector('#site-mapping-select');
 const siteSceneSelect = document.querySelector('#site-scene-select');
 const legacyCameraLockButton = document.querySelector('#legacy-camera-lock-button');
+const cameraEditor = document.querySelector('#camera-editor');
+const cameraEditorTitle = document.querySelector('#camera-editor-title');
+const cameraEditorLockState = document.querySelector('#camera-editor-lock-state');
+const cameraInputMode = document.querySelector('#camera-input-mode');
+const cameraThreeFields = document.querySelector('#camera-three-fields');
+const cameraMaxFields = document.querySelector('#camera-max-fields');
+const cameraApplyButton = document.querySelector('#camera-apply-button');
+const cameraResetViewButton = document.querySelector('#camera-reset-view-button');
+const cameraResetLegacyButton = document.querySelector('#camera-reset-legacy-button');
+const cameraEditorStatus = document.querySelector('#camera-editor-status');
+const cameraThreeInputs = {
+  position: {
+    x: document.querySelector('#camera-three-position-x'),
+    y: document.querySelector('#camera-three-position-y'),
+    z: document.querySelector('#camera-three-position-z')
+  },
+  rotation: {
+    x: document.querySelector('#camera-three-rotation-x'),
+    y: document.querySelector('#camera-three-rotation-y'),
+    z: document.querySelector('#camera-three-rotation-z')
+  },
+  fov: document.querySelector('#camera-three-fov')
+};
+const cameraMaxInputs = {
+  position: {
+    x: document.querySelector('#camera-max-position-x'),
+    y: document.querySelector('#camera-max-position-y'),
+    z: document.querySelector('#camera-max-position-z')
+  },
+  target: {
+    x: document.querySelector('#camera-max-target-x'),
+    y: document.querySelector('#camera-max-target-y'),
+    z: document.querySelector('#camera-max-target-z')
+  },
+  fov: document.querySelector('#camera-max-fov'),
+  fovBasis: document.querySelector('#camera-max-fov-basis')
+};
 const fitButton = document.querySelector('#fit-button');
 const oneButton = document.querySelector('#one-button');
 const twoButton = document.querySelector('#two-button');
@@ -63,6 +109,8 @@ cameraSite.position.set(7, 6, 11);
 const raycaster = new THREE.Raycaster();
 const controls3d = new OrbitControls(camera3d, canvas);
 const controlsSite = new OrbitControls(cameraSite, canvas);
+const CAMERA_RUNTIME_POSITION_EPSILON = 1e-9;
+const CAMERA_RUNTIME_ROTATION_EPSILON = 1e-7;
 
 function configure3dControls(controls, minDistance, maxDistance) {
   controls.enabled = false;
@@ -141,7 +189,17 @@ const state = {
     mappingMode: 'normal',
     scene: 'front',
     legacyCameraLocked: true,
-    surfaceSetAvailable: false
+    surfaceSetAvailable: false,
+    cameraRecords: createEditableCameraRecords().map((record) => ({
+      ...record,
+      runtimeTarget: null,
+      lastInput: { mode: CAMERA_INPUT_MODES.THREE_DIRECT }
+    })),
+    cameraEditor: {
+      inputMode: CAMERA_INPUT_MODES.THREE_DIRECT,
+      lastAction: 'Legacy baseline loaded.',
+      error: ''
+    }
   }
 };
 
@@ -198,7 +256,10 @@ function resizeRenderer() {
   camera.updateProjectionMatrix();
   camera3d.aspect = width / height;
   camera3d.updateProjectionMatrix();
-  cameraSite.aspect = width / height;
+  const legacyRecord = currentLegacyCameraRecord();
+  cameraSite.aspect = isLegacyCameraContext() && legacyRecord
+    ? legacyRecord.currentValues.aspect
+    : width / height;
   cameraSite.updateProjectionMatrix();
   if (state.activeView === '2d' && state.viewMode === 'fit' && state.asset) applyFit();
   else render();
@@ -323,16 +384,281 @@ function fitSiteCameraToActiveSurfaces() {
   controlsSite.update();
 }
 
-function applyLegacySiteCamera(cameraContract) {
-  cameraSite.fov = cameraContract.fov;
-  cameraSite.near = cameraContract.near;
-  cameraSite.far = cameraContract.far;
-  cameraSite.position.fromArray(cameraContract.position);
-  cameraSite.rotation.order = 'XYZ';
-  cameraSite.rotation.set(...cameraContract.eulerXyzDegrees.map(THREE.MathUtils.degToRad));
+function currentLegacyCameraRecord() {
+  if (state.site.world !== 'legacy2d' || state.site.mappingMode !== 'normal') return null;
+  const sceneContract = SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes
+    .find((candidate) => candidate.id === state.site.scene);
+  if (!sceneContract) return null;
+  const sceneId = sceneContract.label.toUpperCase();
+  return state.site.cameraRecords.find((record) => record.sceneId === sceneId) || null;
+}
+
+function deriveTargetFromCameraValues(values, distance = 10) {
+  const orientation = values.orientation;
+  const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+    THREE.MathUtils.degToRad(orientation.x),
+    THREE.MathUtils.degToRad(orientation.y),
+    THREE.MathUtils.degToRad(orientation.z),
+    'XYZ'
+  ));
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion);
+  return new THREE.Vector3(values.position.x, values.position.y, values.position.z).addScaledVector(forward, distance);
+}
+
+function snapshotSiteCameraRuntime() {
+  return {
+    fov: cameraSite.fov,
+    aspect: cameraSite.aspect,
+    near: cameraSite.near,
+    far: cameraSite.far,
+    zoom: cameraSite.zoom,
+    position: cameraSite.position.clone(),
+    quaternion: cameraSite.quaternion.clone(),
+    rotationOrder: cameraSite.rotation.order,
+    target: controlsSite.target.clone()
+  };
+}
+
+function restoreSiteCameraRuntime(snapshot) {
+  cameraSite.fov = snapshot.fov;
+  cameraSite.aspect = snapshot.aspect;
+  cameraSite.near = snapshot.near;
+  cameraSite.far = snapshot.far;
+  cameraSite.zoom = snapshot.zoom;
+  cameraSite.position.copy(snapshot.position);
+  cameraSite.rotation.order = snapshot.rotationOrder;
+  cameraSite.quaternion.copy(snapshot.quaternion);
+  controlsSite.target.copy(snapshot.target);
   cameraSite.updateProjectionMatrix();
-  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraSite.quaternion);
-  controlsSite.target.copy(cameraSite.position).addScaledVector(forward, 10);
+  cameraSite.updateMatrixWorld(true);
+}
+
+function applyCameraValuesToRuntime(values, runtimeTarget = null) {
+  cameraSite.fov = values.fov;
+  cameraSite.aspect = values.aspect;
+  cameraSite.near = values.near;
+  cameraSite.far = values.far;
+  cameraSite.zoom = 1;
+  if (cameraSite.view?.enabled) cameraSite.clearViewOffset();
+  cameraSite.position.set(values.position.x, values.position.y, values.position.z);
+  cameraSite.rotation.order = 'XYZ';
+  cameraSite.rotation.set(
+    THREE.MathUtils.degToRad(values.orientation.x),
+    THREE.MathUtils.degToRad(values.orientation.y),
+    THREE.MathUtils.degToRad(values.orientation.z)
+  );
+  controlsSite.target.copy(runtimeTarget
+    ? new THREE.Vector3(runtimeTarget.x, runtimeTarget.y, runtimeTarget.z)
+    : deriveTargetFromCameraValues(values));
+  cameraSite.updateProjectionMatrix();
+  cameraSite.updateMatrixWorld(true);
+}
+
+function verifyCameraRuntime(values, runtimeTarget = null) {
+  const expectedPosition = new THREE.Vector3(values.position.x, values.position.y, values.position.z);
+  const expectedQuaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+    THREE.MathUtils.degToRad(values.orientation.x),
+    THREE.MathUtils.degToRad(values.orientation.y),
+    THREE.MathUtils.degToRad(values.orientation.z),
+    'XYZ'
+  ));
+  if (cameraSite.position.distanceTo(expectedPosition) > CAMERA_RUNTIME_POSITION_EPSILON ||
+      cameraSite.quaternion.angleTo(expectedQuaternion) > CAMERA_RUNTIME_ROTATION_EPSILON ||
+      Math.abs(cameraSite.fov - values.fov) > CAMERA_RUNTIME_POSITION_EPSILON ||
+      Math.abs(cameraSite.aspect - values.aspect) > CAMERA_RUNTIME_POSITION_EPSILON) {
+    throw new Error('Runtime Camera did not accept the complete candidate state.');
+  }
+  if (runtimeTarget) {
+    const expectedTarget = new THREE.Vector3(runtimeTarget.x, runtimeTarget.y, runtimeTarget.z);
+    if (controlsSite.target.distanceTo(expectedTarget) > 1e-9) {
+      throw new Error('Orbit target did not accept the Max-like target.');
+    }
+  }
+}
+
+function applyCurrentCameraRecordToRuntime(record = currentLegacyCameraRecord()) {
+  if (!record) return false;
+  applyCameraValuesToRuntime(record.currentValues, record.runtimeTarget);
+  verifyCameraRuntime(record.currentValues, record.runtimeTarget);
+  return true;
+}
+
+function setInputPoint(inputs, value) {
+  inputs.x.value = String(value.x);
+  inputs.y.value = String(value.y);
+  inputs.z.value = String(value.z);
+}
+
+function readInputPoint(inputs) {
+  return { x: inputs.x.value, y: inputs.y.value, z: inputs.z.value };
+}
+
+function setCameraEditorMessage(message, type = '') {
+  state.site.cameraEditor.lastAction = message;
+  state.site.cameraEditor.error = type === 'fail' ? message : '';
+  cameraEditorStatus.textContent = message;
+  cameraEditorStatus.className = `camera-editor-status${type ? ` ${type}` : ''}`;
+}
+
+function populateCameraEditorFromRecord() {
+  const record = currentLegacyCameraRecord();
+  if (!record) return;
+  const values = record.currentValues;
+  cameraEditorTitle.textContent = `CAMERA — ${record.label.toUpperCase()}`;
+  setInputPoint(cameraThreeInputs.position, values.position);
+  setInputPoint(cameraThreeInputs.rotation, values.orientation);
+  cameraThreeInputs.fov.value = String(values.fov);
+
+  if (record.lastInput?.mode === CAMERA_INPUT_MODES.MAX_LIKE) {
+    setInputPoint(cameraMaxInputs.position, record.lastInput.position);
+    setInputPoint(cameraMaxInputs.target, record.lastInput.target);
+    cameraMaxInputs.fov.value = String(record.lastInput.fov);
+    cameraMaxInputs.fovBasis.value = record.lastInput.fovBasis;
+  } else {
+    const maxPosition = threePointToMaxLike(values.position);
+    const runtimeTarget = record.runtimeTarget || deriveTargetFromCameraValues(values);
+    const maxTarget = threePointToMaxLike(runtimeTarget);
+    setInputPoint(cameraMaxInputs.position, maxPosition);
+    setInputPoint(cameraMaxInputs.target, maxTarget);
+    cameraMaxInputs.fov.value = String(values.fov);
+    cameraMaxInputs.fovBasis.value = 'VERTICAL';
+  }
+  cameraInputMode.value = state.site.cameraEditor.inputMode;
+  cameraThreeFields.hidden = state.site.cameraEditor.inputMode !== CAMERA_INPUT_MODES.THREE_DIRECT;
+  cameraMaxFields.hidden = state.site.cameraEditor.inputMode !== CAMERA_INPUT_MODES.MAX_LIKE;
+}
+
+function syncCameraEditorAvailability() {
+  const legacyContext = isLegacyCameraContext();
+  const available = legacyContext && state.site.surfaceSetAvailable && Boolean(currentLegacyCameraRecord());
+  const locked = state.site.legacyCameraLocked;
+  cameraEditor.hidden = !legacyContext;
+  cameraEditorLockState.textContent = locked ? 'LOCKED' : 'UNLOCKED';
+  cameraEditorLockState.className = `camera-editor-lock-state ${locked ? 'locked' : 'unlocked'}`;
+  const numericInputs = [
+    ...Object.values(cameraThreeInputs.position),
+    ...Object.values(cameraThreeInputs.rotation),
+    cameraThreeInputs.fov,
+    ...Object.values(cameraMaxInputs.position),
+    ...Object.values(cameraMaxInputs.target),
+    cameraMaxInputs.fov
+  ];
+  for (const input of numericInputs) input.readOnly = locked || !available;
+  cameraApplyButton.disabled = locked || !available;
+  cameraResetLegacyButton.disabled = locked || !available;
+  cameraResetViewButton.disabled = !available;
+  cameraInputMode.disabled = !available;
+  cameraMaxInputs.fovBasis.disabled = locked || !available;
+}
+
+function applyCameraEditorTransaction() {
+  const record = currentLegacyCameraRecord();
+  if (!record || state.site.legacyCameraLocked || !state.site.surfaceSetAvailable) return false;
+  const runtimeSnapshot = snapshotSiteCameraRuntime();
+  const previousRuntimeTarget = record.runtimeTarget ? { ...record.runtimeTarget } : null;
+  const previousLastInput = cloneCameraValues(record.lastInput);
+  try {
+    let result;
+    if (state.site.cameraEditor.inputMode === CAMERA_INPUT_MODES.THREE_DIRECT) {
+      result = {
+        cameraValues: createThreeDirectCandidate(record.currentValues, {
+          position: readInputPoint(cameraThreeInputs.position),
+          eulerXyzDegrees: readInputPoint(cameraThreeInputs.rotation),
+          fov: cameraThreeInputs.fov.value
+        }),
+        runtimeTarget: null,
+        lastInput: { mode: CAMERA_INPUT_MODES.THREE_DIRECT }
+      };
+    } else {
+      result = createMaxLikeCandidate(record.currentValues, {
+        position: readInputPoint(cameraMaxInputs.position),
+        target: readInputPoint(cameraMaxInputs.target),
+        fov: cameraMaxInputs.fov.value,
+        fovBasis: cameraMaxInputs.fovBasis.value
+      });
+    }
+
+    commitCameraRecordTransaction({
+      record,
+      nextValues: result.cameraValues,
+      applyRuntime: (candidate) => {
+        applyCameraValuesToRuntime(candidate, result.runtimeTarget);
+        verifyCameraRuntime(candidate, result.runtimeTarget);
+      },
+      restoreRuntime: () => restoreSiteCameraRuntime(runtimeSnapshot)
+    });
+    record.runtimeTarget = result.runtimeTarget ? { ...result.runtimeTarget } : null;
+    record.lastInput = cloneCameraValues(result.lastInput);
+    populateCameraEditorFromRecord();
+    setCameraEditorMessage(
+      state.site.cameraEditor.inputMode === CAMERA_INPUT_MODES.MAX_LIKE
+        ? 'Applied Max-like candidate. USER CALIBRATION remains open.'
+        : 'Applied THREE DIRECT Camera values.',
+      'pass'
+    );
+    updateZoomReadout();
+    render();
+    updateDiagnostics();
+    return true;
+  } catch (error) {
+    record.runtimeTarget = previousRuntimeTarget;
+    record.lastInput = previousLastInput;
+    setCameraEditorMessage(error.message, 'fail');
+    render();
+    updateDiagnostics();
+    return false;
+  }
+}
+
+function resetCameraEditorView() {
+  const record = currentLegacyCameraRecord();
+  if (!record || !isLegacyCameraContext() || !state.site.surfaceSetAvailable) return false;
+  const snapshot = snapshotSiteCameraRuntime();
+  try {
+    applyCurrentCameraRecordToRuntime(record);
+    setCameraEditorMessage('Runtime view reset to currentValues.', 'pass');
+    updateZoomReadout();
+    render();
+    updateDiagnostics();
+    return true;
+  } catch (error) {
+    restoreSiteCameraRuntime(snapshot);
+    setCameraEditorMessage(error.message, 'fail');
+    return false;
+  }
+}
+
+function resetCameraEditorToLegacy() {
+  const record = currentLegacyCameraRecord();
+  if (!record || state.site.legacyCameraLocked || !state.site.surfaceSetAvailable) return false;
+  const runtimeSnapshot = snapshotSiteCameraRuntime();
+  const previousRuntimeTarget = record.runtimeTarget ? { ...record.runtimeTarget } : null;
+  const previousLastInput = cloneCameraValues(record.lastInput);
+  try {
+    commitCameraRecordTransaction({
+      record,
+      nextValues: record.legacyValues,
+      applyRuntime: (candidate) => {
+        applyCameraValuesToRuntime(candidate, null);
+        verifyCameraRuntime(candidate, null);
+      },
+      restoreRuntime: () => restoreSiteCameraRuntime(runtimeSnapshot)
+    });
+    record.runtimeTarget = null;
+    record.lastInput = { mode: CAMERA_INPUT_MODES.THREE_DIRECT };
+    state.site.cameraEditor.inputMode = CAMERA_INPUT_MODES.THREE_DIRECT;
+    populateCameraEditorFromRecord();
+    setCameraEditorMessage('currentValues and Runtime reset to immutable Legacy baseline.', 'pass');
+    updateZoomReadout();
+    render();
+    updateDiagnostics();
+    return true;
+  } catch (error) {
+    record.runtimeTarget = previousRuntimeTarget;
+    record.lastInput = previousLastInput;
+    setCameraEditorMessage(error.message, 'fail');
+    return false;
+  }
 }
 
 function isLegacyCameraContext() {
@@ -352,6 +678,7 @@ function syncSiteCameraControls() {
   controlsSite.enabled = state.activeView === 'site-3d' &&
     state.site.surfaceSetAvailable &&
     (!legacyContext || !state.site.legacyCameraLocked);
+  syncCameraEditorAvailability();
 }
 
 function lockLegacyCamera() {
@@ -385,9 +712,10 @@ function applySiteSurfaceSelection({ resetCamera = true } = {}) {
 
   if (state.pointer.marker?.view === 'site-3d') state.pointer.marker = null;
   if (resetCamera && state.site.surfaceSetAvailable) {
-    if (selection.camera) applyLegacySiteCamera(selection.camera);
+    if (selection.camera) applyCurrentCameraRecordToRuntime();
     else fitSiteCameraToActiveSurfaces();
   }
+  if (selection.camera) populateCameraEditorFromRecord();
   syncSiteCameraControls();
   siteSceneSelect.disabled = state.site.world !== 'legacy2d' || state.site.mappingMode !== 'normal';
   updateZoomReadout();
@@ -631,7 +959,11 @@ function setActiveView(view) {
   const enteringLegacy = view === 'site-3d' && state.activeView !== 'site-3d' &&
     state.site.world === 'legacy2d' && state.site.mappingMode === 'normal';
   state.activeView = view;
-  if (enteringLegacy) state.site.legacyCameraLocked = true;
+  if (enteringLegacy) {
+    state.site.legacyCameraLocked = true;
+    if (state.site.surfaceSetAvailable) applyCurrentCameraRecordToRuntime();
+    populateCameraEditorFromRecord();
+  }
   controls3d.enabled = view === '3d-plane';
   view2dButton.classList.toggle('active', view === '2d');
   view3dPlaneButton.classList.toggle('active', view === '3d-plane');
@@ -975,6 +1307,17 @@ function updateDiagnostics() {
       mappingMode: state.site.mappingMode,
       legacyScene: state.site.world === 'legacy2d' ? state.site.scene : null,
       legacyCameraLocked: isLegacyCameraContext() ? state.site.legacyCameraLocked : null,
+      cameraRecordId: currentLegacyCameraRecord()?.cameraId || null,
+      cameraInputMode: isLegacyCameraContext() ? state.site.cameraEditor.inputMode : null,
+      cameraCurrentValues: currentLegacyCameraRecord()
+        ? cloneCameraValues(currentLegacyCameraRecord().currentValues)
+        : null,
+      cameraLegacyValuesImmutable: currentLegacyCameraRecord()
+        ? Object.isFrozen(currentLegacyCameraRecord().legacyValues)
+        : null,
+      maxLikeCalibration: currentLegacyCameraRecord()?.lastInput?.mode === CAMERA_INPUT_MODES.MAX_LIKE
+        ? currentLegacyCameraRecord().lastInput.adapterStatus
+        : null,
       cameraControlsEnabled: controlsSite.enabled,
       surfaceSetAvailable: state.site.surfaceSetAvailable,
       missingMeshes: [...state.site.missingMeshes],
@@ -1105,6 +1448,9 @@ function updateDiagnostics() {
     ['Site World / Mapping', `${state.site.world.toUpperCase()} / ${state.site.mappingMode.toUpperCase()}`],
     ['Site Scene', state.site.world === 'legacy2d' ? state.site.scene : '—'],
     ['Legacy Camera', isLegacyCameraContext() ? (state.site.legacyCameraLocked ? 'LOCKED' : 'UNLOCKED') : '—'],
+    ['Camera Record', state.diagnostics.site3d.cameraRecordId || '—'],
+    ['Camera Input', state.diagnostics.site3d.cameraInputMode || '—'],
+    ['Max Calibration', state.diagnostics.site3d.maxLikeCalibration || '—'],
     ['Site Surface Set', state.site.surfaceSetAvailable ? 'READY' : 'NONE'],
     ['Site Active Surfaces', state.site.activeBindings.map((binding) => `${binding.contract.role}:${binding.mesh.name}`).join(' + ') || '—'],
     ['Site Missing Meshes', state.site.missingMeshes.join(', ') || '—'],
@@ -1355,6 +1701,19 @@ siteSceneSelect.addEventListener('change', () => {
   applySiteSurfaceSelection();
 });
 legacyCameraLockButton.addEventListener('click', toggleLegacyCameraLock);
+cameraInputMode.addEventListener('change', () => {
+  state.site.cameraEditor.inputMode = cameraInputMode.value;
+  populateCameraEditorFromRecord();
+  syncCameraEditorAvailability();
+  setCameraEditorMessage(
+    state.site.cameraEditor.inputMode === CAMERA_INPUT_MODES.MAX_LIKE
+      ? 'Max-like adapter is a candidate until user calibration.'
+      : 'THREE DIRECT uses the exact Runtime Camera contract.'
+  );
+});
+cameraApplyButton.addEventListener('click', applyCameraEditorTransaction);
+cameraResetViewButton.addEventListener('click', resetCameraEditorView);
+cameraResetLegacyButton.addEventListener('click', resetCameraEditorToLegacy);
 fitButton.addEventListener('click', applyFit);
 oneButton.addEventListener('click', () => setZoom(1, '1:1'));
 twoButton.addEventListener('click', () => setZoom(2, '200%'));
@@ -1612,6 +1971,58 @@ window.runBlock3MissingAnamorphicSmoke = () => {
   siteMappingSelect.value = state.site.mappingMode;
   applySiteSurfaceSelection();
   return result;
+};
+
+window.runBlock4BCameraEditorSmoke = () => {
+  setActiveView('site-3d');
+  state.site.world = 'legacy2d';
+  state.site.mappingMode = 'normal';
+  state.site.scene = 'front';
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  siteSceneSelect.value = state.site.scene;
+  state.site.legacyCameraLocked = true;
+  applySiteSurfaceSelection();
+  const record = currentLegacyCameraRecord();
+  const legacyX = record.legacyValues.position.x;
+  const baseline = cloneCameraValues(record.currentValues);
+
+  toggleLegacyCameraLock();
+  cameraInputMode.value = CAMERA_INPUT_MODES.THREE_DIRECT;
+  state.site.cameraEditor.inputMode = CAMERA_INPUT_MODES.THREE_DIRECT;
+  populateCameraEditorFromRecord();
+  cameraThreeInputs.position.x.value = String(baseline.position.x + 0.125);
+  cameraThreeInputs.rotation.x.value = '33.5';
+  const directApplied = applyCameraEditorTransaction();
+  const independentCurrent = record.currentValues.position.x === baseline.position.x + 0.125 &&
+    record.currentValues.orientation.x === 33.5 &&
+    record.legacyValues.position.x === legacyX;
+  const directRotationApplied = Math.abs(THREE.MathUtils.radToDeg(cameraSite.rotation.x) - 33.5) < 1e-9;
+
+  cameraSite.position.x += 2;
+  const resetViewApplied = resetCameraEditorView();
+  const resetViewExact = Math.abs(cameraSite.position.x - record.currentValues.position.x) < 1e-9;
+  const resetLegacyApplied = resetCameraEditorToLegacy();
+  const legacyExact = record.currentValues.position.x === legacyX && record.legacyValues.position.x === legacyX;
+
+  lockLegacyCamera();
+  cameraThreeInputs.position.x.value = String(legacyX + 5);
+  const lockedMutationRejected = !applyCameraEditorTransaction() && record.currentValues.position.x === legacyX;
+  populateCameraEditorFromRecord();
+  updateDiagnostics();
+  return {
+    directApplied,
+    directRotationApplied,
+    independentCurrent,
+    resetViewApplied,
+    resetViewExact,
+    resetLegacyApplied,
+    legacyExact,
+    lockedMutationRejected,
+    finalLocked: state.site.legacyCameraLocked,
+    threeFieldsVisible: getComputedStyle(cameraThreeFields).display !== 'none',
+    maxFieldsHidden: getComputedStyle(cameraMaxFields).display === 'none'
+  };
 };
 
 window.runBlock0SmokeActions = async () => {

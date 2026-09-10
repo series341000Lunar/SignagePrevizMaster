@@ -7,14 +7,14 @@
       content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file: ws://localhost:34100; object-src 'none'; base-uri 'none'; frame-src 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>LUUX Signage Previz — Block 3C</title>
+    <title>LUUX Signage Previz — Block 4B</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <div>
-        <h1>LUUX SIGNAGE PREVIZ — BLOCK 3C</h1>
-        <p>Full-resolution Photoshop link · Plane and actual GLB signage surfaces</p>
+        <h1>LUUX SIGNAGE PREVIZ — BLOCK 4B</h1>
+        <p>Full-resolution Photoshop link · Editable Legacy camera calibration</p>
       </div>
       <div id="full-resolution-badge" class="badge pending">WAITING</div>
     </header>
@@ -73,6 +73,79 @@
       </section>
 
       <aside>
+        <section id="camera-editor" class="camera-editor" aria-labelledby="camera-editor-title" hidden>
+          <div class="camera-editor-heading">
+            <h2 id="camera-editor-title">CAMERA — FRONT</h2>
+            <span id="camera-editor-lock-state" class="camera-editor-lock-state locked">LOCKED</span>
+          </div>
+          <label class="camera-editor-mode">
+            Input mode
+            <select id="camera-input-mode" aria-label="Camera input mode">
+              <option value="THREE_DIRECT">THREE DIRECT</option>
+              <option value="MAX_LIKE">3DS MAX-LIKE</option>
+            </select>
+          </label>
+
+          <div id="camera-three-fields" class="camera-mode-fields">
+            <div class="camera-field-group">
+              <span>POSITION — THREE WORLD</span>
+              <div class="camera-vector-fields">
+                <label>X <input id="camera-three-position-x" type="number" step="any"></label>
+                <label>Y <input id="camera-three-position-y" type="number" step="any"></label>
+                <label>Z <input id="camera-three-position-z" type="number" step="any"></label>
+              </div>
+            </div>
+            <div class="camera-field-group">
+              <span>ROTATION — EULER XYZ DEGREES</span>
+              <div class="camera-vector-fields">
+                <label>X <input id="camera-three-rotation-x" type="number" step="any"></label>
+                <label>Y <input id="camera-three-rotation-y" type="number" step="any"></label>
+                <label>Z <input id="camera-three-rotation-z" type="number" step="any"></label>
+              </div>
+            </div>
+            <label class="camera-scalar-field">FOV — VERTICAL THREE.JS
+              <input id="camera-three-fov" type="number" min="0" max="180" step="any">
+            </label>
+          </div>
+
+          <div id="camera-max-fields" class="camera-mode-fields" hidden>
+            <div class="camera-field-group">
+              <span>POSITION — 3DS MAX-LIKE</span>
+              <div class="camera-vector-fields">
+                <label>X <input id="camera-max-position-x" type="number" step="any"></label>
+                <label>Y <input id="camera-max-position-y" type="number" step="any"></label>
+                <label>Z <input id="camera-max-position-z" type="number" step="any"></label>
+              </div>
+            </div>
+            <div class="camera-field-group">
+              <span>TARGET — 3DS MAX-LIKE</span>
+              <div class="camera-vector-fields">
+                <label>X <input id="camera-max-target-x" type="number" step="any"></label>
+                <label>Y <input id="camera-max-target-y" type="number" step="any"></label>
+                <label>Z <input id="camera-max-target-z" type="number" step="any"></label>
+              </div>
+            </div>
+            <div class="camera-fov-fields">
+              <label>FOV
+                <input id="camera-max-fov" type="number" min="0" max="180" step="any">
+              </label>
+              <label>Basis
+                <select id="camera-max-fov-basis">
+                  <option value="VERTICAL">VERTICAL</option>
+                  <option value="HORIZONTAL">HORIZONTAL</option>
+                </select>
+              </label>
+            </div>
+            <p class="camera-calibration-warning">Candidate axis adapter · USER CALIBRATION OPEN</p>
+          </div>
+
+          <div class="camera-editor-actions">
+            <button id="camera-apply-button" type="button">APPLY</button>
+            <button id="camera-reset-view-button" type="button">RESET VIEW</button>
+            <button id="camera-reset-legacy-button" type="button">RESET TO LEGACY</button>
+          </div>
+          <p id="camera-editor-status" class="camera-editor-status" role="status">Legacy baseline loaded.</p>
+        </section>
         <h2>Runtime diagnostics</h2>
         <dl id="diagnostics"></dl>
         <div id="runtime-status" class="status">Loading source…</div>

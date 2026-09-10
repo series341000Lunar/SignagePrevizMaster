@@ -1,4 +1,4 @@
-# Desktop App — Block 4A Checkpoint
+# Desktop App — Block 4B Checkpoint
 
 Block 0 proves that a 4728 x 5760-class source can remain full resolution from
 disk decode through a Three.js GPU texture in both development and a Windows
@@ -42,6 +42,13 @@ four independent Legacy Photo Reference Cameras, the four byte-identical
 and the inherited camera lock policy. PhotoScene runtime, camera editing,
 Max-like conversion, Environment, and Location UI remain deferred.
 
+Block 4B adds a Camera Editor for the four Legacy scenes. `THREE DIRECT` edits
+the canonical Three.js world Position, Euler XYZ degrees, and vertical FOV.
+`3DS MAX-LIKE` accepts world Position, Target, and an explicit vertical or
+horizontal FOV basis, then applies the candidate basis adapter only at the
+Camera input boundary. Locked cameras remain read-only; Reset View is safe
+while locked, while Apply and Reset to Legacy require an explicit unlock.
+
 ## Commands
 
 ```powershell
@@ -50,6 +57,7 @@ npm run dev
 npm run test:static
 npm run test:protocol
 npm run test:block4a
+npm run test:block4b
 npm run test:runtime
 npm run test:link
 npm run dist

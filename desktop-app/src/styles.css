@@ -276,6 +276,143 @@ aside {
   background: #16191f;
 }
 
+.camera-editor {
+  margin: -4px -4px 20px;
+  padding: 12px;
+  border: 1px solid #3d4654;
+  border-radius: 5px;
+  background: #1c2027;
+}
+
+.camera-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.camera-editor-heading h2 {
+  margin: 0;
+}
+
+.camera-editor-lock-state {
+  padding: 3px 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.camera-editor-lock-state.locked {
+  color: #efc66b;
+}
+
+.camera-editor-lock-state.unlocked {
+  color: #62daa1;
+}
+
+.camera-editor label,
+.camera-field-group > span {
+  color: #aeb6c3;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+
+.camera-editor-mode,
+.camera-scalar-field {
+  display: grid;
+  gap: 5px;
+}
+
+.camera-editor-mode {
+  margin-bottom: 12px;
+}
+
+.camera-mode-fields {
+  display: grid;
+  gap: 11px;
+}
+
+.camera-mode-fields[hidden] {
+  display: none;
+}
+
+.camera-field-group {
+  display: grid;
+  gap: 5px;
+}
+
+.camera-vector-fields,
+.camera-fov-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.camera-fov-fields {
+  grid-template-columns: 1fr 1fr;
+}
+
+.camera-vector-fields label,
+.camera-fov-fields label {
+  display: grid;
+  gap: 3px;
+}
+
+.camera-editor input,
+.camera-editor select {
+  width: 100%;
+  min-width: 0;
+  min-height: 29px;
+  padding: 4px 6px;
+  font: 11px Consolas, monospace;
+}
+
+.camera-editor input[readonly] {
+  border-color: #353c47;
+  background: #181b20;
+  color: #8e98a7;
+}
+
+.camera-calibration-warning {
+  color: #efc66b;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.camera-editor-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.camera-editor-actions button:first-child {
+  grid-column: 1 / -1;
+  border-color: #62daa1;
+}
+
+.camera-editor-status {
+  margin-top: 10px;
+  padding: 7px;
+  border-left: 2px solid #657187;
+  background: #171a20;
+  color: #aeb6c3;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.camera-editor-status.pass {
+  border-color: #62daa1;
+  color: #b9f1d5;
+}
+
+.camera-editor-status.fail {
+  border-color: #ff7c88;
+  color: #ffb6bd;
+}
+
 aside h2 {
   margin-bottom: 12px;
   font-size: 14px;

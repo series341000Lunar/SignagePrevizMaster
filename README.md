@@ -41,3 +41,10 @@ app-owned calibration profile without adding Block 4B+ runtime features. It
 preserves unresolved Max-like, Photo runtime, and Location values explicitly.
 See [`docs/BLOCK-4A-VALIDATION.md`](docs/BLOCK-4A-VALIDATION.md) and
 [`docs/BLOCK-4A-HANDOFF.md`](docs/BLOCK-4A-HANDOFF.md).
+
+Block 4B exposes those four CameraRecords in a lock-gated Camera Editor. It
+supports exact `THREE DIRECT` Position/Euler/FOV editing, explicit Reset View
+and Reset to Legacy operations, and a candidate `3DS MAX-LIKE`
+Position/Target/FOV adapter. The Max-like axis calibration remains a user gate.
+See [`docs/BLOCK-4B-VALIDATION.md`](docs/BLOCK-4B-VALIDATION.md) and
+[`docs/BLOCK-4B-HANDOFF.md`](docs/BLOCK-4B-HANDOFF.md).

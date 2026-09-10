@@ -227,15 +227,24 @@ export const SITE_CALIBRATION_PROFILE = deepFreeze({
     functionalSignageGlb: 'DIRECT_NO_CONVERSION',
     environmentGlb: 'DIRECT_NO_CONVERSION',
     legacyCamera: 'DIRECT_THREE_VALUES',
-    maxLikeCameraInputAdapter: UNRESOLVED
+    maxLikeCameraInputAdapter: {
+      status: 'CANDIDATE_USER_CALIBRATION_OPEN',
+      scope: 'CAMERA_INPUT_ONLY',
+      forward: 'Three=(Max.x,Max.z,-Max.y)',
+      inverse: 'Max=(Three.x,-Three.z,Three.y)',
+      fov: 'VERTICAL_DIRECT_OR_HORIZONTAL_TO_VERTICAL',
+      eulerImport: 'DEFERRED',
+      roll: 'DEFERRED'
+    }
   },
   photoNativeFrame: PHOTO_NATIVE_FRAME,
   cameraRecords: CAMERA_RECORDS,
   photoSceneRecords: PHOTO_SCENE_RECORDS,
   locationRecords: LOCATION_RECORDS,
   unresolved: {
-    maxLikeBasis: 'BLOCK_4B',
-    maxLikeFovConversion: 'BLOCK_4B',
+    maxLikeCalibration: 'BLOCK_4B_USER_GATE',
+    maxLikeEulerImport: 'DEFERRED',
+    maxLikeRoll: 'DEFERRED',
     photoRuntimeUrl: 'BLOCK_4C',
     locationWorldPosition: 'BLOCK_4E',
     locationThumbnailAsset: 'BLOCK_4E',
