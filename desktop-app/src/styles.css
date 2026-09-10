@@ -120,6 +120,16 @@ button:disabled {
   color: #62daa1;
 }
 
+.camera-lock-button.locked {
+  border-color: #efc66b;
+  color: #efc66b;
+}
+
+.camera-lock-button.unlocked {
+  border-color: #62daa1;
+  color: #62daa1;
+}
+
 #zoom-readout {
   margin-left: auto;
   color: #bac3cf;

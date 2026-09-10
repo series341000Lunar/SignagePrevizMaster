@@ -34,6 +34,7 @@ const siteControls = [...document.querySelectorAll('.site-control')];
 const siteWorldSelect = document.querySelector('#site-world-select');
 const siteMappingSelect = document.querySelector('#site-mapping-select');
 const siteSceneSelect = document.querySelector('#site-scene-select');
+const legacyCameraLockButton = document.querySelector('#legacy-camera-lock-button');
 const fitButton = document.querySelector('#fit-button');
 const oneButton = document.querySelector('#one-button');
 const twoButton = document.querySelector('#two-button');
@@ -139,6 +140,7 @@ const state = {
     world: 'world3d',
     mappingMode: 'normal',
     scene: 'front',
+    legacyCameraLocked: true,
     surfaceSetAvailable: false
   }
 };
@@ -333,6 +335,38 @@ function applyLegacySiteCamera(cameraContract) {
   controlsSite.target.copy(cameraSite.position).addScaledVector(forward, 10);
 }
 
+function isLegacyCameraContext() {
+  return state.activeView === 'site-3d' &&
+    state.site.world === 'legacy2d' &&
+    state.site.mappingMode === 'normal';
+}
+
+function syncSiteCameraControls() {
+  const legacyContext = isLegacyCameraContext();
+  legacyCameraLockButton.hidden = !legacyContext;
+  legacyCameraLockButton.disabled = !legacyContext || !state.site.surfaceSetAvailable;
+  legacyCameraLockButton.textContent = state.site.legacyCameraLocked ? 'CAMERA LOCKED' : 'CAMERA UNLOCKED';
+  legacyCameraLockButton.setAttribute('aria-pressed', String(state.site.legacyCameraLocked));
+  legacyCameraLockButton.classList.toggle('locked', state.site.legacyCameraLocked);
+  legacyCameraLockButton.classList.toggle('unlocked', !state.site.legacyCameraLocked);
+  controlsSite.enabled = state.activeView === 'site-3d' &&
+    state.site.surfaceSetAvailable &&
+    (!legacyContext || !state.site.legacyCameraLocked);
+}
+
+function lockLegacyCamera() {
+  state.site.legacyCameraLocked = true;
+  syncSiteCameraControls();
+}
+
+function toggleLegacyCameraLock() {
+  if (!isLegacyCameraContext() || !state.site.surfaceSetAvailable) return;
+  state.site.legacyCameraLocked = !state.site.legacyCameraLocked;
+  syncSiteCameraControls();
+  updatePointerControls();
+  updateDiagnostics();
+}
+
 function applySiteSurfaceSelection({ resetCamera = true } = {}) {
   if (!state.site.roots.world3d || !state.site.roots.legacy2d) return;
   for (const mesh of state.site.meshes) mesh.visible = false;
@@ -354,7 +388,7 @@ function applySiteSurfaceSelection({ resetCamera = true } = {}) {
     if (selection.camera) applyLegacySiteCamera(selection.camera);
     else fitSiteCameraToActiveSurfaces();
   }
-  controlsSite.enabled = state.activeView === 'site-3d' && state.site.surfaceSetAvailable;
+  syncSiteCameraControls();
   siteSceneSelect.disabled = state.site.world !== 'legacy2d' || state.site.mappingMode !== 'normal';
   updateZoomReadout();
   render();
@@ -594,13 +628,16 @@ function isThreeDimensionalView() {
 
 function setActiveView(view) {
   if (!['2d', '3d-plane', 'site-3d'].includes(view)) throw new Error(`Unknown view: ${view}`);
+  const enteringLegacy = view === 'site-3d' && state.activeView !== 'site-3d' &&
+    state.site.world === 'legacy2d' && state.site.mappingMode === 'normal';
   state.activeView = view;
+  if (enteringLegacy) state.site.legacyCameraLocked = true;
   controls3d.enabled = view === '3d-plane';
-  controlsSite.enabled = view === 'site-3d' && state.site.surfaceSetAvailable;
   view2dButton.classList.toggle('active', view === '2d');
   view3dPlaneButton.classList.toggle('active', view === '3d-plane');
   viewSite3dButton.classList.toggle('active', view === 'site-3d');
   for (const control of siteControls) control.hidden = view !== 'site-3d';
+  syncSiteCameraControls();
   for (const button of [fitButton, oneButton, twoButton, fourButton]) button.disabled = view !== '2d';
   updateZoomReadout();
   render();
@@ -675,9 +712,13 @@ function updatePointerControls() {
   canvas.classList.toggle('point-mode', state.interactionMode === 'point');
   if (state.activeView === 'site-3d') {
     dragHint.textContent = state.site.surfaceSetAvailable
-      ? (state.interactionMode === 'point'
-        ? 'SITE POINT: Left click · Left drag: orbit · Middle drag: pan · Wheel: dolly'
-        : 'SITE NAVIGATE: Left drag: orbit · Middle drag: pan · Wheel: dolly')
+      ? (isLegacyCameraContext() && state.site.legacyCameraLocked
+        ? (state.interactionMode === 'point'
+          ? 'LEGACY POINT · CAMERA LOCKED: Left click points · Unlock camera to orbit/pan/dolly'
+          : 'LEGACY CAMERA LOCKED: Unlock camera to orbit/pan/dolly')
+        : (state.interactionMode === 'point'
+          ? 'SITE POINT: Left click · Left drag: orbit · Middle drag: pan · Wheel: dolly'
+          : 'SITE NAVIGATE: Left drag: orbit · Middle drag: pan · Wheel: dolly'))
       : `SITE SURFACE: NONE · Missing: ${state.site.missingMeshes.join(', ') || 'contract unavailable'}`;
   } else if (state.activeView === '3d-plane') {
     dragHint.textContent = state.interactionMode === 'point'
@@ -933,6 +974,8 @@ function updateDiagnostics() {
       world: state.site.world,
       mappingMode: state.site.mappingMode,
       legacyScene: state.site.world === 'legacy2d' ? state.site.scene : null,
+      legacyCameraLocked: isLegacyCameraContext() ? state.site.legacyCameraLocked : null,
+      cameraControlsEnabled: controlsSite.enabled,
       surfaceSetAvailable: state.site.surfaceSetAvailable,
       missingMeshes: [...state.site.missingMeshes],
       meshCount: state.site.meshes.length,
@@ -1061,6 +1104,7 @@ function updateDiagnostics() {
     ['Site Load', state.diagnostics.site3d.status],
     ['Site World / Mapping', `${state.site.world.toUpperCase()} / ${state.site.mappingMode.toUpperCase()}`],
     ['Site Scene', state.site.world === 'legacy2d' ? state.site.scene : '—'],
+    ['Legacy Camera', isLegacyCameraContext() ? (state.site.legacyCameraLocked ? 'LOCKED' : 'UNLOCKED') : '—'],
     ['Site Surface Set', state.site.surfaceSetAvailable ? 'READY' : 'NONE'],
     ['Site Active Surfaces', state.site.activeBindings.map((binding) => `${binding.contract.role}:${binding.mesh.name}`).join(' + ') || '—'],
     ['Site Missing Meshes', state.site.missingMeshes.join(', ') || '—'],
@@ -1297,16 +1341,20 @@ view3dPlaneButton.addEventListener('click', () => setActiveView('3d-plane'));
 viewSite3dButton.addEventListener('click', () => setActiveView('site-3d'));
 siteWorldSelect.addEventListener('change', () => {
   state.site.world = siteWorldSelect.value;
+  if (state.site.world === 'legacy2d') state.site.legacyCameraLocked = true;
   applySiteSurfaceSelection();
 });
 siteMappingSelect.addEventListener('change', () => {
   state.site.mappingMode = siteMappingSelect.value;
+  if (state.site.world === 'legacy2d') state.site.legacyCameraLocked = true;
   applySiteSurfaceSelection();
 });
 siteSceneSelect.addEventListener('change', () => {
   state.site.scene = siteSceneSelect.value;
+  lockLegacyCamera();
   applySiteSurfaceSelection();
 });
+legacyCameraLockButton.addEventListener('click', toggleLegacyCameraLock);
 fitButton.addEventListener('click', applyFit);
 oneButton.addEventListener('click', () => setZoom(1, '1:1'));
 twoButton.addEventListener('click', () => setZoom(2, '200%'));

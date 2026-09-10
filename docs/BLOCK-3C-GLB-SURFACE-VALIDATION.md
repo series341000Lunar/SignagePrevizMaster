@@ -49,6 +49,11 @@ Night:        LUUX_B_Night + ILMIN_B_Night
 Legacy ANAMORPHIC mesh 이름은 아직 정해지지 않았으므로 추측하지 않고 `NONE`으로
 보류한다.
 
+Legacy 2D World의 `Front`, `Front_Sweet`, `Back`, `Night` camera preset은 각 scene
+진입 시 기본 `CAMERA LOCKED`다. 전용 버튼을 `CAMERA UNLOCKED`로 바꾼 경우에만
+Orbit/Pan/Dolly가 활성화되며, scene 전환 또는 Legacy 재진입 시 다시 잠긴다.
+Camera lock 상태와 무관하게 POINT raycast는 사용할 수 있다.
+
 ## Missing surface safety
 
 ANAMORPHIC 또는 정의되지 않은 surface set을 선택하면:
@@ -129,3 +134,5 @@ BLOCK 3C USER:               PASS
 
 사용자는 최종 2-mesh `Previz_3Dworld_BasicMapping.glb`에서 3D World 표시와
 Photoshop → Previz 및 Previz → Photoshop 양방향 링크가 정상 작동함을 확인했다.
+추가로 Legacy 2D World 4종의 기본 camera lock, 버튼 해제 후 Orbit/Pan/Dolly,
+scene 전환 시 자동 재잠금, 잠금 상태의 POINT 동작도 USER PASS했다.

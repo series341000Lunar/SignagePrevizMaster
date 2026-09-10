@@ -2,6 +2,8 @@
 /luux-mockup/
 /_TestSource/
 /list.txt
+/Codex_Toggle_Git_Metadata.bat
+/Run_Previz_Dev.bat
 
 # Dependencies and generated output
 node_modules/
@@ -13,4 +15,3 @@ node_modules/
 # OS metadata
 .DS_Store
 Thumbs.db
-

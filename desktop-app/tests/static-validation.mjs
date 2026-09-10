@@ -92,6 +92,12 @@ assert(/new GLTFLoader/.test(rendererSource) && /Object\.entries\(SITE_SCENE_PRO
 assert(/intersectObjects\(pointerMeshes, false\)/.test(rendererSource), 'SITE 3D must raycast only registered active signage surfaces.');
 assert(/normalizedPointToCanonical\(hit\.uv\.x, hit\.uv\.y/.test(rendererSource), 'GLB ordinary planar UV hits must map through the canonical adapter.');
 assert(/id="view-site-3d-button"/.test(htmlSource) && /id="site-mapping-select"/.test(htmlSource), 'Renderer must expose SITE 3D and NORMAL/ANAMORPHIC controls.');
+assert(/id="legacy-camera-lock-button"[^>]*aria-pressed="true"[^>]*hidden/.test(htmlSource), 'Legacy camera lock control must exist and default to locked/hidden.');
+assert(/function isLegacyCameraContext\(\)/.test(rendererSource) && /state\.site\.world === 'legacy2d'/.test(rendererSource), 'Camera lock must be scoped to Legacy 2D World.');
+assert(/enteringLegacy[\s\S]*state\.site\.legacyCameraLocked = true/.test(rendererSource), 'Entering Legacy 2D World must restore the default camera lock.');
+assert(/siteSceneSelect\.addEventListener\('change',[\s\S]*lockLegacyCamera\(\)/.test(rendererSource), 'Every Legacy scene change must restore the camera lock.');
+assert(/!legacyContext \|\| !state\.site\.legacyCameraLocked/.test(rendererSource), 'Legacy OrbitControls must only enable after explicit unlock.');
+assert(/toggleLegacyCameraLock/.test(rendererSource) && /cameraControlsEnabled: controlsSite\.enabled/.test(rendererSource), 'Legacy camera lock must be user-toggleable and observable in diagnostics.');
 assert(/LUUX_Front_3Dworld_Anamorphic/.test(siteProfileSource) && /ILMIN_Back_3Dworld_Anamorphic/.test(siteProfileSource), 'SceneProfile must reserve the named 3D World anamorphic meshes.');
 assert(/LUUX_Front_3Dworld_Basic/.test(siteProfileSource) && /ILMIN_Back_3Dworld_Basic/.test(siteProfileSource), 'SceneProfile must select only the named 3D World basic-mapping meshes.');
 assert(/anamorphicScenes:\s*null/.test(siteProfileSource), 'Legacy anamorphic scene meshes must remain unguessed and unavailable.');

@@ -31,6 +31,11 @@ are visible and raycastable in NORMAL mode. When a selected surface set does not
 exist, all site meshes remain hidden and Orbit/POINT/raycast are disabled
 instead of producing a partial or stale hit.
 
+Legacy 2D World opens each of `Front`, `Front_Sweet`, `Back`, and `Night` with
+its camera locked. `CAMERA LOCKED` can be toggled to `CAMERA UNLOCKED` to enable
+Orbit/Pan/Dolly. Entering Legacy 2D World or changing its scene restores the
+lock; POINT remains available while the camera is locked.
+
 ## Commands
 
 ```powershell
