@@ -9,7 +9,7 @@
 Repository:                  C:\_InternalProjects\SignagePrevizMaster
 Branch:                      main
 Block 4A implementation:     b124d7e4a3a459f0e2442d2e753ee0e7591009cc
-Block 4B implementation:     working tree; commit pending user validation
+Block 4B implementation:     4a0cf4377bf658795bd83cc6ced2a3c47d77e39f
 Block 0–3:                   CLOSED
 Block 4A automated result:   PASS
 Block 4A camera visual gate: carried into Block 4B
