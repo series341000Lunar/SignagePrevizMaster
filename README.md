@@ -71,3 +71,31 @@ navigation, and exact return to the pre-entry Site camera/orbit/environment
 state. The four Location coordinates, thumbnail offsets, one-third card scale,
 and semi-transparent presentation were user-validated on 2026-09-11. See
 [`docs/BLOCK-4E-VALIDATION-HANDOFF.md`](docs/BLOCK-4E-VALIDATION-HANDOFF.md).
+
+Block 4F makes `SITE 3D` the application startup view while preserving direct
+access to the full-resolution `2D VIEW`. Development and Portable regression
+now exercise SITE 3D startup, SITE 3D → 2D VIEW → SITE 3D switching, the full
+Block 0–4E runtime, and the synthetic Photoshop Live/POINT path in the same
+release candidate. Automated closeout and final user validation have passed.
+The user completed the startup, 2D/SITE switching, Photoshop, POINT, and
+Location return checkpoints on 2026-09-11, closing the Basic Core. See
+[`docs/BLOCK-4F-VALIDATION.md`](docs/BLOCK-4F-VALIDATION.md) and
+[`docs/BLOCK-4F-HANDOFF.md`](docs/BLOCK-4F-HANDOFF.md).
+
+Block 5A adds the first independent Anamorphic family,
+ANAMORPHIC_FRONT_75F, from the pinned
+Previz_3DWorld_Anamorphic_Front75F_v01.glb revision. 3D WORLD /
+ANAMORPHIC / FRONT 75F now selects only ANAM_SURFACE_FRONT75F and applies the
+helper-derived calibration camera with the confirmed vertical FOV 19.778°.
+FOV V supports session adjustment. Starting Orbit resets to the ordinary
+FOV 45°/world-up surface-fit camera and releases the 3000×3840 canvas aspect
+restriction; RETURN TO 75F CALIBRATION restores the calibrated camera and
+working canvas. In calibration mode only, a `#20242c` exterior matte darkens
+the area outside that working canvas; FREE_PREVIEW continues to use the full
+viewer without the matte. Camera helpers remain hidden and never receive the
+Photoshop texture or POINT ownership. 75F POINT remains deliberately deferred
+until its canonical inverse mapping is proven. BACK, ILMIN, and FRONT 90F
+remain NOT AVAILABLE. The user validated corrected framing, roll, calibration
+reset, unrestricted FREE_PREVIEW, and matte presentation on 2026-09-11. See
+[Block 5A Validation](docs/BLOCK-5A-VALIDATION.md) and
+[Block 5A Handoff](docs/BLOCK-5A-HANDOFF.md).

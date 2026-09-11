@@ -35,6 +35,7 @@ import {
 } from './photo-scene-runtime.js';
 import { SITE_SCENE_PROFILE, resolveSurfaceSet } from './site-scene-profile.js';
 import { SITE_ENVIRONMENT_PROFILE } from './site-environment-profile.js';
+import { ANAMORPHIC_FRONT_75F_PROFILE, ANAMORPHIC_FAMILY_AVAILABILITY } from './anamorphic-calibration-profile.js';
 
 const canvas = document.querySelector('#three-canvas');
 const viewer = document.querySelector('#viewer');
@@ -56,6 +57,8 @@ const viewSite3dButton = document.querySelector('#view-site-3d-button');
 const siteControls = [...document.querySelectorAll('.site-control')];
 const siteWorldSelect = document.querySelector('#site-world-select');
 const siteMappingSelect = document.querySelector('#site-mapping-select');
+const siteAnamorphicFamilyControl = document.querySelector('#site-anamorphic-family-control');
+const siteAnamorphicFamilySelect = document.querySelector('#site-anamorphic-family-select');
 const siteSceneSelect = document.querySelector('#site-scene-select');
 const environmentPresentationControl = document.querySelector('#environment-presentation-control');
 const environmentPresentationSelect = document.querySelector('#environment-presentation-select');
@@ -63,6 +66,9 @@ const locationsToggleButton = document.querySelector('#locations-toggle-button')
 const returnToSiteButton = document.querySelector('#return-to-site-button');
 const locationOverlay = document.querySelector('#location-overlay');
 const legacyCameraLockButton = document.querySelector('#legacy-camera-lock-button');
+const anamorphicCameraResetButton = document.querySelector('#anamorphic-camera-reset-button');
+const anamorphicFovControl = document.querySelector('#anamorphic-fov-control');
+const anamorphicFovInput = document.querySelector('#anamorphic-fov-input');
 const cameraEditor = document.querySelector('#camera-editor');
 const cameraEditorTitle = document.querySelector('#camera-editor-title');
 const cameraEditorLockState = document.querySelector('#camera-editor-lock-state');
@@ -104,6 +110,7 @@ const fitButton = document.querySelector('#fit-button');
 const oneButton = document.querySelector('#one-button');
 const twoButton = document.querySelector('#two-button');
 const fourButton = document.querySelector('#four-button');
+const DEFAULT_ACTIVE_VIEW = 'site-3d';
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -143,6 +150,8 @@ const controls3d = new OrbitControls(camera3d, canvas);
 const controlsSite = new OrbitControls(cameraSite, canvas);
 const CAMERA_RUNTIME_POSITION_EPSILON = 1e-9;
 const CAMERA_RUNTIME_ROTATION_EPSILON = 1e-7;
+const ANAMORPHIC_CALIBRATION_MATTE_COLOR = 0x20242c;
+const ANAMORPHIC_CALIBRATION_MATTE_HEX = '#20242c';
 
 function configure3dControls(controls, minDistance, maxDistance) {
   controls.enabled = false;
@@ -171,7 +180,7 @@ const state = {
   plane3dWidth: 1,
   plane3dHeight: 1,
   texture: null,
-  activeView: '2d',
+  activeView: DEFAULT_ACTIVE_VIEW,
   zoom: 1,
   viewMode: 'fit',
   filterMode: 'normal',
@@ -247,14 +256,16 @@ const state = {
   site: {
     status: 'LOADING',
     error: '',
-    roots: { world3d: null, legacy2d: null },
-    meshesByWorld: { world3d: [], legacy2d: [] },
+    roots: {},
+    meshesByWorld: {},
     meshes: [],
     bindings: [],
     activeBindings: [],
     missingMeshes: [],
     world: 'world3d',
     mappingMode: 'normal',
+    anamorphicFamily: 'front75f',
+    anamorphicCameraMode: 'CALIBRATION',
     scene: 'front',
     legacyCameraLocked: true,
     surfaceSetAvailable: false,
@@ -623,6 +634,7 @@ async function returnToSite() {
 function wire3dControlEvents(controls, view) {
   controls.addEventListener('start', () => {
     if (state.activeView === view) canvas.classList.add('dragging');
+    if (view === 'site-3d' && isAnamorphicCalibrationContext()) markAnamorphicFreePreview();
   });
   controls.addEventListener('change', () => {
     if (state.activeView !== view) return;
@@ -673,9 +685,9 @@ function resizeRenderer() {
   camera3d.aspect = width / height;
   camera3d.updateProjectionMatrix();
   const legacyRecord = currentLegacyCameraRecord();
-  cameraSite.aspect = isLegacyCameraContext() && legacyRecord
-    ? legacyRecord.currentValues.aspect
-    : width / height;
+  cameraSite.aspect = isAnamorphicCalibrationFramingActive()
+    ? currentAnamorphicFamily().workingResolution.aspect
+    : (isLegacyCameraContext() && legacyRecord ? legacyRecord.currentValues.aspect : width / height);
   cameraSite.updateProjectionMatrix();
   if (state.activeView === '2d' && state.viewMode === 'fit' && state.asset) applyFit();
   else render();
@@ -762,6 +774,7 @@ function installTexture(texture, width, height, flipVerticalUv) {
   state.plane3dHeight = planeHeight;
   if (state.pointer.marker?.view === '3d-plane') state.pointer.marker.meshUuid = plane3d.uuid;
   for (const binding of state.site.bindings) {
+    if (!binding.textureEligible) continue;
     binding.mesh.material.map = texture;
     binding.mesh.material.needsUpdate = true;
   }
@@ -770,23 +783,116 @@ function installTexture(texture, width, height, flipVerticalUv) {
 function selectedSiteContract() {
   const world = SITE_SCENE_PROFILE.worlds[state.site.world];
   if (state.site.mappingMode === 'anamorphic') {
+    const family = currentAnamorphicFamily();
     return {
-      contracts: state.site.world === 'world3d' ? world.anamorphicSurfaces : null,
-      camera: null,
+      contracts: state.site.world === 'world3d' && family?.available ? family.surfaces : null,
+      camera: family?.cameraProfile ?? null,
       photoScene: null,
-      label: 'ANAMORPHIC'
+      assetId: family?.assetId ?? null,
+      pointEnabled: false,
+      label: family?.available ? `ANAMORPHIC / ${family.label}` : 'ANAMORPHIC / NOT AVAILABLE'
     };
   }
   if (state.site.world === 'world3d') {
-    return { contracts: world.normalSurfaces, camera: null, photoScene: null, label: '3D WORLD / NORMAL' };
+    return { contracts: world.normalSurfaces, camera: null, photoScene: null, assetId: 'world3d', pointEnabled: true, label: '3D WORLD / NORMAL' };
   }
   const sceneContract = world.normalScenes.find((candidate) => candidate.id === state.site.scene) || world.normalScenes[0];
   return {
     contracts: sceneContract.surfaces,
     camera: sceneContract.camera,
     photoScene: PHOTO_SCENE_RECORDS.find((record) => record.sceneId === sceneContract.label.toUpperCase()) ?? null,
+    assetId: 'legacy2d',
+    pointEnabled: true,
     label: `LEGACY 2D WORLD / ${sceneContract.label}`
   };
+}
+
+function currentAnamorphicFamily() {
+  return SITE_SCENE_PROFILE.worlds.world3d.anamorphicFamilies[state.site.anamorphicFamily] ?? null;
+}
+
+function isAnamorphicCalibrationContext() {
+  return state.activeView === 'site-3d' && state.site.world === 'world3d' &&
+    state.site.mappingMode === 'anamorphic' && currentAnamorphicFamily()?.available === true;
+}
+
+function isAnamorphicCalibrationFramingActive() {
+  return isAnamorphicCalibrationContext() && state.site.anamorphicCameraMode !== 'FREE_PREVIEW';
+}
+
+function selectedSiteAssetId() {
+  return selectedSiteContract().assetId ?? state.site.world;
+}
+
+function syncAnamorphicControls() {
+  const familyContext = state.activeView === 'site-3d' && state.site.world === 'world3d' &&
+    state.site.mappingMode === 'anamorphic';
+  siteAnamorphicFamilyControl.hidden = !familyContext;
+  siteAnamorphicFamilySelect.disabled = !familyContext;
+  anamorphicCameraResetButton.hidden = !isAnamorphicCalibrationContext();
+  anamorphicCameraResetButton.disabled = !isAnamorphicCalibrationContext() || !state.site.surfaceSetAvailable;
+  anamorphicFovControl.hidden = !isAnamorphicCalibrationFramingActive();
+  anamorphicFovInput.disabled = !isAnamorphicCalibrationFramingActive() || !state.site.surfaceSetAvailable;
+  anamorphicCameraResetButton.textContent = state.site.anamorphicCameraMode === 'CALIBRATION'
+    ? '75F CALIBRATION'
+    : 'RETURN TO 75F CALIBRATION';
+  anamorphicCameraResetButton.classList.toggle('locked', state.site.anamorphicCameraMode === 'CALIBRATION');
+  anamorphicCameraResetButton.classList.toggle('unlocked', state.site.anamorphicCameraMode !== 'CALIBRATION');
+}
+
+function markAnamorphicFreePreview() {
+  if (!isAnamorphicCalibrationContext() || state.site.anamorphicCameraMode === 'FREE_PREVIEW') return;
+  state.site.anamorphicCameraMode = 'FREE_PREVIEW';
+  fitSiteCameraToActiveSurfaces();
+  syncAnamorphicControls();
+  resizeRenderer();
+  updateDiagnostics();
+}
+
+function applyAnamorphicCalibrationCamera() {
+  if (!isAnamorphicCalibrationContext() || !state.site.surfaceSetAvailable) return false;
+  const profile = currentAnamorphicFamily().cameraProfile;
+  cameraSite.fov = profile.runtimeFov;
+  anamorphicFovInput.value = String(profile.runtimeFov);
+  cameraSite.aspect = profile.aspectUsed;
+  cameraSite.near = profile.near;
+  cameraSite.far = profile.far;
+  cameraSite.zoom = 1;
+  if (cameraSite.view?.enabled) cameraSite.clearViewOffset();
+  cameraSite.position.fromArray(profile.runtimePosition);
+  cameraSite.up.fromArray(profile.runtimeUp);
+  cameraSite.quaternion.fromArray(profile.runtimeQuaternion).normalize();
+  controlsSite.target.fromArray(profile.runtimeTarget);
+  cameraSite.updateProjectionMatrix();
+  cameraSite.updateMatrixWorld(true);
+  state.site.anamorphicCameraMode = 'CALIBRATION';
+  syncAnamorphicControls();
+  updateZoomReadout();
+  render();
+  updateDiagnostics();
+  return true;
+}
+
+function applyAnamorphicFovValue(value) {
+  if (!isAnamorphicCalibrationFramingActive() || !state.site.surfaceSetAvailable) return false;
+  const nextFov = Number(value);
+  if (!Number.isFinite(nextFov) || nextFov < 1 || nextFov > 179) {
+    anamorphicFovInput.value = String(cameraSite.fov);
+    return false;
+  }
+  cameraSite.fov = nextFov;
+  cameraSite.updateProjectionMatrix();
+  cameraSite.updateMatrixWorld(true);
+  anamorphicFovInput.value = String(nextFov);
+  const baselineFov = currentAnamorphicFamily().cameraProfile.runtimeFov;
+  state.site.anamorphicCameraMode = Math.abs(nextFov - baselineFov) < 1e-9
+    ? 'CALIBRATION'
+    : 'FOV_ADJUSTED';
+  syncAnamorphicControls();
+  updateZoomReadout();
+  render();
+  updateDiagnostics();
+  return true;
 }
 
 function fitSiteCameraToActiveSurfaces() {
@@ -797,9 +903,13 @@ function fitSiteCameraToActiveSurfaces() {
   const size = bounds.getSize(new THREE.Vector3());
   const radius = Math.max(1, size.length() * 0.5);
   cameraSite.fov = 45;
+  cameraSite.aspect = Math.max(1, viewer.clientWidth) / Math.max(1, viewer.clientHeight);
   cameraSite.near = 0.01;
   cameraSite.far = 10000;
+  cameraSite.zoom = 1;
+  if (cameraSite.view?.enabled) cameraSite.clearViewOffset();
   cameraSite.position.copy(center).add(new THREE.Vector3(radius * 1.15, radius * 0.45, radius * 1.9));
+  cameraSite.up.set(0, 1, 0);
   cameraSite.rotation.set(0, 0, 0);
   cameraSite.updateProjectionMatrix();
   controlsSite.target.copy(center);
@@ -1101,6 +1211,7 @@ function syncSiteCameraControls() {
     state.site.surfaceSetAvailable &&
     (!legacyContext || !state.site.legacyCameraLocked);
   syncCameraEditorAvailability();
+  syncAnamorphicControls();
 }
 
 function lockLegacyCamera() {
@@ -1117,7 +1228,7 @@ function toggleLegacyCameraLock() {
 }
 
 function applySiteSurfaceSelection({ resetCamera = true } = {}) {
-  if (!state.site.roots.world3d || !state.site.roots.legacy2d) return;
+  if (Object.keys(SITE_SCENE_PROFILE.assets).some((assetId) => !state.site.roots[assetId])) return;
   for (const mesh of state.site.meshes) mesh.visible = false;
   const selection = selectedSiteContract();
   if (!selection.contracts) {
@@ -1125,7 +1236,7 @@ function applySiteSurfaceSelection({ resetCamera = true } = {}) {
     state.site.missingMeshes = ['Legacy 2D World anamorphic surface contract'];
     state.site.surfaceSetAvailable = false;
   } else {
-    const resolution = resolveSurfaceSet(state.site.meshesByWorld[state.site.world], selection.contracts);
+    const resolution = resolveSurfaceSet(state.site.meshesByWorld[selection.assetId] ?? [], selection.contracts);
     state.site.missingMeshes = [...resolution.missing];
     state.site.surfaceSetAvailable = resolution.available;
     state.site.activeBindings = resolution.available ? [...resolution.resolved] : [];
@@ -1136,7 +1247,8 @@ function applySiteSurfaceSelection({ resetCamera = true } = {}) {
 
   if (state.pointer.marker?.view === 'site-3d') state.pointer.marker = null;
   if (resetCamera) {
-    if (selection.camera) applyCurrentCameraRecordToRuntime();
+    if (isAnamorphicCalibrationContext()) applyAnamorphicCalibrationCamera();
+    else if (selection.camera) applyCurrentCameraRecordToRuntime();
     else if (state.site.surfaceSetAvailable) fitSiteCameraToActiveSurfaces();
   }
   if (selection.camera) populateCameraEditorFromRecord();
@@ -1145,6 +1257,7 @@ function applySiteSurfaceSelection({ resetCamera = true } = {}) {
   applyEnvironmentVisibility();
   syncSiteCameraControls();
   syncLocationControls();
+  siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
   siteSceneSelect.disabled = state.site.world !== 'legacy2d' || state.site.mappingMode !== 'normal';
   updateZoomReadout();
   render();
@@ -1182,8 +1295,13 @@ async function loadSiteScene() {
         state.site.meshesByWorld[assetId].push(child);
         const materials = Array.isArray(child.material) ? child.material : [child.material];
         for (const material of materials) if (material) oldMaterials.add(material);
+        const productionHelper = assetId === 'anamorphicFront75f' &&
+          child.name !== ANAMORPHIC_FRONT_75F_PROFILE.surface.surfaceNode;
+        child.userData.productionHelper = productionHelper;
+        child.userData.photoshopPointTarget = !productionHelper &&
+          assetId !== 'anamorphicFront75f';
         child.material = new THREE.MeshBasicMaterial({
-          map: state.texture,
+          map: productionHelper ? null : state.texture,
           color: 0xffffff,
           transparent: true,
           opacity: 1,
@@ -1198,7 +1316,10 @@ async function loadSiteScene() {
       sceneSite.add(gltf.scene);
     }
     for (const material of oldMaterials) material.dispose();
-    state.site.bindings = state.site.meshes.map((mesh) => ({ mesh }));
+    state.site.bindings = state.site.meshes.map((mesh) => ({
+      mesh,
+      textureEligible: mesh.userData.productionHelper !== true
+    }));
     state.site.status = 'READY';
     state.site.error = '';
     applySiteSurfaceSelection();
@@ -1524,11 +1645,16 @@ function render() {
   const width = Math.max(1, viewer.clientWidth);
   const height = Math.max(1, viewer.clientHeight);
   const photoActive = isPhotoViewportActive();
+  const anamorphicCalibrationActive = isAnamorphicCalibrationFramingActive();
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, width, height);
   const environmentActive = state.activeView === 'site-3d' && state.site.world === 'world3d' &&
     state.environment.status === 'READY';
-  renderer.setClearColor(environmentActive ? environmentPresentationContract().clearColor : 0x090a0d, 1);
+  const siteClearColor = environmentActive ? environmentPresentationContract().clearColor : 0x090a0d;
+  renderer.setClearColor(
+    anamorphicCalibrationActive ? ANAMORPHIC_CALIBRATION_MATTE_COLOR : siteClearColor,
+    1
+  );
   renderer.clear(true, true, true);
   if (state.activeView === 'site-3d' && photoActive) {
     const rect = state.photo.contentRect;
@@ -1541,6 +1667,18 @@ function render() {
     renderer.render(sceneSite, cameraSite);
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, width, height);
+  } else if (state.activeView === 'site-3d' && anamorphicCalibrationActive) {
+    const rect = computeContainedAspectRect(width, height, currentAnamorphicFamily().workingResolution.aspect);
+    const bottom = height - rect.y - rect.height;
+    renderer.setScissor(rect.x, bottom, rect.width, rect.height);
+    renderer.setViewport(rect.x, bottom, rect.width, rect.height);
+    renderer.setScissorTest(true);
+    renderer.setClearColor(siteClearColor, 1);
+    renderer.clear(true, true, true);
+    renderer.render(sceneSite, cameraSite);
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, width, height);
+    renderer.setClearColor(siteClearColor, 1);
   } else if (state.activeView === 'site-3d') renderer.render(sceneSite, cameraSite);
   else if (state.activeView === '3d-plane') renderer.render(scene3d, camera3d);
   else renderer.render(scene, camera);
@@ -1595,6 +1733,7 @@ function pointerRequirementsSatisfied() {
   const live = state.link.lastFrame;
   const pointerSurfaceAvailable = state.activeView === 'site-3d'
     ? state.site.surfaceSetAvailable && state.site.activeBindings.length > 0 &&
+      selectedSiteContract().pointEnabled !== false &&
       (!isPhotoSceneContext() || isPhotoViewportActive())
     : Boolean(state.activeView === '3d-plane' ? state.plane3d : state.mesh);
   return state.asset?.kind === 'live' &&
@@ -1959,11 +2098,31 @@ function updateDiagnostics() {
     site3d: {
       status: state.site.status,
       error: state.site.error,
-      assetFile: SITE_SCENE_PROFILE.assets[state.site.world].fileName,
-      expectedSha256: SITE_SCENE_PROFILE.assets[state.site.world].sha256,
+      assetFile: SITE_SCENE_PROFILE.assets[selectedSiteAssetId()].fileName,
+      expectedSha256: SITE_SCENE_PROFILE.assets[selectedSiteAssetId()].sha256,
       loadedAssets: Object.values(SITE_SCENE_PROFILE.assets).map((asset) => asset.fileName),
       world: state.site.world,
       mappingMode: state.site.mappingMode,
+      anamorphicFamily: state.site.mappingMode === 'anamorphic' ? currentAnamorphicFamily()?.familyId ?? null : null,
+      anamorphicCameraMode: isAnamorphicCalibrationContext() ? state.site.anamorphicCameraMode : null,
+      anamorphicCalibrationStatus: isAnamorphicCalibrationContext()
+        ? currentAnamorphicFamily().cameraProfile.calibrationStatus
+        : null,
+      anamorphicVisualValidationState: isAnamorphicCalibrationContext()
+        ? currentAnamorphicFamily().cameraProfile.visualValidationState
+        : null,
+      anamorphicWorkingResolution: isAnamorphicCalibrationFramingActive()
+        ? { ...currentAnamorphicFamily().workingResolution }
+        : null,
+      anamorphicCalibrationMatte: {
+        active: isAnamorphicCalibrationFramingActive(),
+        color: ANAMORPHIC_CALIBRATION_MATTE_HEX,
+        outsideWorkingCanvasOnly: true
+      },
+      helperVisibleCount: (state.site.meshesByWorld.anamorphicFront75f ?? [])
+        .filter((mesh) => mesh.userData.productionHelper && mesh.visible).length,
+      helperTextureMapCount: (state.site.meshesByWorld.anamorphicFront75f ?? [])
+        .filter((mesh) => mesh.userData.productionHelper && mesh.material.map).length,
       legacyScene: state.site.world === 'legacy2d' ? state.site.scene : null,
       legacyCameraLocked: isLegacyCameraContext() ? state.site.legacyCameraLocked : null,
       cameraRecordId: currentLegacyCameraRecord()?.cameraId || null,
@@ -1981,7 +2140,7 @@ function updateDiagnostics() {
       surfaceSetAvailable: state.site.surfaceSetAvailable,
       missingMeshes: [...state.site.missingMeshes],
       meshCount: state.site.meshes.length,
-      activeWorldMeshCount: state.site.meshesByWorld[state.site.world].length,
+      activeWorldMeshCount: (state.site.meshesByWorld[selectedSiteAssetId()] ?? []).length,
       activeSurfaces: state.site.activeBindings.map((binding) => ({
         role: binding.contract.role,
         meshName: binding.mesh.name,
@@ -2068,6 +2227,7 @@ function updateDiagnostics() {
   window.block4CPhotoDiagnostics = structuredClone(state.diagnostics.photoScene);
   window.block4DEnvironmentDiagnostics = structuredClone(state.diagnostics.environment);
   window.block4ELocationDiagnostics = structuredClone(state.diagnostics.locationNavigation);
+  window.block5AAnamorphicDiagnostics = structuredClone(state.diagnostics.site3d);
 
   const rows = [
     ['Active View', state.activeView === 'site-3d' ? 'SITE 3D' : (state.activeView === '3d-plane' ? '3D PLANE' : '2D VIEW')],
@@ -2374,6 +2534,12 @@ siteMappingSelect.addEventListener('change', () => {
   if (state.site.world === 'legacy2d') state.site.legacyCameraLocked = true;
   applySiteSurfaceSelection();
 });
+siteAnamorphicFamilySelect.addEventListener('change', () => {
+  const family = SITE_SCENE_PROFILE.worlds.world3d.anamorphicFamilies[siteAnamorphicFamilySelect.value];
+  if (!family?.available) return;
+  state.site.anamorphicFamily = family.id;
+  applySiteSurfaceSelection();
+});
 environmentPresentationSelect.addEventListener('change', () => {
   if (!SITE_ENVIRONMENT_PROFILE.presentations[environmentPresentationSelect.value]) return;
   state.environment.presentation = environmentPresentationSelect.value;
@@ -2394,6 +2560,8 @@ siteSceneSelect.addEventListener('change', () => {
   applySiteSurfaceSelection();
 });
 legacyCameraLockButton.addEventListener('click', toggleLegacyCameraLock);
+anamorphicCameraResetButton.addEventListener('click', applyAnamorphicCalibrationCamera);
+anamorphicFovInput.addEventListener('change', () => applyAnamorphicFovValue(anamorphicFovInput.value));
 cameraInputMode.addEventListener('change', () => {
   state.site.cameraEditor.inputMode = cameraInputMode.value;
   populateCameraEditorFromRecord();
@@ -2645,20 +2813,77 @@ window.runBlock3SiteMarkerCameraSmoke = () => {
   };
 };
 
-window.runBlock3MissingAnamorphicSmoke = () => {
+window.runBlock5AAnamorphicSmoke = () => {
   setActiveView('site-3d');
   state.site.world = 'world3d';
   state.site.mappingMode = 'anamorphic';
+  state.site.anamorphicFamily = 'front75f';
   siteWorldSelect.value = state.site.world;
   siteMappingSelect.value = state.site.mappingMode;
+  siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
   applySiteSurfaceSelection();
+  const family = currentAnamorphicFamily();
+  const expectedQuaternion = new THREE.Quaternion().fromArray(family.cameraProfile.runtimeQuaternion);
+  const expectedForward = new THREE.Vector3().fromArray(family.cameraProfile.runtimeForward);
+  const visibleMeshes = (state.site.meshesByWorld.anamorphicFront75f ?? []).filter((mesh) => mesh.visible);
+  const baselineVerticalFovMatches = Math.abs(cameraSite.fov - 19.778) < 1e-9;
+  const editableFovApplied = applyAnamorphicFovValue(21.25);
+  const editableFovMatches = Math.abs(cameraSite.fov - 21.25) < 1e-9;
+  const editableFovMode = state.site.anamorphicCameraMode;
+  const fovResetReturned = applyAnamorphicCalibrationCamera();
+  const fovResetMatches = Math.abs(cameraSite.fov - family.cameraProfile.runtimeFov) < 1e-9 &&
+    anamorphicFovInput.value === String(family.cameraProfile.runtimeFov);
+  controlsSite.dispatchEvent({ type: 'start' });
+  const freePreviewState = state.site.anamorphicCameraMode;
+  const freePreviewFovDefault = Math.abs(cameraSite.fov - 45) < 1e-9;
+  const freePreviewUpDefault = cameraSite.up.distanceTo(new THREE.Vector3(0, 1, 0)) < 1e-9;
+  const freePreviewAspectUnrestricted = Math.abs(
+    cameraSite.aspect - Math.max(1, viewer.clientWidth) / Math.max(1, viewer.clientHeight)
+  ) < 1e-9;
+  const freePreviewCanvasUnrestricted = !isAnamorphicCalibrationFramingActive();
+  controlsSite.dispatchEvent({ type: 'end' });
+  cameraSite.position.add(new THREE.Vector3(1, 0, 0));
+  const resetReturned = applyAnamorphicCalibrationCamera();
+  const rect = computeContainedAspectRect(
+    Math.max(1, viewer.clientWidth),
+    Math.max(1, viewer.clientHeight),
+    family.workingResolution.aspect
+  );
   const result = {
     surfaceSetAvailable: state.site.surfaceSetAvailable,
     activeSurfaceCount: state.site.activeBindings.length,
-    visibleSurfaceCount: state.site.meshes.filter((mesh) => mesh.visible).length,
+    visibleSurfaceCount: visibleMeshes.length,
+    visibleSurfaceExact: visibleMeshes[0]?.name ?? null,
     missingMeshes: [...state.site.missingMeshes],
     pointDisabled: pointButton.disabled,
-    controlsDisabled: !controlsSite.enabled
+    controlsEnabled: controlsSite.enabled,
+    helperVisibleCount: state.diagnostics.site3d.helperVisibleCount,
+    helperTextureMapCount: state.diagnostics.site3d.helperTextureMapCount,
+    surfaceTextureShared: state.site.activeBindings[0]?.mesh.material.map === state.texture,
+    cameraFinite: [...cameraSite.position.toArray(), ...cameraSite.quaternion.toArray(), cameraSite.fov, cameraSite.aspect].every(Number.isFinite),
+    cameraQuaternionMatches: cameraSite.quaternion.angleTo(expectedQuaternion) < CAMERA_RUNTIME_ROTATION_EPSILON,
+    cameraForwardMatches: new THREE.Vector3(0, 0, -1).applyQuaternion(cameraSite.quaternion).distanceTo(expectedForward) < 1e-7,
+    workingCanvasAspectMatches: Math.abs(rect.aspect - 3000 / 3840) < 1e-12,
+    baselineVerticalFovMatches,
+    editableFovApplied,
+    editableFovMatches,
+    editableFovMode,
+    fovResetReturned,
+    fovResetMatches,
+    freePreviewState,
+    freePreviewFovDefault,
+    freePreviewUpDefault,
+    freePreviewAspectUnrestricted,
+    freePreviewCanvasUnrestricted,
+    resetReturned,
+    resetMode: state.site.anamorphicCameraMode,
+    calibrationMatteActive: isAnamorphicCalibrationFramingActive(),
+    calibrationMatteColor: ANAMORPHIC_CALIBRATION_MATTE_HEX,
+    visualValidationState: family.cameraProfile.visualValidationState,
+    missingFamiliesUnavailable: Object.entries(ANAMORPHIC_FAMILY_AVAILABILITY)
+      .filter(([familyId]) => familyId !== ANAMORPHIC_FRONT_75F_PROFILE.familyId)
+      .every(([, availability]) => availability.available === false && availability.status === 'NOT_AVAILABLE'),
+    contextLossCount: state.contextLossCount
   };
   state.site.mappingMode = 'normal';
   siteMappingSelect.value = state.site.mappingMode;
@@ -3101,6 +3326,8 @@ window.runBlock4ELocationSmoke = async () => {
 };
 
 window.runBlock0SmokeActions = async () => {
+  const previousView = state.activeView;
+  setActiveView('2d');
   const actions = {};
   applyFit();
   await nextFrame();
@@ -3151,12 +3378,73 @@ window.runBlock0SmokeActions = async () => {
   textureCounts.push(renderer.info.memory.textures);
   const memoryStable = Math.max(...textureCounts) - Math.min(...textureCounts) <= 1;
   const diagnostics = structuredClone(state.diagnostics);
+  setActiveView(previousView);
   return {
     ...diagnostics,
     actions,
     sourceVariants,
     reloadTextureCounts: textureCounts,
     memoryStable
+  };
+};
+
+window.runBlock4FStartupViewSmoke = async () => {
+  const startup = {
+    activeView: state.activeView,
+    siteButtonActive: viewSite3dButton.classList.contains('active'),
+    twoDButtonActive: view2dButton.classList.contains('active'),
+    siteStatus: state.site.status,
+    surfaceSetAvailable: state.site.surfaceSetAvailable,
+    activeSurfaceCount: state.site.activeBindings.length,
+    environmentStatus: state.environment.status,
+    environmentVisible: Boolean(state.environment.root?.visible),
+    locationsControlVisible: !locationsToggleButton.hidden,
+    locationsVisible: state.locations.visible,
+    rendererTextureCount: renderer.info.memory.textures,
+    contextLossCount: state.contextLossCount
+  };
+
+  setActiveView('2d');
+  await nextFrame();
+  const twoD = {
+    activeView: state.activeView,
+    buttonActive: view2dButton.classList.contains('active'),
+    fullResolution: state.diagnostics.fullResolution,
+    sourceMatchesTexture: state.diagnostics.sourceWidth === state.diagnostics.textureWidth &&
+      state.diagnostics.sourceHeight === state.diagnostics.textureHeight,
+    controlsEnabled: [fitButton, oneButton, twoButton, fourButton].every((button) => !button.disabled),
+    rendererTextureCount: renderer.info.memory.textures
+  };
+
+  setActiveView(DEFAULT_ACTIVE_VIEW);
+  await nextFrame();
+  const reentry = {
+    activeView: state.activeView,
+    siteButtonActive: viewSite3dButton.classList.contains('active'),
+    siteStatus: state.site.status,
+    surfaceSetAvailable: state.site.surfaceSetAvailable,
+    activeSurfaceCount: state.site.activeBindings.length,
+    environmentVisible: Boolean(state.environment.root?.visible),
+    locationsControlVisible: !locationsToggleButton.hidden,
+    rendererTextureCount: renderer.info.memory.textures,
+    contextLossCount: state.contextLossCount
+  };
+
+  return {
+    defaultActiveView: DEFAULT_ACTIVE_VIEW,
+    startup,
+    twoD,
+    reentry,
+    pass: startup.activeView === DEFAULT_ACTIVE_VIEW && startup.siteButtonActive && !startup.twoDButtonActive &&
+      startup.siteStatus === 'READY' && startup.surfaceSetAvailable && startup.activeSurfaceCount === 2 &&
+      startup.environmentStatus === 'READY' && startup.environmentVisible && startup.locationsControlVisible &&
+      startup.contextLossCount === 0 && twoD.activeView === '2d' && twoD.buttonActive &&
+      twoD.fullResolution && twoD.sourceMatchesTexture && twoD.controlsEnabled &&
+      twoD.rendererTextureCount === startup.rendererTextureCount &&
+      reentry.activeView === DEFAULT_ACTIVE_VIEW && reentry.siteButtonActive && reentry.siteStatus === 'READY' &&
+      reentry.surfaceSetAvailable && reentry.activeSurfaceCount === 2 && reentry.environmentVisible &&
+      reentry.locationsControlVisible && reentry.rendererTextureCount === startup.rendererTextureCount &&
+      reentry.contextLossCount === 0
   };
 };
 
@@ -3187,6 +3475,7 @@ async function start() {
     loadEnvironmentScene(),
     loadAsset(state.manifest.primaryAssetId)
   ]);
+  setActiveView(DEFAULT_ACTIVE_VIEW);
 }
 
 start().catch((error) => {

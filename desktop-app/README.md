@@ -1,4 +1,4 @@
-# Desktop App — Block 4D Checkpoint
+# Desktop App — Block 5A FRONT 75F Calibration Checkpoint
 
 Block 0 proves that a 4728 x 5760-class source can remain full resolution from
 disk decode through a Three.js GPU texture in both development and a Windows
@@ -22,7 +22,7 @@ through `site-scene-profile.js`.
 
 ```text
 3D WORLD / NORMAL:      LUUX_Front_3Dworld_Basic + ILMIN_Back_3Dworld_Basic
-3D WORLD / ANAMORPHIC:  LUUX_Front_3Dworld_Anamorphic + ILMIN_Back_3Dworld_Anamorphic (reserved / NONE)
+3D WORLD / ANAMORPHIC:  FRONT 75F / ANAM_SURFACE_FRONT75F
 LEGACY 2D WORLD:        Front / Front_Sweet / Back / Night
 ```
 
@@ -67,6 +67,30 @@ but its meshes are excluded from all raycasting. Canonical POINT continues to
 raycast only the exact Functional Signage bindings, so hidden signage remains
 pointable and the environment never receives the master Photoshop texture.
 
+Block 4E adds four user-validated Site Location marker/photo-proxy records,
+`LOCATIONS ON/OFF`, latest-wins PhotoScene navigation, and exact return to the
+pre-entry Site camera, orbit target, environment presentation, and marker state.
+
+Block 4F changes only the top-level startup selection: the app now opens in
+`SITE 3D / 3D WORLD / NORMAL`. `2D VIEW` remains a first-class control and keeps
+the Block 0 full-resolution FIT/1:1/zoom/pan/filter workflow. Runtime and
+Portable smoke tests explicitly switch SITE 3D → 2D VIEW → SITE 3D before
+running the Block 0–4E and Photoshop link regressions.
+
+Block 5A loads the pinned FRONT 75F Anamorphic GLB as a third independent Site
+asset. Its authored TEXCOORD_0 range is preserved without a forced 0..1 remap.
+The four CALCAM_FRONT75F helper meshes remain hidden, receive no Photoshop
+texture, and are excluded from POINT. Three.js uses the user-confirmed 3ds Max
+vertical FOV 19.778° (horizontal 15.52°, diagonal 24.962°). FOV V supports a
+session override, while 75F CALIBRATION restores 19.778°. Starting Orbit enters
+FREE_PREVIEW, resets to the ordinary FOV 45°/world-up surface-fit camera, and
+releases the 3000×3840 aspect restriction so the full viewer is used. While
+75F CALIBRATION is active, only the area outside the contained working canvas
+uses a `#20242c` matte; the canvas render itself is unchanged. 75F POINT remains
+disabled under `DEFERRED_CANONICAL_INVERSE_MAPPING_UNPROVEN`. Corrected framing,
+roll, reset behavior, unrestricted FREE_PREVIEW, and matte presentation were
+user-validated on 2026-09-11.
+
 ## Commands
 
 ```powershell
@@ -78,6 +102,9 @@ npm run test:block4a
 npm run test:block4b
 npm run test:block4c
 npm run test:block4d
+npm run test:block4e
+npm run test:block4f
+npm run test:block5a
 npm run test:runtime
 npm run test:link
 npm run dist
@@ -87,6 +114,9 @@ npm run test:portable
 `npm run dev` builds local renderer assets and launches Electron. The automated
 runtime commands use the same application with a smoke-test flag and write
 ignored reports under `.runtime/`.
+
+`npm run test:portable` runs both the full runtime smoke and the synthetic
+Photoshop Live/POINT smoke against `dist/LUUX Signage Previz.exe`.
 
 ## Pixel pipeline
 

@@ -242,7 +242,8 @@ const baselineAssetPaths = {
   legacy2d: path.join(appRoot, 'assets', 'site', SITE_ASSETS.legacy2d.fileName)
 };
 const block3Assets = {};
-for (const [assetId, asset] of Object.entries(SITE_ASSETS)) {
+for (const assetId of ['world3d', 'legacy2d']) {
+  const asset = SITE_ASSETS[assetId];
   const bytes = await readFile(baselineAssetPaths[assetId]);
   assert.equal(bytes.length, asset.byteLength);
   assert.equal(sha256(bytes), asset.sha256);

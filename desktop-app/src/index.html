@@ -7,22 +7,22 @@
       content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file: ws://localhost:34100; object-src 'none'; base-uri 'none'; frame-src 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>LUUX Signage Previz — Block 4E</title>
+    <title>Signage MockUp Generator — Block 5A</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <div>
-        <h1>LUUX SIGNAGE PREVIZ — BLOCK 4E</h1>
-        <p>Site location navigation · Exact Site return · Full-resolution Photoshop signage</p>
+        <h1>Signage MockUp Generator — BLOCK 5A</h1>
+        <p>LUNARGRAPHICS · FRONT 75F Anamorphic Calibration</p>
       </div>
       <div id="full-resolution-badge" class="badge pending">WAITING</div>
     </header>
 
     <section class="controls" aria-label="Viewer controls">
-      <button id="view-2d-button" class="view-button active" type="button">2D VIEW</button>
+      <button id="view-2d-button" class="view-button" type="button">2D VIEW</button>
       <button id="view-3d-plane-button" class="view-button" type="button">3D PLANE</button>
-      <button id="view-site-3d-button" class="view-button" type="button">SITE 3D</button>
+      <button id="view-site-3d-button" class="view-button active" type="button">SITE 3D</button>
       <span class="control-divider" aria-hidden="true"></span>
       <label class="site-control" hidden>
         World
@@ -35,7 +35,16 @@
         Mapping
         <select id="site-mapping-select" aria-label="Site mapping mode">
           <option value="normal">NORMAL</option>
-          <option value="anamorphic">ANAMORPHIC (NONE)</option>
+          <option value="anamorphic">ANAMORPHIC</option>
+        </select>
+      </label>
+      <label id="site-anamorphic-family-control" class="site-control" hidden>
+        Family
+        <select id="site-anamorphic-family-select" aria-label="Anamorphic family">
+          <option value="front75f">FRONT 75F · 3000 × 3840</option>
+          <option value="back" disabled>BACK · NOT AVAILABLE</option>
+          <option value="ilmin" disabled>ILMIN · NOT AVAILABLE</option>
+          <option value="front90f" disabled>FRONT 90F · NOT AVAILABLE</option>
         </select>
       </label>
       <label class="site-control" hidden>
@@ -52,6 +61,11 @@
       <button id="locations-toggle-button" class="site-control location-toggle-button active" type="button" aria-pressed="true" hidden>LOCATIONS ON</button>
       <button id="return-to-site-button" class="site-control return-to-site-button" type="button" hidden>RETURN TO SITE</button>
       <button id="legacy-camera-lock-button" class="site-control camera-lock-button locked" type="button" aria-pressed="true" hidden>CAMERA LOCKED</button>
+      <button id="anamorphic-camera-reset-button" class="site-control camera-lock-button locked" type="button" hidden>75F CALIBRATION</button>
+      <label id="anamorphic-fov-control" class="site-control" hidden>
+        FOV V
+        <input id="anamorphic-fov-input" type="number" min="1" max="179" step="0.001" value="19.778" aria-label="75F vertical camera FOV">
+      </label>
       <span class="control-divider site-control" aria-hidden="true" hidden></span>
       <label>
         Source

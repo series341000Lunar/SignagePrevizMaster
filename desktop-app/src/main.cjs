@@ -79,17 +79,43 @@ async function waitForSiteReady(window) {
   throw new Error('Timed out waiting for Site scene readiness.');
 }
 
+async function waitForEnvironmentReady(window) {
+  const deadline = Date.now() + 60000;
+  while (Date.now() < deadline) {
+    const result = await window.webContents.executeJavaScript('window.block4DEnvironmentDiagnostics ?? null', true);
+    if (result?.status === 'READY') return result;
+    if (result?.status === 'ERROR') throw new Error(result.error || 'Environment scene load failed.');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('Timed out waiting for Environment scene readiness.');
+}
+
 async function runSmokeTest(window) {
   const reportPath = resolveArgumentPath(reportArgument, 'runtime.json');
   const screenshotPath = resolveArgumentPath(screenshotArgument, 'runtime.png');
   try {
     await waitForDiagnostics(window);
-    const runtime = await window.webContents.executeJavaScript('window.runBlock0SmokeActions()', true);
     await waitForSiteReady(window);
+    await waitForEnvironmentReady(window);
+    const startupView = await window.webContents.executeJavaScript('window.runBlock4FStartupViewSmoke()', true);
+    const runtime = await window.webContents.executeJavaScript('window.runBlock0SmokeActions()', true);
     const cameraEditor = await window.webContents.executeJavaScript('window.runBlock4BCameraEditorSmoke()', true);
     const photoScene = await window.webContents.executeJavaScript('window.runBlock4CPhotoSceneSmoke()', true);
     const environment = await window.webContents.executeJavaScript('window.runBlock4DEnvironmentSmoke()', true);
     const locations = await window.webContents.executeJavaScript('window.runBlock4ELocationSmoke()', true);
+    const anamorphic75f = await window.webContents.executeJavaScript('window.runBlock5AAnamorphicSmoke()', true);
+    const anamorphicScreenshotState = await window.webContents.executeJavaScript(
+      `(() => {
+        const world = document.querySelector('#site-world-select');
+        const mapping = document.querySelector('#site-mapping-select');
+        world.value = 'world3d';
+        world.dispatchEvent(new Event('change'));
+        mapping.value = 'anamorphic';
+        mapping.dispatchEvent(new Event('change'));
+        return window.block5AAnamorphicDiagnostics;
+      })()`,
+      true
+    );
     await new Promise((resolve) => setTimeout(resolve, 250));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -98,6 +124,7 @@ async function runSmokeTest(window) {
     const broker = liveLinkBroker?.getSnapshot() || null;
     const allActionsPass = Object.values(runtime.actions).every(Boolean);
     const technicalPass =
+      startupView.pass === true &&
       runtime.fullResolution &&
       runtime.hardwareRendering &&
       runtime.contextLossCount === 0 &&
@@ -126,6 +153,26 @@ async function runSmokeTest(window) {
       locations.exactReturns === true && locations.rapidLatestWins === true &&
       locations.rapidReturn === 'RETURNED' && locations.directEntryHasNoFakeReturn === true &&
       locations.finalSiteExact === true && locations.contextLossCount === 0 &&
+      anamorphic75f.surfaceSetAvailable === true && anamorphic75f.activeSurfaceCount === 1 &&
+      anamorphic75f.visibleSurfaceCount === 1 && anamorphic75f.visibleSurfaceExact === 'ANAM_SURFACE_FRONT75F' &&
+      anamorphic75f.pointDisabled === true && anamorphic75f.controlsEnabled === true &&
+      anamorphic75f.helperVisibleCount === 0 && anamorphic75f.helperTextureMapCount === 0 &&
+      anamorphic75f.surfaceTextureShared === true && anamorphic75f.cameraFinite === true &&
+      anamorphic75f.cameraQuaternionMatches === true && anamorphic75f.cameraForwardMatches === true &&
+      anamorphic75f.workingCanvasAspectMatches === true && anamorphic75f.freePreviewState === 'FREE_PREVIEW' &&
+      anamorphic75f.baselineVerticalFovMatches === true &&
+      anamorphic75f.editableFovApplied === true && anamorphic75f.editableFovMatches === true &&
+      anamorphic75f.editableFovMode === 'FOV_ADJUSTED' &&
+      anamorphic75f.fovResetReturned === true && anamorphic75f.fovResetMatches === true &&
+      anamorphic75f.freePreviewFovDefault === true && anamorphic75f.freePreviewUpDefault === true &&
+      anamorphic75f.freePreviewAspectUnrestricted === true && anamorphic75f.freePreviewCanvasUnrestricted === true &&
+      anamorphic75f.resetReturned === true && anamorphic75f.resetMode === 'CALIBRATION' &&
+      anamorphic75f.calibrationMatteActive === true && anamorphic75f.calibrationMatteColor === '#20242c' &&
+      anamorphic75f.visualValidationState === 'PASS' && anamorphic75f.missingFamiliesUnavailable === true &&
+      anamorphic75f.contextLossCount === 0 &&
+      anamorphicScreenshotState.mappingMode === 'anamorphic' &&
+      anamorphicScreenshotState.anamorphicFamily === 'ANAMORPHIC_FRONT_75F' &&
+      anamorphicScreenshotState.activeSurfaces.length === 1 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -140,11 +187,14 @@ async function runSmokeTest(window) {
       loopbackRequests,
       liveLink: { config: liveLinkConfig, broker, events: liveLinkEvents },
       criticalErrors,
+      startupView,
       runtime,
       cameraEditor,
       photoScene,
       environment,
       locations,
+      anamorphic75f,
+      anamorphicScreenshotState,
       screenshotPath
     };
     writeJson(reportPath, report);
@@ -263,6 +313,9 @@ async function runLinkSmokeTest(window) {
   let photoshopClient = null;
   try {
     await waitForDiagnostics(window);
+    await waitForSiteReady(window);
+    await waitForEnvironmentReady(window);
+    const startupView = await window.webContents.executeJavaScript('window.runBlock4FStartupViewSmoke()', true);
     await waitForBrokerRenderer();
     photoshopClient = new WebSocket(liveLinkConfig.endpoint);
     await new Promise((resolve, reject) => {
@@ -289,22 +342,25 @@ async function runLinkSmokeTest(window) {
     const frameBytes = Buffer.alloc(width * height * 3);
     frameBytes.fill(32);
     const firstAck = await sendSyntheticFrame(photoshopClient, 1, frameBytes, width, height);
-    await window.webContents.executeJavaScript("document.querySelector('#two-button').click()", true);
+    await window.webContents.executeJavaScript("document.querySelector('#view-2d-button').click(); document.querySelector('#two-button').click()", true);
     const viewBeforeSecondFrame = await window.webContents.executeJavaScript(
-      '({ zoom: window.block0Diagnostics.zoom, viewMode: window.block0Diagnostics.viewMode })',
+      '({ zoom: window.block0Diagnostics.zoom, viewMode: window.block0Diagnostics.viewMode, rendererTextureCount: window.block0Diagnostics.rendererMemoryTextures })',
       true
     );
     frameBytes.fill(192);
     const secondAck = await sendSyntheticFrame(photoshopClient, 2, frameBytes, width, height);
     const runtime = await window.webContents.executeJavaScript('window.block1Diagnostics', true);
     const viewAfterSecondFrame = await window.webContents.executeJavaScript(
-      '({ zoom: window.block0Diagnostics.zoom, viewMode: window.block0Diagnostics.viewMode })',
+      '({ zoom: window.block0Diagnostics.zoom, viewMode: window.block0Diagnostics.viewMode, rendererTextureCount: window.block0Diagnostics.rendererMemoryTextures })',
       true
     );
     const liveViewPreserved =
       viewBeforeSecondFrame.zoom === 2 && viewBeforeSecondFrame.viewMode === '200%' &&
       viewAfterSecondFrame.zoom === viewBeforeSecondFrame.zoom &&
       viewAfterSecondFrame.viewMode === viewBeforeSecondFrame.viewMode;
+    const liveTextureCountStable =
+      viewBeforeSecondFrame.rendererTextureCount <= startupView.startup.rendererTextureCount + 1 &&
+      viewAfterSecondFrame.rendererTextureCount === viewBeforeSecondFrame.rendererTextureCount;
 
     const pointer2dSetPromise = waitForClientMessage(
       photoshopClient,
@@ -376,7 +432,7 @@ async function runLinkSmokeTest(window) {
     const sitePointerRuntime = await waitForPointerDiagnostics(window, sitePointerSet.requestId);
     const siteMarkerCameraSmoke = await window.webContents.executeJavaScript('window.runBlock3SiteMarkerCameraSmoke()', true);
     const site3dRuntime = await window.webContents.executeJavaScript('window.block3SiteDiagnostics', true);
-    const missingAnamorphicSmoke = await window.webContents.executeJavaScript('window.runBlock3MissingAnamorphicSmoke()', true);
+    const anamorphic75f = await window.webContents.executeJavaScript('window.runBlock5AAnamorphicSmoke()', true);
     const photoSceneSmoke = await window.webContents.executeJavaScript('window.runBlock4CPhotoSceneSmoke()', true);
     const photoPointerSetPromise = waitForClientMessage(
       photoshopClient,
@@ -424,6 +480,7 @@ async function runLinkSmokeTest(window) {
 
     const broker = liveLinkBroker.getSnapshot();
     const technicalPass =
+      startupView.pass === true &&
       firstAck.receivedWidth === width && firstAck.receivedHeight === height &&
       firstAck.textureWidth === width && firstAck.textureHeight === height &&
       firstAck.receivedBytes === frameBytes.byteLength &&
@@ -438,7 +495,7 @@ async function runLinkSmokeTest(window) {
       runtime.receivedWidth === width && runtime.receivedHeight === height &&
       runtime.textureWidth === width && runtime.textureHeight === height &&
       runtime.framesReceived === 2 && runtime.framesDropped === 0 && runtime.framesReplaced === 1 &&
-      liveViewPreserved &&
+      liveViewPreserved && liveTextureCountStable &&
       pointer2dRequest.command.requestId === pointer2dSet.requestId &&
       pointer2dRequest.canonical.x === pointer2dSet.x && pointer2dRequest.canonical.y === pointer2dSet.y &&
       pointer2dSet.sourceFrameId === 2 && pointer2dSet.documentId === 9001 &&
@@ -466,10 +523,23 @@ async function runLinkSmokeTest(window) {
       siteMarkerCameraSmoke.meshPreserved === true && siteMarkerCameraSmoke.after.visible === true &&
       site3dRuntime.status === 'READY' && site3dRuntime.surfaceSetAvailable === true &&
       site3dRuntime.activeSurfaces.length === 2 && site3dRuntime.activeSurfaces.every((surface) => surface.textureShared) &&
-      missingAnamorphicSmoke.surfaceSetAvailable === false && missingAnamorphicSmoke.activeSurfaceCount === 0 &&
-      missingAnamorphicSmoke.visibleSurfaceCount === 0 && missingAnamorphicSmoke.pointDisabled === true &&
-      missingAnamorphicSmoke.controlsDisabled === true &&
-      missingAnamorphicSmoke.missingMeshes.join(',') === 'LUUX_Front_3Dworld_Anamorphic,ILMIN_Back_3Dworld_Anamorphic' &&
+      anamorphic75f.surfaceSetAvailable === true && anamorphic75f.activeSurfaceCount === 1 &&
+      anamorphic75f.visibleSurfaceCount === 1 && anamorphic75f.visibleSurfaceExact === 'ANAM_SURFACE_FRONT75F' &&
+      anamorphic75f.pointDisabled === true && anamorphic75f.controlsEnabled === true &&
+      anamorphic75f.helperVisibleCount === 0 && anamorphic75f.helperTextureMapCount === 0 &&
+      anamorphic75f.surfaceTextureShared === true && anamorphic75f.cameraFinite === true &&
+      anamorphic75f.cameraQuaternionMatches === true && anamorphic75f.cameraForwardMatches === true &&
+      anamorphic75f.workingCanvasAspectMatches === true && anamorphic75f.freePreviewState === 'FREE_PREVIEW' &&
+      anamorphic75f.baselineVerticalFovMatches === true &&
+      anamorphic75f.editableFovApplied === true && anamorphic75f.editableFovMatches === true &&
+      anamorphic75f.editableFovMode === 'FOV_ADJUSTED' &&
+      anamorphic75f.fovResetReturned === true && anamorphic75f.fovResetMatches === true &&
+      anamorphic75f.freePreviewFovDefault === true && anamorphic75f.freePreviewUpDefault === true &&
+      anamorphic75f.freePreviewAspectUnrestricted === true && anamorphic75f.freePreviewCanvasUnrestricted === true &&
+      anamorphic75f.resetReturned === true && anamorphic75f.resetMode === 'CALIBRATION' &&
+      anamorphic75f.calibrationMatteActive === true && anamorphic75f.calibrationMatteColor === '#20242c' &&
+      anamorphic75f.visualValidationState === 'PASS' && anamorphic75f.missingFamiliesUnavailable === true &&
+      anamorphic75f.contextLossCount === 0 &&
       photoSceneSmoke.allScenesReady === true && photoSceneSmoke.rapidLatestWins === true &&
       photoSceneSmoke.contentAspectExact === true && photoSceneSmoke.outsideContentRejected === true &&
       photoSceneSmoke.stressSwitchCount === 24 && photoSceneSmoke.stressLatestWins === true &&
@@ -493,7 +563,7 @@ async function runLinkSmokeTest(window) {
       locationSmoke.exactReturns === true && locationSmoke.rapidLatestWins === true &&
       locationSmoke.rapidReturn === 'RETURNED' && locationSmoke.directEntryHasNoFakeReturn === true &&
       locationSmoke.finalSiteExact === true && locationSmoke.contextLossCount === 0 &&
-      runtime.rendererTextureCount === 1 && runtime.contextLossCount === 0 &&
+      runtime.rendererTextureCount === viewAfterSecondFrame.rendererTextureCount && runtime.contextLossCount === 0 &&
       runtime.textureGlError === 0 &&
       runtime.centerPixel.slice(0, 3).every((value) => value >= 188 && value <= 196) &&
       broker.address.address === liveLinkConfig.host && broker.address.port === liveLinkConfig.port &&
@@ -506,12 +576,14 @@ async function runLinkSmokeTest(window) {
       externalNetworkRequests,
       loopbackRequests,
       broker,
+      startupView,
       firstAck,
       secondAck,
       thirdAck,
       viewBeforeSecondFrame,
       viewAfterSecondFrame,
       liveViewPreserved,
+      liveTextureCountStable,
       pointer2d: { request: pointer2dRequest, set: pointer2dSet, ack: pointer2dAck, runtime: pointer2dRuntime },
       pointer3d: { request: pointer3dRequest, set: pointer3dSet, ack: pointer3dAck, runtime: pointer3dRuntime },
       markerCameraSmoke,
@@ -521,7 +593,7 @@ async function runLinkSmokeTest(window) {
       sitePointer: { request: sitePointerRequest, set: sitePointerSet, ack: sitePointerAck, runtime: sitePointerRuntime },
       siteMarkerCameraSmoke,
       site3dRuntime,
-      missingAnamorphicSmoke,
+      anamorphic75f,
       photoSceneSmoke,
       photoPointer: { request: photoPointerRequest, set: photoPointerSet, ack: photoPointerAck, runtime: photoPointerRuntime },
       photoRuntime,

@@ -14,6 +14,7 @@ const coordinateSource = await readFile(path.join(appRoot, 'src', 'canonical-coo
 const pointerQueueSource = await readFile(path.join(appRoot, 'src', 'pointer-command-queue.js'), 'utf8');
 const siteProfileSource = await readFile(path.join(appRoot, 'src', 'site-scene-profile.js'), 'utf8');
 const siteCalibrationSource = await readFile(path.join(appRoot, 'src', 'site-calibration-profile.js'), 'utf8');
+const anamorphicCalibrationSource = await readFile(path.join(appRoot, 'src', 'anamorphic-calibration-profile.js'), 'utf8');
 const siteEnvironmentSource = await readFile(path.join(appRoot, 'src', 'site-environment-profile.js'), 'utf8');
 const photoRuntimeSource = await readFile(path.join(appRoot, 'src', 'photo-scene-runtime.js'), 'utf8');
 const htmlSource = await readFile(path.join(appRoot, 'src', 'index.html'), 'utf8');
@@ -50,7 +51,7 @@ assert(!/unpkg\.com|cdn\.jsdelivr\.net/i.test(`${rendererSource}\n${htmlSource}\
 assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
 assert(!/_TestSource/i.test(`${mainSource}\n${rendererSource}\n${htmlSource}`), 'Runtime references _TestSource.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.4.0-block4e', 'Package version must identify the Block 4E checkpoint.');
+assert(packageJson.version === '0.5.0-block5a', 'Package version must identify the Block 5A calibration checkpoint.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
@@ -101,16 +102,42 @@ assert(/new GLTFLoader/.test(rendererSource) && /Object\.entries\(SITE_SCENE_PRO
 assert(/intersectObjects\(pointerMeshes, false\)/.test(rendererSource), 'SITE 3D must raycast only registered active signage surfaces.');
 assert(/normalizedPointToCanonical\(hit\.uv\.x, hit\.uv\.y/.test(rendererSource), 'GLB ordinary planar UV hits must map through the canonical adapter.');
 assert(/id="view-site-3d-button"/.test(htmlSource) && /id="site-mapping-select"/.test(htmlSource), 'Renderer must expose SITE 3D and NORMAL/ANAMORPHIC controls.');
+assert(/const DEFAULT_ACTIVE_VIEW = 'site-3d'/.test(rendererSource) && /activeView:\s*DEFAULT_ACTIVE_VIEW/.test(rendererSource), 'Block 4F must default the runtime to SITE 3D.');
+assert(/id="view-site-3d-button" class="view-button active"/.test(htmlSource) && !/id="view-2d-button" class="view-button active"/.test(htmlSource), 'Block 4F HTML must present SITE 3D as the startup view.');
+assert(/runBlock4FStartupViewSmoke/.test(rendererSource) && /startupView\.pass === true/.test(mainSource), 'Runtime smoke must validate SITE 3D startup, 2D access, and SITE 3D re-entry.');
 assert(/id="legacy-camera-lock-button"[^>]*aria-pressed="true"[^>]*hidden/.test(htmlSource), 'Legacy camera lock control must exist and default to locked/hidden.');
 assert(/function isLegacyCameraContext\(\)/.test(rendererSource) && /state\.site\.world === 'legacy2d'/.test(rendererSource), 'Camera lock must be scoped to Legacy 2D World.');
 assert(/enteringLegacy[\s\S]*state\.site\.legacyCameraLocked = true/.test(rendererSource), 'Entering Legacy 2D World must restore the default camera lock.');
 assert(/siteSceneSelect\.addEventListener\('change',[\s\S]*lockLegacyCamera\(\)/.test(rendererSource), 'Every Legacy scene change must restore the camera lock.');
 assert(/!legacyContext \|\| !state\.site\.legacyCameraLocked/.test(rendererSource), 'Legacy OrbitControls must only enable after explicit unlock.');
 assert(/toggleLegacyCameraLock/.test(rendererSource) && /cameraControlsEnabled: controlsSite\.enabled/.test(rendererSource), 'Legacy camera lock must be user-toggleable and observable in diagnostics.');
-assert(/LUUX_Front_3Dworld_Anamorphic/.test(siteProfileSource) && /ILMIN_Back_3Dworld_Anamorphic/.test(siteProfileSource), 'SceneProfile must reserve the named 3D World anamorphic meshes.');
+assert(/ANAM_SURFACE_FRONT75F/.test(anamorphicCalibrationSource) &&
+  /selector:\s*Object\.freeze\(\{[\s\S]*exactName:\s*ANAMORPHIC_FRONT_75F_PROFILE\.surface\.surfaceNode/.test(siteProfileSource),
+  'SceneProfile must use the exact 75F surface selector from the calibration profile.');
 assert(/LUUX_Front_3Dworld_Basic/.test(siteProfileSource) && /ILMIN_Back_3Dworld_Basic/.test(siteProfileSource), 'SceneProfile must select only the named 3D World basic-mapping meshes.');
 assert(/anamorphicScenes:\s*null/.test(siteProfileSource), 'Legacy anamorphic scene meshes must remain unguessed and unavailable.');
-assert(/runBlock3MissingAnamorphicSmoke/.test(rendererSource) && /visibleSurfaceCount/.test(rendererSource), 'Missing anamorphic surfaces must have an explicit safety smoke test.');
+assert(/runBlock5AAnamorphicSmoke/.test(rendererSource) && /missingFamiliesUnavailable/.test(rendererSource), 'Block 5A must expose an explicit 75F and missing-family safety smoke test.');
+assert(/Signage MockUp Generator/.test(htmlSource) && /LUNARGRAPHICS/.test(htmlSource), 'Block 5A must expose the user-visible product name and LUNARGRAPHICS branding.');
+assert(/HORIZONTAL_3DS_MAX_DEFAULT_CAMERA_USER_CONFIRMED/.test(anamorphicCalibrationSource) &&
+  /runtimeFov:\s*19\.778/.test(anamorphicCalibrationSource) &&
+  /id="anamorphic-fov-input"/.test(htmlSource) &&
+  /applyAnamorphicFovValue/.test(rendererSource),
+  '75F must use the confirmed Max vertical FOV and expose a scoped editable FOV control.');
+assert(/calibrationStatus:\s*'USER_VALIDATED'/.test(anamorphicCalibrationSource) &&
+  /visualValidationState:\s*'PASS'/.test(anamorphicCalibrationSource) &&
+  /validationDate:\s*'2026-09-11'/.test(anamorphicCalibrationSource),
+  'The 75F calibration profile must record the explicit user visual validation.');
+assert(/function isAnamorphicCalibrationFramingActive/.test(rendererSource) &&
+  /freePreviewFovDefault/.test(rendererSource) &&
+  /freePreviewCanvasUnrestricted/.test(rendererSource),
+  'Leaving 75F calibration must restore default camera framing and release the canvas aspect restriction.');
+assert(/ANAMORPHIC_CALIBRATION_MATTE_COLOR\s*=\s*0x20242c/.test(rendererSource) &&
+  /anamorphicCalibrationActive\s*\?\s*ANAMORPHIC_CALIBRATION_MATTE_COLOR\s*:\s*siteClearColor/.test(rendererSource) &&
+  /renderer\.setScissorTest\(true\);[\s\S]*renderer\.setClearColor\(siteClearColor, 1\);[\s\S]*renderer\.clear\(true, true, true\);[\s\S]*renderer\.render\(sceneSite, cameraSite\)/.test(rendererSource),
+  '75F calibration must render a dark matte only outside the contained working canvas.');
+assert(/DEFERRED_CANONICAL_INVERSE_MAPPING_UNPROVEN/.test(anamorphicCalibrationSource) &&
+  /selectedSiteContract\(\)\.pointEnabled !== false/.test(rendererSource),
+  '75F POINT must remain disabled until canonical inverse mapping is proven.');
 assert(/new THREE\.Texture\(image\)/.test(rendererSource) && /scenePhoto/.test(rendererSource), 'Block 4C must render the selected photo through an independent Three.js background pass.');
 assert(/renderer\.render\(scenePhoto, cameraPhoto\)[\s\S]*renderer\.clearDepth\(\)[\s\S]*renderer\.render\(sceneSite, cameraSite\)/.test(rendererSource), 'Block 4C layer order must be photo, then signage overlay.');
 assert(/clientPointToContentNdc/.test(rendererSource) && /if \(state\.activeView === 'site-3d' && isPhotoSceneContext\(\) && !photoNdc\) return null/.test(rendererSource), 'Photo POINT must reject input outside the centered 3:2 content viewport.');
