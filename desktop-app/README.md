@@ -1,4 +1,4 @@
-# Desktop App — Block 5A FRONT 75F Calibration Checkpoint
+# Desktop App — Block 5B BACK Calibration Checkpoint
 
 Block 0 proves that a 4728 x 5760-class source can remain full resolution from
 disk decode through a Three.js GPU texture in both development and a Windows
@@ -23,6 +23,7 @@ through `site-scene-profile.js`.
 ```text
 3D WORLD / NORMAL:      LUUX_Front_3Dworld_Basic + ILMIN_Back_3Dworld_Basic
 3D WORLD / ANAMORPHIC:  FRONT 75F / ANAM_SURFACE_FRONT75F
+                         BACK / ANAM_SURFACE_BACK
 LEGACY 2D WORLD:        Front / Front_Sweet / Back / Night
 ```
 
@@ -91,6 +92,14 @@ disabled under `DEFERRED_CANONICAL_INVERSE_MAPPING_UNPROVEN`. Corrected framing,
 roll, reset behavior, unrestricted FREE_PREVIEW, and matte presentation were
 user-validated on 2026-09-11.
 
+Block 5B loads a fourth Site asset containing only the BACK anamorphic surface
+  and its four calibration helpers. BACK uses corrected candidate vertical FOV
+  `18.374°` and projection aspect `0.546875`, matching the centered `2100×3840`
+  calibration canvas. Switching FRONT 75F/BACK changes only
+  the selected family asset, surface, camera, and working canvas. BACK POINT stays
+  disabled until its inverse canonical mapping is proven. Automated technical
+  validation and corrected BACK visual calibration are user-approved and CLOSED.
+
 ## Commands
 
 ```powershell
@@ -105,6 +114,7 @@ npm run test:block4d
 npm run test:block4e
 npm run test:block4f
 npm run test:block5a
+npm run test:block5b
 npm run test:runtime
 npm run test:link
 npm run dist

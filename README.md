@@ -94,8 +94,19 @@ working canvas. In calibration mode only, a `#20242c` exterior matte darkens
 the area outside that working canvas; FREE_PREVIEW continues to use the full
 viewer without the matte. Camera helpers remain hidden and never receive the
 Photoshop texture or POINT ownership. 75F POINT remains deliberately deferred
-until its canonical inverse mapping is proven. BACK, ILMIN, and FRONT 90F
-remain NOT AVAILABLE. The user validated corrected framing, roll, calibration
+until its canonical inverse mapping is proven. ILMIN and FRONT 90F remain NOT
+AVAILABLE. The user validated corrected framing, roll, calibration
 reset, unrestricted FREE_PREVIEW, and matte presentation on 2026-09-11. See
 [Block 5A Validation](docs/BLOCK-5A-VALIDATION.md) and
 [Block 5A Handoff](docs/BLOCK-5A-HANDOFF.md).
+
+Block 5B adds the second independent family, `ANAMORPHIC_BACK`, from the pinned
+BACK-only `Previz_3DWorld_Anamorphic_Back_v01.glb`. Its exact
+`ANAM_SURFACE_BACK` surface is isolated from FRONT 75F, while its four CALCAM
+helpers remain hidden, untextured, and excluded from POINT. The helper-derived
+  camera uses corrected candidate vertical FOV `18.374°` and projection aspect
+  `0.546875`, matching the `2100×3840` calibration frame. Automated extraction
+  and runtime wiring are complete. The user approved the corrected BACK
+  FOV/aspect/roll calibration on 2026-09-11, closing Block 5B. See
+  [Block 5B Validation](docs/BLOCK-5B-VALIDATION.md)
+and [Block 5B Handoff](docs/BLOCK-5B-HANDOFF.md).

@@ -1,4 +1,4 @@
-import { ANAMORPHIC_FRONT_75F_PROFILE } from './anamorphic-calibration-profile.js';
+import { ANAMORPHIC_BACK_PROFILE, ANAMORPHIC_FRONT_75F_PROFILE } from './anamorphic-calibration-profile.js';
 
 export const SITE_ASSETS = Object.freeze({
   world3d: Object.freeze({
@@ -24,6 +24,14 @@ export const SITE_ASSETS = Object.freeze({
     sourceKind: 'project-anamorphic-calibration-asset',
     byteLength: ANAMORPHIC_FRONT_75F_PROFILE.asset.observedBytes,
     sha256: ANAMORPHIC_FRONT_75F_PROFILE.asset.observedSha256
+  }),
+  anamorphicBack: Object.freeze({
+    id: 'anamorphicBack',
+    fileName: ANAMORPHIC_BACK_PROFILE.asset.fileName,
+    relativeUrl: ANAMORPHIC_BACK_PROFILE.asset.runtimeUrl,
+    sourceKind: 'project-anamorphic-calibration-asset',
+    byteLength: ANAMORPHIC_BACK_PROFILE.asset.observedBytes,
+    sha256: ANAMORPHIC_BACK_PROFILE.asset.observedSha256
   })
 });
 
@@ -56,19 +64,24 @@ function legacySurface(role, prefixIncludes, suffixIncludes, expectedNode) {
   return surface(role, expectedNode, { prefixIncludes, suffixIncludes, excludeIncludes: 'Anamorphic' });
 }
 
-const anamorphicFront75fSurface = Object.freeze({
-  role: ANAMORPHIC_FRONT_75F_PROFILE.surface.surfaceRole,
-  selector: Object.freeze({
-    exactName: ANAMORPHIC_FRONT_75F_PROFILE.surface.surfaceNode,
-    prefixIncludes: null,
-    suffixIncludes: null,
-    excludeIncludes: null
-  }),
-  expectedNode: ANAMORPHIC_FRONT_75F_PROFILE.surface.surfaceNode,
-  displayMapping: Object.freeze({ kind: 'preserve-authored-uv', uvChannel: 0, remap: false }),
-  hitMapping: null,
-  pointEnabled: false
-});
+function anamorphicSurface(profile) {
+  return Object.freeze({
+    role: profile.surface.surfaceRole,
+    selector: Object.freeze({
+      exactName: profile.surface.surfaceNode,
+      prefixIncludes: null,
+      suffixIncludes: null,
+      excludeIncludes: null
+    }),
+    expectedNode: profile.surface.surfaceNode,
+    displayMapping: Object.freeze({ kind: 'preserve-authored-uv', uvChannel: 0, remap: false }),
+    hitMapping: null,
+    pointEnabled: false
+  });
+}
+
+const anamorphicFront75fSurface = anamorphicSurface(ANAMORPHIC_FRONT_75F_PROFILE);
+const anamorphicBackSurface = anamorphicSurface(ANAMORPHIC_BACK_PROFILE);
 
 const legacyCameras = Object.freeze({
   front: Object.freeze({ type: 'PerspectiveCamera', fov: 52.4, near: 0.1, far: 10000, position: Object.freeze([-8.587, 1.4, 12.33]), eulerXyzDegrees: Object.freeze([16.5, -39.5, 10.3]), target: null }),
@@ -86,7 +99,7 @@ export const SITE_SCENE_PROFILE = Object.freeze({
       id: 'anamorphic',
       label: 'ANAMORPHIC',
       available: true,
-      availableFamilies: Object.freeze([ANAMORPHIC_FRONT_75F_PROFILE.familyId])
+      availableFamilies: Object.freeze([ANAMORPHIC_FRONT_75F_PROFILE.familyId, ANAMORPHIC_BACK_PROFILE.familyId])
     })
   }),
   worlds: Object.freeze({
@@ -98,7 +111,7 @@ export const SITE_SCENE_PROFILE = Object.freeze({
         surface('LUUX_Front_3Dworld_Basic', 'LUUX_Front_3Dworld_Basic', { exactName: 'LUUX_Front_3Dworld_Basic' }),
         surface('ILMIN_Back_3Dworld_Basic', 'ILMIN_Back_3Dworld_Basic', { exactName: 'ILMIN_Back_3Dworld_Basic' })
       ]),
-      anamorphicSurfaces: Object.freeze([anamorphicFront75fSurface]),
+      anamorphicSurfaces: Object.freeze([anamorphicFront75fSurface, anamorphicBackSurface]),
       anamorphicFamilies: Object.freeze({
         front75f: Object.freeze({
           id: 'front75f',
@@ -110,7 +123,16 @@ export const SITE_SCENE_PROFILE = Object.freeze({
           workingResolution: ANAMORPHIC_FRONT_75F_PROFILE.workingResolution,
           available: true
         }),
-        back: Object.freeze({ id: 'back', label: 'BACK - NOT AVAILABLE', familyId: 'ANAMORPHIC_BACK', available: false }),
+        back: Object.freeze({
+          id: 'back',
+          label: 'BACK',
+          familyId: ANAMORPHIC_BACK_PROFILE.familyId,
+          assetId: 'anamorphicBack',
+          surfaces: Object.freeze([anamorphicBackSurface]),
+          cameraProfile: ANAMORPHIC_BACK_PROFILE.camera,
+          workingResolution: ANAMORPHIC_BACK_PROFILE.workingResolution,
+          available: true
+        }),
         ilmin: Object.freeze({ id: 'ilmin', label: 'ILMIN - NOT AVAILABLE', familyId: 'ANAMORPHIC_ILMIN_AQUBE', available: false }),
         front90f: Object.freeze({ id: 'front90f', label: 'FRONT 90F - NOT AVAILABLE', familyId: 'ANAMORPHIC_FRONT_90F', available: false })
       })

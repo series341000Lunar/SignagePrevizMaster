@@ -51,7 +51,7 @@ assert(!/unpkg\.com|cdn\.jsdelivr\.net/i.test(`${rendererSource}\n${htmlSource}\
 assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
 assert(!/_TestSource/i.test(`${mainSource}\n${rendererSource}\n${htmlSource}`), 'Runtime references _TestSource.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.5.0-block5a', 'Package version must identify the Block 5A calibration checkpoint.');
+assert(packageJson.version === '0.5.1-block5b', 'Package version must identify the Block 5B calibration checkpoint.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
@@ -112,11 +112,17 @@ assert(/siteSceneSelect\.addEventListener\('change',[\s\S]*lockLegacyCamera\(\)/
 assert(/!legacyContext \|\| !state\.site\.legacyCameraLocked/.test(rendererSource), 'Legacy OrbitControls must only enable after explicit unlock.');
 assert(/toggleLegacyCameraLock/.test(rendererSource) && /cameraControlsEnabled: controlsSite\.enabled/.test(rendererSource), 'Legacy camera lock must be user-toggleable and observable in diagnostics.');
 assert(/ANAM_SURFACE_FRONT75F/.test(anamorphicCalibrationSource) &&
-  /selector:\s*Object\.freeze\(\{[\s\S]*exactName:\s*ANAMORPHIC_FRONT_75F_PROFILE\.surface\.surfaceNode/.test(siteProfileSource),
+  /function anamorphicSurface\(profile\)/.test(siteProfileSource) &&
+  /exactName:\s*profile\.surface\.surfaceNode/.test(siteProfileSource) &&
+  /anamorphicSurface\(ANAMORPHIC_FRONT_75F_PROFILE\)/.test(siteProfileSource),
   'SceneProfile must use the exact 75F surface selector from the calibration profile.');
 assert(/LUUX_Front_3Dworld_Basic/.test(siteProfileSource) && /ILMIN_Back_3Dworld_Basic/.test(siteProfileSource), 'SceneProfile must select only the named 3D World basic-mapping meshes.');
 assert(/anamorphicScenes:\s*null/.test(siteProfileSource), 'Legacy anamorphic scene meshes must remain unguessed and unavailable.');
 assert(/runBlock5AAnamorphicSmoke/.test(rendererSource) && /missingFamiliesUnavailable/.test(rendererSource), 'Block 5A must expose an explicit 75F and missing-family safety smoke test.');
+assert(/runBlock5BBackSmoke/.test(rendererSource) && /ANAM_SURFACE_BACK/.test(anamorphicCalibrationSource) &&
+  /anamorphicSurface\(ANAMORPHIC_BACK_PROFILE\)/.test(siteProfileSource),
+  'Block 5B must expose an explicit BACK family smoke and exact surface contract.');
+assert(/cameraProfile\.runtimeAspect/.test(rendererSource) && /projectionAndWorkingAspectSeparated/.test(rendererSource), 'Anamorphic camera projection aspect must remain independent from the working canvas aspect.');
 assert(/Signage MockUp Generator/.test(htmlSource) && /LUNARGRAPHICS/.test(htmlSource), 'Block 5A must expose the user-visible product name and LUNARGRAPHICS branding.');
 assert(/HORIZONTAL_3DS_MAX_DEFAULT_CAMERA_USER_CONFIRMED/.test(anamorphicCalibrationSource) &&
   /runtimeFov:\s*19\.778/.test(anamorphicCalibrationSource) &&

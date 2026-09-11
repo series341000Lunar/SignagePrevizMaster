@@ -90,6 +90,28 @@ async function waitForEnvironmentReady(window) {
   throw new Error('Timed out waiting for Environment scene readiness.');
 }
 
+function anamorphicSmokePass(result, familyId, surfaceName, projectionSeparated, visualValidationState) {
+  return result.surfaceSetAvailable === true && result.activeSurfaceCount === 1 &&
+    result.visibleSurfaceCount === 1 && result.visibleSurfaceExact === surfaceName &&
+    result.expectedSurfaceExact === surfaceName && result.familyId === familyId &&
+    result.inactiveAnamorphicVisibleCount === 0 && result.pointDisabled === true &&
+    result.controlsEnabled === true && result.helperVisibleCount === 0 &&
+    result.helperTextureMapCount === 0 && result.surfaceTextureShared === true &&
+    result.cameraFinite === true && result.cameraQuaternionMatches === true &&
+    result.cameraForwardMatches === true && result.runtimeProjectionAspectMatches === true &&
+    result.projectionAndWorkingAspectSeparated === projectionSeparated &&
+    result.workingCanvasAspectMatches === true && result.baselineVerticalFovMatches === true &&
+    result.editableFovApplied === true && result.editableFovMatches === true &&
+    result.editableFovMode === 'FOV_ADJUSTED' && result.fovResetReturned === true &&
+    result.fovResetMatches === true && result.freePreviewState === 'FREE_PREVIEW' &&
+    result.freePreviewFovDefault === true && result.freePreviewUpDefault === true &&
+    result.freePreviewAspectUnrestricted === true && result.freePreviewCanvasUnrestricted === true &&
+    result.resetReturned === true && result.resetMode === 'CALIBRATION' &&
+    result.calibrationMatteActive === true && result.calibrationMatteColor === '#20242c' &&
+    result.visualValidationState === visualValidationState && result.missingFamiliesUnavailable === true &&
+    result.contextLossCount === 0;
+}
+
 async function runSmokeTest(window) {
   const reportPath = resolveArgumentPath(reportArgument, 'runtime.json');
   const screenshotPath = resolveArgumentPath(screenshotArgument, 'runtime.png');
@@ -104,6 +126,7 @@ async function runSmokeTest(window) {
     const environment = await window.webContents.executeJavaScript('window.runBlock4DEnvironmentSmoke()', true);
     const locations = await window.webContents.executeJavaScript('window.runBlock4ELocationSmoke()', true);
     const anamorphic75f = await window.webContents.executeJavaScript('window.runBlock5AAnamorphicSmoke()', true);
+    const anamorphicBack = await window.webContents.executeJavaScript('window.runBlock5BBackSmoke()', true);
     const anamorphicScreenshotState = await window.webContents.executeJavaScript(
       `(() => {
         const world = document.querySelector('#site-world-select');
@@ -112,7 +135,10 @@ async function runSmokeTest(window) {
         world.dispatchEvent(new Event('change'));
         mapping.value = 'anamorphic';
         mapping.dispatchEvent(new Event('change'));
-        return window.block5AAnamorphicDiagnostics;
+        const family = document.querySelector('#site-anamorphic-family-select');
+        family.value = 'back';
+        family.dispatchEvent(new Event('change'));
+        return window.block5BBackDiagnostics;
       })()`,
       true
     );
@@ -153,26 +179,12 @@ async function runSmokeTest(window) {
       locations.exactReturns === true && locations.rapidLatestWins === true &&
       locations.rapidReturn === 'RETURNED' && locations.directEntryHasNoFakeReturn === true &&
       locations.finalSiteExact === true && locations.contextLossCount === 0 &&
-      anamorphic75f.surfaceSetAvailable === true && anamorphic75f.activeSurfaceCount === 1 &&
-      anamorphic75f.visibleSurfaceCount === 1 && anamorphic75f.visibleSurfaceExact === 'ANAM_SURFACE_FRONT75F' &&
-      anamorphic75f.pointDisabled === true && anamorphic75f.controlsEnabled === true &&
-      anamorphic75f.helperVisibleCount === 0 && anamorphic75f.helperTextureMapCount === 0 &&
-      anamorphic75f.surfaceTextureShared === true && anamorphic75f.cameraFinite === true &&
-      anamorphic75f.cameraQuaternionMatches === true && anamorphic75f.cameraForwardMatches === true &&
-      anamorphic75f.workingCanvasAspectMatches === true && anamorphic75f.freePreviewState === 'FREE_PREVIEW' &&
-      anamorphic75f.baselineVerticalFovMatches === true &&
-      anamorphic75f.editableFovApplied === true && anamorphic75f.editableFovMatches === true &&
-      anamorphic75f.editableFovMode === 'FOV_ADJUSTED' &&
-      anamorphic75f.fovResetReturned === true && anamorphic75f.fovResetMatches === true &&
-      anamorphic75f.freePreviewFovDefault === true && anamorphic75f.freePreviewUpDefault === true &&
-      anamorphic75f.freePreviewAspectUnrestricted === true && anamorphic75f.freePreviewCanvasUnrestricted === true &&
-      anamorphic75f.resetReturned === true && anamorphic75f.resetMode === 'CALIBRATION' &&
-      anamorphic75f.calibrationMatteActive === true && anamorphic75f.calibrationMatteColor === '#20242c' &&
-      anamorphic75f.visualValidationState === 'PASS' && anamorphic75f.missingFamiliesUnavailable === true &&
-      anamorphic75f.contextLossCount === 0 &&
+      anamorphicSmokePass(anamorphic75f, 'ANAMORPHIC_FRONT_75F', 'ANAM_SURFACE_FRONT75F', false, 'PASS') &&
+      anamorphicSmokePass(anamorphicBack, 'ANAMORPHIC_BACK', 'ANAM_SURFACE_BACK', false, 'PASS') &&
       anamorphicScreenshotState.mappingMode === 'anamorphic' &&
-      anamorphicScreenshotState.anamorphicFamily === 'ANAMORPHIC_FRONT_75F' &&
+      anamorphicScreenshotState.anamorphicFamily === 'ANAMORPHIC_BACK' &&
       anamorphicScreenshotState.activeSurfaces.length === 1 &&
+      anamorphicScreenshotState.activeSurfaces[0].meshName === 'ANAM_SURFACE_BACK' &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -194,6 +206,7 @@ async function runSmokeTest(window) {
       environment,
       locations,
       anamorphic75f,
+      anamorphicBack,
       anamorphicScreenshotState,
       screenshotPath
     };
@@ -433,6 +446,7 @@ async function runLinkSmokeTest(window) {
     const siteMarkerCameraSmoke = await window.webContents.executeJavaScript('window.runBlock3SiteMarkerCameraSmoke()', true);
     const site3dRuntime = await window.webContents.executeJavaScript('window.block3SiteDiagnostics', true);
     const anamorphic75f = await window.webContents.executeJavaScript('window.runBlock5AAnamorphicSmoke()', true);
+    const anamorphicBack = await window.webContents.executeJavaScript('window.runBlock5BBackSmoke()', true);
     const photoSceneSmoke = await window.webContents.executeJavaScript('window.runBlock4CPhotoSceneSmoke()', true);
     const photoPointerSetPromise = waitForClientMessage(
       photoshopClient,
@@ -523,23 +537,8 @@ async function runLinkSmokeTest(window) {
       siteMarkerCameraSmoke.meshPreserved === true && siteMarkerCameraSmoke.after.visible === true &&
       site3dRuntime.status === 'READY' && site3dRuntime.surfaceSetAvailable === true &&
       site3dRuntime.activeSurfaces.length === 2 && site3dRuntime.activeSurfaces.every((surface) => surface.textureShared) &&
-      anamorphic75f.surfaceSetAvailable === true && anamorphic75f.activeSurfaceCount === 1 &&
-      anamorphic75f.visibleSurfaceCount === 1 && anamorphic75f.visibleSurfaceExact === 'ANAM_SURFACE_FRONT75F' &&
-      anamorphic75f.pointDisabled === true && anamorphic75f.controlsEnabled === true &&
-      anamorphic75f.helperVisibleCount === 0 && anamorphic75f.helperTextureMapCount === 0 &&
-      anamorphic75f.surfaceTextureShared === true && anamorphic75f.cameraFinite === true &&
-      anamorphic75f.cameraQuaternionMatches === true && anamorphic75f.cameraForwardMatches === true &&
-      anamorphic75f.workingCanvasAspectMatches === true && anamorphic75f.freePreviewState === 'FREE_PREVIEW' &&
-      anamorphic75f.baselineVerticalFovMatches === true &&
-      anamorphic75f.editableFovApplied === true && anamorphic75f.editableFovMatches === true &&
-      anamorphic75f.editableFovMode === 'FOV_ADJUSTED' &&
-      anamorphic75f.fovResetReturned === true && anamorphic75f.fovResetMatches === true &&
-      anamorphic75f.freePreviewFovDefault === true && anamorphic75f.freePreviewUpDefault === true &&
-      anamorphic75f.freePreviewAspectUnrestricted === true && anamorphic75f.freePreviewCanvasUnrestricted === true &&
-      anamorphic75f.resetReturned === true && anamorphic75f.resetMode === 'CALIBRATION' &&
-      anamorphic75f.calibrationMatteActive === true && anamorphic75f.calibrationMatteColor === '#20242c' &&
-      anamorphic75f.visualValidationState === 'PASS' && anamorphic75f.missingFamiliesUnavailable === true &&
-      anamorphic75f.contextLossCount === 0 &&
+      anamorphicSmokePass(anamorphic75f, 'ANAMORPHIC_FRONT_75F', 'ANAM_SURFACE_FRONT75F', false, 'PASS') &&
+      anamorphicSmokePass(anamorphicBack, 'ANAMORPHIC_BACK', 'ANAM_SURFACE_BACK', false, 'PASS') &&
       photoSceneSmoke.allScenesReady === true && photoSceneSmoke.rapidLatestWins === true &&
       photoSceneSmoke.contentAspectExact === true && photoSceneSmoke.outsideContentRejected === true &&
       photoSceneSmoke.stressSwitchCount === 24 && photoSceneSmoke.stressLatestWins === true &&
@@ -594,6 +593,7 @@ async function runLinkSmokeTest(window) {
       siteMarkerCameraSmoke,
       site3dRuntime,
       anamorphic75f,
+      anamorphicBack,
       photoSceneSmoke,
       photoPointer: { request: photoPointerRequest, set: photoPointerSet, ack: photoPointerAck, runtime: photoPointerRuntime },
       photoRuntime,

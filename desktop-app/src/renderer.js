@@ -35,7 +35,7 @@ import {
 } from './photo-scene-runtime.js';
 import { SITE_SCENE_PROFILE, resolveSurfaceSet } from './site-scene-profile.js';
 import { SITE_ENVIRONMENT_PROFILE } from './site-environment-profile.js';
-import { ANAMORPHIC_FRONT_75F_PROFILE, ANAMORPHIC_FAMILY_AVAILABILITY } from './anamorphic-calibration-profile.js';
+import { ANAMORPHIC_FAMILY_AVAILABILITY, ANAMORPHIC_FAMILY_IDS } from './anamorphic-calibration-profile.js';
 
 const canvas = document.querySelector('#three-canvas');
 const viewer = document.querySelector('#viewer');
@@ -150,6 +150,7 @@ const controls3d = new OrbitControls(camera3d, canvas);
 const controlsSite = new OrbitControls(cameraSite, canvas);
 const CAMERA_RUNTIME_POSITION_EPSILON = 1e-9;
 const CAMERA_RUNTIME_ROTATION_EPSILON = 1e-7;
+const CAMERA_FORWARD_ANGLE_EPSILON = 2e-7;
 const ANAMORPHIC_CALIBRATION_MATTE_COLOR = 0x20242c;
 const ANAMORPHIC_CALIBRATION_MATTE_HEX = '#20242c';
 
@@ -686,7 +687,7 @@ function resizeRenderer() {
   camera3d.updateProjectionMatrix();
   const legacyRecord = currentLegacyCameraRecord();
   cameraSite.aspect = isAnamorphicCalibrationFramingActive()
-    ? currentAnamorphicFamily().workingResolution.aspect
+    ? currentAnamorphicFamily().cameraProfile.runtimeAspect
     : (isLegacyCameraContext() && legacyRecord ? legacyRecord.currentValues.aspect : width / height);
   cameraSite.updateProjectionMatrix();
   if (state.activeView === '2d' && state.viewMode === 'fit' && state.asset) applyFit();
@@ -811,6 +812,11 @@ function currentAnamorphicFamily() {
   return SITE_SCENE_PROFILE.worlds.world3d.anamorphicFamilies[state.site.anamorphicFamily] ?? null;
 }
 
+function anamorphicFamilyForAsset(assetId) {
+  return Object.values(SITE_SCENE_PROFILE.worlds.world3d.anamorphicFamilies)
+    .find((family) => family.available && family.assetId === assetId) ?? null;
+}
+
 function isAnamorphicCalibrationContext() {
   return state.activeView === 'site-3d' && state.site.world === 'world3d' &&
     state.site.mappingMode === 'anamorphic' && currentAnamorphicFamily()?.available === true;
@@ -833,9 +839,10 @@ function syncAnamorphicControls() {
   anamorphicCameraResetButton.disabled = !isAnamorphicCalibrationContext() || !state.site.surfaceSetAvailable;
   anamorphicFovControl.hidden = !isAnamorphicCalibrationFramingActive();
   anamorphicFovInput.disabled = !isAnamorphicCalibrationFramingActive() || !state.site.surfaceSetAvailable;
+  const calibrationLabel = currentAnamorphicFamily()?.label ?? 'ANAMORPHIC';
   anamorphicCameraResetButton.textContent = state.site.anamorphicCameraMode === 'CALIBRATION'
-    ? '75F CALIBRATION'
-    : 'RETURN TO 75F CALIBRATION';
+    ? `${calibrationLabel} CALIBRATION`
+    : `RETURN TO ${calibrationLabel} CALIBRATION`;
   anamorphicCameraResetButton.classList.toggle('locked', state.site.anamorphicCameraMode === 'CALIBRATION');
   anamorphicCameraResetButton.classList.toggle('unlocked', state.site.anamorphicCameraMode !== 'CALIBRATION');
 }
@@ -854,7 +861,7 @@ function applyAnamorphicCalibrationCamera() {
   const profile = currentAnamorphicFamily().cameraProfile;
   cameraSite.fov = profile.runtimeFov;
   anamorphicFovInput.value = String(profile.runtimeFov);
-  cameraSite.aspect = profile.aspectUsed;
+  cameraSite.aspect = profile.runtimeAspect;
   cameraSite.near = profile.near;
   cameraSite.far = profile.far;
   cameraSite.zoom = 1;
@@ -1295,11 +1302,11 @@ async function loadSiteScene() {
         state.site.meshesByWorld[assetId].push(child);
         const materials = Array.isArray(child.material) ? child.material : [child.material];
         for (const material of materials) if (material) oldMaterials.add(material);
-        const productionHelper = assetId === 'anamorphicFront75f' &&
-          child.name !== ANAMORPHIC_FRONT_75F_PROFILE.surface.surfaceNode;
+        const anamorphicFamily = anamorphicFamilyForAsset(assetId);
+        const productionHelper = Boolean(anamorphicFamily) &&
+          !anamorphicFamily.surfaces.some((surface) => surface.expectedNode === child.name);
         child.userData.productionHelper = productionHelper;
-        child.userData.photoshopPointTarget = !productionHelper &&
-          assetId !== 'anamorphicFront75f';
+        child.userData.photoshopPointTarget = !productionHelper && !anamorphicFamily;
         child.material = new THREE.MeshBasicMaterial({
           map: productionHelper ? null : state.texture,
           color: 0xffffff,
@@ -2114,14 +2121,17 @@ function updateDiagnostics() {
       anamorphicWorkingResolution: isAnamorphicCalibrationFramingActive()
         ? { ...currentAnamorphicFamily().workingResolution }
         : null,
+      anamorphicProjectionAspect: isAnamorphicCalibrationFramingActive()
+        ? currentAnamorphicFamily().cameraProfile.runtimeAspect
+        : null,
       anamorphicCalibrationMatte: {
         active: isAnamorphicCalibrationFramingActive(),
         color: ANAMORPHIC_CALIBRATION_MATTE_HEX,
         outsideWorkingCanvasOnly: true
       },
-      helperVisibleCount: (state.site.meshesByWorld.anamorphicFront75f ?? [])
+      helperVisibleCount: (state.site.meshesByWorld[selectedSiteAssetId()] ?? [])
         .filter((mesh) => mesh.userData.productionHelper && mesh.visible).length,
-      helperTextureMapCount: (state.site.meshesByWorld.anamorphicFront75f ?? [])
+      helperTextureMapCount: (state.site.meshesByWorld[selectedSiteAssetId()] ?? [])
         .filter((mesh) => mesh.userData.productionHelper && mesh.material.map).length,
       legacyScene: state.site.world === 'legacy2d' ? state.site.scene : null,
       legacyCameraLocked: isLegacyCameraContext() ? state.site.legacyCameraLocked : null,
@@ -2149,6 +2159,7 @@ function updateDiagnostics() {
       })),
       cameraType: cameraSite.type,
       fov: cameraSite.fov,
+      aspect: cameraSite.aspect,
       near: cameraSite.near,
       far: cameraSite.far,
       position: cameraSite.position.toArray(),
@@ -2228,6 +2239,7 @@ function updateDiagnostics() {
   window.block4DEnvironmentDiagnostics = structuredClone(state.diagnostics.environment);
   window.block4ELocationDiagnostics = structuredClone(state.diagnostics.locationNavigation);
   window.block5AAnamorphicDiagnostics = structuredClone(state.diagnostics.site3d);
+  window.block5BBackDiagnostics = structuredClone(state.diagnostics.site3d);
 
   const rows = [
     ['Active View', state.activeView === 'site-3d' ? 'SITE 3D' : (state.activeView === '3d-plane' ? '3D PLANE' : '2D VIEW')],
@@ -2268,6 +2280,12 @@ function updateDiagnostics() {
     ['Site Asset', state.diagnostics.site3d.assetFile],
     ['Site Load', state.diagnostics.site3d.status],
     ['Site World / Mapping', `${state.site.world.toUpperCase()} / ${state.site.mappingMode.toUpperCase()}`],
+    ['Anamorphic Family', state.diagnostics.site3d.anamorphicFamily || '—'],
+    ['Anamorphic Camera', state.diagnostics.site3d.anamorphicCameraMode || '—'],
+    ['Camera FOV / Aspect', isAnamorphicCalibrationContext() ? `${cameraSite.fov.toFixed(3)} / ${cameraSite.aspect.toFixed(6)}` : '—'],
+    ['Working Canvas', state.diagnostics.site3d.anamorphicWorkingResolution
+      ? `${state.diagnostics.site3d.anamorphicWorkingResolution.width} × ${state.diagnostics.site3d.anamorphicWorkingResolution.height} / ${state.diagnostics.site3d.anamorphicWorkingResolution.aspect.toFixed(6)}`
+      : '—'],
     ['Site Scene', state.site.world === 'legacy2d' ? state.site.scene : '—'],
     ['Legacy Camera', isLegacyCameraContext() ? (state.site.legacyCameraLocked ? 'LOCKED' : 'UNLOCKED') : '—'],
     ['Camera Record', state.diagnostics.site3d.cameraRecordId || '—'],
@@ -2813,11 +2831,11 @@ window.runBlock3SiteMarkerCameraSmoke = () => {
   };
 };
 
-window.runBlock5AAnamorphicSmoke = () => {
+function runAnamorphicFamilySmoke(familyKey, expectedSurface) {
   setActiveView('site-3d');
   state.site.world = 'world3d';
   state.site.mappingMode = 'anamorphic';
-  state.site.anamorphicFamily = 'front75f';
+  state.site.anamorphicFamily = familyKey;
   siteWorldSelect.value = state.site.world;
   siteMappingSelect.value = state.site.mappingMode;
   siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
@@ -2825,10 +2843,15 @@ window.runBlock5AAnamorphicSmoke = () => {
   const family = currentAnamorphicFamily();
   const expectedQuaternion = new THREE.Quaternion().fromArray(family.cameraProfile.runtimeQuaternion);
   const expectedForward = new THREE.Vector3().fromArray(family.cameraProfile.runtimeForward);
-  const visibleMeshes = (state.site.meshesByWorld.anamorphicFront75f ?? []).filter((mesh) => mesh.visible);
-  const baselineVerticalFovMatches = Math.abs(cameraSite.fov - 19.778) < 1e-9;
-  const editableFovApplied = applyAnamorphicFovValue(21.25);
-  const editableFovMatches = Math.abs(cameraSite.fov - 21.25) < 1e-9;
+  const visibleMeshes = (state.site.meshesByWorld[family.assetId] ?? []).filter((mesh) => mesh.visible);
+  const inactiveAnamorphicVisibleCount = Object.values(SITE_SCENE_PROFILE.worlds.world3d.anamorphicFamilies)
+    .filter((candidate) => candidate.available && candidate.assetId !== family.assetId)
+    .flatMap((candidate) => state.site.meshesByWorld[candidate.assetId] ?? [])
+    .filter((mesh) => mesh.visible).length;
+  const baselineVerticalFovMatches = Math.abs(cameraSite.fov - family.cameraProfile.runtimeFov) < 1e-9;
+  const editableFov = family.cameraProfile.runtimeFov + 1.472;
+  const editableFovApplied = applyAnamorphicFovValue(editableFov);
+  const editableFovMatches = Math.abs(cameraSite.fov - editableFov) < 1e-9;
   const editableFovMode = state.site.anamorphicCameraMode;
   const fovResetReturned = applyAnamorphicCalibrationCamera();
   const fovResetMatches = Math.abs(cameraSite.fov - family.cameraProfile.runtimeFov) < 1e-9 &&
@@ -2849,11 +2872,22 @@ window.runBlock5AAnamorphicSmoke = () => {
     Math.max(1, viewer.clientHeight),
     family.workingResolution.aspect
   );
+  const actualForward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraSite.quaternion).normalize();
+  const normalizedExpectedForward = expectedForward.clone().normalize();
+  const targetDirection = new THREE.Vector3().fromArray(family.cameraProfile.runtimeTarget)
+    .sub(cameraSite.position)
+    .normalize();
+  const forwardDot = THREE.MathUtils.clamp(actualForward.dot(normalizedExpectedForward), -1, 1);
+  const forwardAngleRadians = actualForward.angleTo(normalizedExpectedForward);
   const result = {
+    familyId: family.familyId,
+    assetId: family.assetId,
     surfaceSetAvailable: state.site.surfaceSetAvailable,
     activeSurfaceCount: state.site.activeBindings.length,
     visibleSurfaceCount: visibleMeshes.length,
     visibleSurfaceExact: visibleMeshes[0]?.name ?? null,
+    expectedSurfaceExact: expectedSurface,
+    inactiveAnamorphicVisibleCount,
     missingMeshes: [...state.site.missingMeshes],
     pointDisabled: pointButton.disabled,
     controlsEnabled: controlsSite.enabled,
@@ -2862,8 +2896,28 @@ window.runBlock5AAnamorphicSmoke = () => {
     surfaceTextureShared: state.site.activeBindings[0]?.mesh.material.map === state.texture,
     cameraFinite: [...cameraSite.position.toArray(), ...cameraSite.quaternion.toArray(), cameraSite.fov, cameraSite.aspect].every(Number.isFinite),
     cameraQuaternionMatches: cameraSite.quaternion.angleTo(expectedQuaternion) < CAMERA_RUNTIME_ROTATION_EPSILON,
-    cameraForwardMatches: new THREE.Vector3(0, 0, -1).applyQuaternion(cameraSite.quaternion).distanceTo(expectedForward) < 1e-7,
-    workingCanvasAspectMatches: Math.abs(rect.aspect - 3000 / 3840) < 1e-12,
+    cameraForwardMatches: forwardAngleRadians < CAMERA_FORWARD_ANGLE_EPSILON,
+    cameraForwardAudit: {
+      actualForward: actualForward.toArray(),
+      expectedForward: normalizedExpectedForward.toArray(),
+      targetDirection: targetDirection.toArray(),
+      cameraPosition: cameraSite.position.toArray(),
+      cameraQuaternion: cameraSite.quaternion.toArray(),
+      lookAtTarget: family.cameraProfile.runtimeTarget,
+      dotProduct: forwardDot,
+      angleRadians: forwardAngleRadians,
+      angleDegrees: THREE.MathUtils.radToDeg(forwardAngleRadians),
+      toleranceRadians: CAMERA_FORWARD_ANGLE_EPSILON,
+      comparison: 'THREE_CAMERA_LOCAL_NEGATIVE_Z_VS_NORMALIZED_RUNTIME_FORWARD',
+      fovInvolved: false,
+      aspectInvolved: false,
+      projectionMatrixInvolved: false
+    },
+    runtimeProjectionAspectMatches: Math.abs(cameraSite.aspect - family.cameraProfile.runtimeAspect) < 1e-12,
+    runtimeProjectionAspect: family.cameraProfile.runtimeAspect,
+    workingCanvasAspect: family.workingResolution.aspect,
+    projectionAndWorkingAspectSeparated: Math.abs(family.cameraProfile.runtimeAspect - family.workingResolution.aspect) > 1e-12,
+    workingCanvasAspectMatches: Math.abs(rect.aspect - family.workingResolution.width / family.workingResolution.height) < 1e-12,
     baselineVerticalFovMatches,
     editableFovApplied,
     editableFovMatches,
@@ -2881,7 +2935,7 @@ window.runBlock5AAnamorphicSmoke = () => {
     calibrationMatteColor: ANAMORPHIC_CALIBRATION_MATTE_HEX,
     visualValidationState: family.cameraProfile.visualValidationState,
     missingFamiliesUnavailable: Object.entries(ANAMORPHIC_FAMILY_AVAILABILITY)
-      .filter(([familyId]) => familyId !== ANAMORPHIC_FRONT_75F_PROFILE.familyId)
+      .filter(([familyId]) => ![ANAMORPHIC_FAMILY_IDS.FRONT_75F, ANAMORPHIC_FAMILY_IDS.BACK].includes(familyId))
       .every(([, availability]) => availability.available === false && availability.status === 'NOT_AVAILABLE'),
     contextLossCount: state.contextLossCount
   };
@@ -2889,7 +2943,10 @@ window.runBlock5AAnamorphicSmoke = () => {
   siteMappingSelect.value = state.site.mappingMode;
   applySiteSurfaceSelection();
   return result;
-};
+}
+
+window.runBlock5AAnamorphicSmoke = () => runAnamorphicFamilySmoke('front75f', 'ANAM_SURFACE_FRONT75F');
+window.runBlock5BBackSmoke = () => runAnamorphicFamilySmoke('back', 'ANAM_SURFACE_BACK');
 
 window.runBlock4BCameraEditorSmoke = () => {
   setActiveView('site-3d');

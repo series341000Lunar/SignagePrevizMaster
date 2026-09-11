@@ -11,7 +11,8 @@ const projectRoot = path.resolve(appRoot, '..');
 const assetPaths = {
   world3d: path.join(projectRoot, '3DAsset', 'Signage', SITE_ASSETS.world3d.fileName),
   legacy2d: path.join(appRoot, 'assets', 'site', SITE_ASSETS.legacy2d.fileName),
-  anamorphicFront75f: path.join(projectRoot, '3DAsset', 'Signage', SITE_ASSETS.anamorphicFront75f.fileName)
+  anamorphicFront75f: path.join(projectRoot, '3DAsset', 'Signage', SITE_ASSETS.anamorphicFront75f.fileName),
+  anamorphicBack: path.join(projectRoot, '3DAsset', 'Signage', SITE_ASSETS.anamorphicBack.fileName)
 };
 const verifiedAssets = {};
 for (const [assetId, asset] of Object.entries(SITE_ASSETS)) {
@@ -28,7 +29,7 @@ assert.deepEqual(
 );
 assert.deepEqual(
   SITE_SCENE_PROFILE.worlds.world3d.anamorphicSurfaces.map((surface) => surface.expectedNode),
-  ['ANAM_SURFACE_FRONT75F']
+  ['ANAM_SURFACE_FRONT75F', 'ANAM_SURFACE_BACK']
 );
 assert.equal(SITE_SCENE_PROFILE.mappingModes.anamorphic.available, true);
 assert.equal(SITE_SCENE_PROFILE.worlds.legacy2d.anamorphicScenes, null);
@@ -58,15 +59,15 @@ const normalResolution = resolveSurfaceSet(fakeMeshes, SITE_SCENE_PROFILE.worlds
 assert.equal(normalResolution.available, true);
 assert.deepEqual(normalResolution.resolved.map((binding) => binding.mesh.name), ['LUUX_Front_3Dworld_Basic', 'ILMIN_Back_3Dworld_Basic']);
 assert.equal(fakeMeshes.length, 2);
-const futureMeshes = [...fakeMeshes, { name: 'ANAM_SURFACE_FRONT75F', isMesh: true }];
+const futureMeshes = [...fakeMeshes, { name: 'ANAM_SURFACE_FRONT75F', isMesh: true }, { name: 'ANAM_SURFACE_BACK', isMesh: true }];
 const futureNormalResolution = resolveSurfaceSet(futureMeshes, SITE_SCENE_PROFILE.worlds.world3d.normalSurfaces);
 assert.deepEqual(futureNormalResolution.resolved.map((binding) => binding.mesh.name), ['LUUX_Front_3Dworld_Basic', 'ILMIN_Back_3Dworld_Basic']);
 const futureAnamorphicResolution = resolveSurfaceSet(futureMeshes, SITE_SCENE_PROFILE.worlds.world3d.anamorphicSurfaces);
-assert.deepEqual(futureAnamorphicResolution.resolved.map((binding) => binding.mesh.name), ['ANAM_SURFACE_FRONT75F']);
+assert.deepEqual(futureAnamorphicResolution.resolved.map((binding) => binding.mesh.name), ['ANAM_SURFACE_FRONT75F', 'ANAM_SURFACE_BACK']);
 const anamorphicResolution = resolveSurfaceSet(fakeMeshes, SITE_SCENE_PROFILE.worlds.world3d.anamorphicSurfaces);
 assert.equal(anamorphicResolution.available, false);
 assert.deepEqual(anamorphicResolution.resolved, []);
-assert.deepEqual(anamorphicResolution.missing, ['ANAM_SURFACE_FRONT75F']);
+assert.deepEqual(anamorphicResolution.missing, ['ANAM_SURFACE_FRONT75F', 'ANAM_SURFACE_BACK']);
 
 const width = 4728;
 const height = 5760;

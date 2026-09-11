@@ -213,7 +213,8 @@ manifest.environmentAsset = {
 const siteAssetSources = {
   world3d: path.join(projectRoot, '3DAsset', 'Signage', SITE_ASSETS.world3d.fileName),
   legacy2d: path.join(assetRoot, 'site', SITE_ASSETS.legacy2d.fileName),
-  anamorphicFront75f: path.join(projectRoot, '3DAsset', 'Signage', SITE_ASSETS.anamorphicFront75f.fileName)
+  anamorphicFront75f: path.join(projectRoot, '3DAsset', 'Signage', SITE_ASSETS.anamorphicFront75f.fileName),
+  anamorphicBack: path.join(projectRoot, '3DAsset', 'Signage', SITE_ASSETS.anamorphicBack.fileName)
 };
 for (const [assetId, siteAsset] of Object.entries(SITE_ASSETS)) {
   const siteSourcePath = siteAssetSources[assetId];

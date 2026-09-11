@@ -94,6 +94,7 @@ assert.deepEqual(profile.camera.sourceFovDegrees, {
 });
 assert.equal(profile.camera.runtimeFov, 19.778);
 assert.equal(profile.camera.runtimeFovBasis, 'VERTICAL_THREE_FROM_3DS_MAX_USER_CONFIRMED');
+assert.equal(profile.camera.runtimeAspect, 0.78125);
 assert.equal(profile.camera.fovCandidates.maxReportedVertical, 19.778);
 assert.equal(profile.camera.fovCandidates.maxReportedDiagonal, 24.962);
 assert.equal(profile.camera.visualValidationState, 'PASS');
@@ -102,7 +103,8 @@ assert.equal(profile.camera.validationDate, '2026-09-11');
 assert.deepEqual(profile.workingResolution, { width: 3000, height: 3840, aspect: 0.78125 });
 assert.deepEqual(profile.finalOutput, { id: 'LUUX_FINAL_MASTER', width: 4728, height: 5760, immutable: true });
 
-for (const familyId of [ANAMORPHIC_FAMILY_IDS.BACK, ANAMORPHIC_FAMILY_IDS.ILMIN_AQUBE, ANAMORPHIC_FAMILY_IDS.FRONT_90F]) {
+assert.equal(ANAMORPHIC_FAMILY_AVAILABILITY[ANAMORPHIC_FAMILY_IDS.BACK].available, true);
+for (const familyId of [ANAMORPHIC_FAMILY_IDS.ILMIN_AQUBE, ANAMORPHIC_FAMILY_IDS.FRONT_90F]) {
   assert.deepEqual(ANAMORPHIC_FAMILY_AVAILABILITY[familyId], { available: false, status: 'NOT_AVAILABLE' });
 }
 
