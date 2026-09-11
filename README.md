@@ -110,3 +110,13 @@ helpers remain hidden, untextured, and excluded from POINT. The helper-derived
   FOV/aspect/roll calibration on 2026-09-11, closing Block 5B. See
   [Block 5B Validation](docs/BLOCK-5B-VALIDATION.md)
 and [Block 5B Handoff](docs/BLOCK-5B-HANDOFF.md).
+
+Block 6A adds the FRONT 75F Native Canonical Bake PoC with a synthetic
+3000×3840 RGBA source, unchanged authored `TEXCOORD_0`, a production
+4728×5760 linear-scalar validity mask, surface-only self-visibility, and
+same-camera reprojection. SOURCE, CANONICAL BAKE, and REPROJECTED results can
+be saved as native-resolution PNGs for external DCC inspection. Automated
+round-trip validation passed, and the user approved the external difference
+comparison on 2026-09-11; Block 6A is CLOSED. See
+[Block 6A Validation](docs/BLOCK-6A-VALIDATION.md) and
+[Block 6A Handoff](docs/BLOCK-6A-HANDOFF.md).

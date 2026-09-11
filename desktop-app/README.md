@@ -1,4 +1,4 @@
-# Desktop App — Block 5B BACK Calibration Checkpoint
+# Desktop App — Block 6A Native Canonical Bake
 
 Block 0 proves that a 4728 x 5760-class source can remain full resolution from
 disk decode through a Three.js GPU texture in both development and a Windows
@@ -100,6 +100,19 @@ Block 5B loads a fourth Site asset containing only the BACK anamorphic surface
   disabled until its inverse canonical mapping is proven. Automated technical
   validation and corrected BACK visual calibration are user-approved and CLOSED.
 
+Block 6A adds a manual Native Canonical Bake PoC only for FRONT 75F calibration.
+`RUN TEST BAKE` generates a synthetic 3000×3840 RGBA source, bakes it through
+the approved camera onto the unchanged authored TEXCOORD_0 at 4728×5760,
+multiplies the production linear-scalar mask, and reprojects the result through
+the same surface/camera. Surface-only hardware depth and a frontmost authored-UV
+lookup exclude hidden surface fragments; Environment depth is never included.
+The SOURCE, CANONICAL BAKE, and REPROJECTED previews are FIT-only. After a
+successful bake, the three adjacent SAVE buttons download native-resolution PNGs
+(`3000×3840`, `4728×5760`, and `3000×3840`) for external DCC inspection.
+Photoshop write/import/layer authoring remains out of scope. Automated technical
+validation and the user's external DCC difference-image review both pass; Block 6A
+is CLOSED as of 2026-09-11.
+
 ## Commands
 
 ```powershell
@@ -115,6 +128,7 @@ npm run test:block4e
 npm run test:block4f
 npm run test:block5a
 npm run test:block5b
+npm run test:block6a
 npm run test:runtime
 npm run test:link
 npm run dist

@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import { SITE_ASSETS } from '../src/site-scene-profile.js';
 import { PHOTO_SCENE_RECORDS } from '../src/site-calibration-profile.js';
 import { ENVIRONMENT_ASSET } from '../src/site-environment-profile.js';
+import { PROJECTION_BAKE_PROFILE, validateProjectionBakeProfile } from '../src/projection-bake-profile.js';
 import { inspectEnvironmentGlb } from './glb-inspection.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -63,6 +64,7 @@ await mkdir(path.join(buildRoot, 'assets', 'site'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'photo'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'photo', 'thumb'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'environment'), { recursive: true });
+await mkdir(path.join(buildRoot, 'assets', 'projection'), { recursive: true });
 await Promise.all([
   copyFile(path.join(sourceRoot, 'index.html'), path.join(buildRoot, 'index.html')),
   copyFile(path.join(sourceRoot, 'styles.css'), path.join(buildRoot, 'styles.css')),
@@ -106,7 +108,43 @@ const manifest = {
   primaryAssetId: 'original-png',
   assets: manifestAssets,
   siteAssets: SITE_ASSETS,
-  photoAssets: []
+  photoAssets: [],
+  projectionBake: null
+};
+
+const projectionProfileValidation = validateProjectionBakeProfile(PROJECTION_BAKE_PROFILE);
+if (!projectionProfileValidation.valid) {
+  throw new Error(`Projection Bake profile invalid: ${projectionProfileValidation.errors.join(', ')}`);
+}
+const maskContract = PROJECTION_BAKE_PROFILE.productionMask;
+const maskSourcePath = path.join(projectRoot, maskContract.sourcePath);
+const maskDestinationPath = path.join(buildRoot, 'assets', 'projection', maskContract.fileName);
+const maskSourceBytes = await readFile(maskSourcePath);
+const maskDimensions = readPngDimensions(maskSourceBytes);
+const maskMetadata = await sharp(maskSourceBytes).metadata();
+if (maskDimensions.width !== maskContract.width || maskDimensions.height !== maskContract.height ||
+    sha256(maskSourceBytes) !== maskContract.sha256 || !['b-w', 'srgb', 'rgb16'].includes(maskMetadata.space)) {
+  throw new Error(`Projection validity mask source contract mismatch: ${maskContract.sourcePath}`);
+}
+await copyFile(maskSourcePath, maskDestinationPath);
+const maskDestinationBytes = await readFile(maskDestinationPath);
+if (maskDestinationBytes.length !== maskSourceBytes.length || sha256(maskDestinationBytes) !== maskContract.sha256) {
+  throw new Error(`Projection validity mask build copy mismatch: ${maskContract.fileName}`);
+}
+manifest.projectionBake = {
+  profileId: PROJECTION_BAKE_PROFILE.id,
+  familyId: PROJECTION_BAKE_PROFILE.familyId,
+  workingResolution: PROJECTION_BAKE_PROFILE.workingResolution,
+  canonicalResolution: PROJECTION_BAKE_PROFILE.canonicalResolution,
+  mask: {
+    ...maskContract,
+    bytes: maskSourceBytes.length,
+    decodedSpace: maskMetadata.space,
+    decodedChannels: maskMetadata.channels,
+    decodedDepth: maskMetadata.depth,
+    sourceVerified: true,
+    buildCopyVerified: true
+  }
 };
 
 for (const photoScene of PHOTO_SCENE_RECORDS) {

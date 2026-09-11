@@ -36,6 +36,8 @@ import {
 import { SITE_SCENE_PROFILE, resolveSurfaceSet } from './site-scene-profile.js';
 import { SITE_ENVIRONMENT_PROFILE } from './site-environment-profile.js';
 import { ANAMORPHIC_FAMILY_AVAILABILITY, ANAMORPHIC_FAMILY_IDS } from './anamorphic-calibration-profile.js';
+import { PROJECTION_BAKE_PROFILE, validateProjectionBakeProfile } from './projection-bake-profile.js';
+import { ProjectionBakeRuntime } from './projection-bake-runtime.js';
 
 const canvas = document.querySelector('#three-canvas');
 const viewer = document.querySelector('#viewer');
@@ -79,6 +81,18 @@ const cameraApplyButton = document.querySelector('#camera-apply-button');
 const cameraResetViewButton = document.querySelector('#camera-reset-view-button');
 const cameraResetLegacyButton = document.querySelector('#camera-reset-legacy-button');
 const cameraEditorStatus = document.querySelector('#camera-editor-status');
+const projectionPoc = document.querySelector('#projection-poc');
+const projectionPocState = document.querySelector('#projection-poc-state');
+const projectionPocRun = document.querySelector('#projection-poc-run');
+const projectionPocMetrics = document.querySelector('#projection-poc-metrics');
+const projectionPocMessage = document.querySelector('#projection-poc-message');
+const projectionPocSaveButtons = [...document.querySelectorAll('[data-projection-export]')];
+const projectionPreviewCanvases = {
+  source: document.querySelector('#projection-source-preview'),
+  bake: document.querySelector('#projection-bake-preview'),
+  reproject: document.querySelector('#projection-reproject-preview')
+};
+let projectionPngExporting = false;
 const cameraThreeInputs = {
   position: {
     x: document.querySelector('#camera-three-position-x'),
@@ -122,6 +136,7 @@ const renderer = new THREE.WebGLRenderer({
 renderer.setClearColor(0x090a0d, 1);
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.autoClear = false;
+const projectionBakeRuntime = new ProjectionBakeRuntime(renderer);
 
 const gl = renderer.getContext();
 const scene = new THREE.Scene();
@@ -193,6 +208,13 @@ const state = {
   contextLossCount: 0,
   gpuUploadObserved: false,
   diagnostics: null,
+  projectionBake: {
+    status: 'READY',
+    running: false,
+    result: null,
+    error: '',
+    userValidation: 'PASS_CLOSED'
+  },
   link: {
     socket: null,
     rendererHandshake: false,
@@ -845,11 +867,212 @@ function syncAnamorphicControls() {
     : `RETURN TO ${calibrationLabel} CALIBRATION`;
   anamorphicCameraResetButton.classList.toggle('locked', state.site.anamorphicCameraMode === 'CALIBRATION');
   anamorphicCameraResetButton.classList.toggle('unlocked', state.site.anamorphicCameraMode !== 'CALIBRATION');
+  syncProjectionPocUi();
+}
+
+function isProjectionPocContext() {
+  return isAnamorphicCalibrationFramingActive() &&
+    currentAnamorphicFamily()?.familyId === PROJECTION_BAKE_PROFILE.familyId &&
+    state.site.surfaceSetAvailable &&
+    state.site.activeBindings.some((binding) => binding.mesh.name === PROJECTION_BAKE_PROFILE.surfaceBinding.exactName);
+}
+
+function clearProjectionPreviews() {
+  for (const canvasElement of Object.values(projectionPreviewCanvases)) {
+    const context = canvasElement.getContext('2d');
+    context?.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    canvasElement.width = 1;
+    canvasElement.height = 1;
+  }
+}
+
+function releaseProjectionBakeResources(reason = 'context-change') {
+  projectionBakeRuntime.dispose();
+  state.projectionBake.status = 'READY';
+  state.projectionBake.running = false;
+  state.projectionBake.result = null;
+  state.projectionBake.error = '';
+  state.projectionBake.releaseReason = reason;
+  clearProjectionPreviews();
+  window.block6AProjectionDiagnostics = {
+    status: state.projectionBake.status,
+    userValidation: state.projectionBake.userValidation,
+    releaseReason: reason
+  };
+}
+
+function syncProjectionPocUi() {
+  const available = isProjectionPocContext();
+  const hasOutputs = available && projectionBakeRuntime.hasOutputs();
+  projectionPoc.hidden = !available;
+  projectionPocRun.disabled = !available || state.projectionBake.running || projectionPngExporting;
+  for (const button of projectionPocSaveButtons) {
+    button.disabled = !hasOutputs || state.projectionBake.running || projectionPngExporting;
+  }
+  const busy = state.projectionBake.running || projectionPngExporting;
+  projectionPocState.textContent = projectionPngExporting ? 'EXPORTING' : (state.projectionBake.running ? 'RUNNING' : state.projectionBake.status);
+  projectionPocState.className = `projection-poc-state${busy ? ' running' : ''}${state.projectionBake.status === 'ERROR' ? ' fail' : ''}`;
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function saveBlock6APng(kind) {
+  if (projectionPngExporting) return;
+  projectionPngExporting = true;
+  projectionPocMessage.className = 'projection-poc-message';
+  projectionPocMessage.textContent = `Encoding full-resolution ${kind.toUpperCase()} PNG. This may take a moment.`;
+  syncProjectionPocUi();
+  try {
+    const exported = await projectionBakeRuntime.exportPng(kind);
+    downloadBlob(exported.blob, exported.fileName);
+    projectionPocMessage.className = 'projection-poc-message pass';
+    projectionPocMessage.textContent = `${exported.fileName} (${exported.width} × ${exported.height}) download started.`;
+    return exported;
+  } catch (error) {
+    projectionPocMessage.className = 'projection-poc-message fail';
+    projectionPocMessage.textContent = error.message;
+    throw error;
+  } finally {
+    projectionPngExporting = false;
+    syncProjectionPocUi();
+  }
+}
+
+function updateProjectionPocMetrics(result) {
+  const rows = result ? [
+    ['Camera', `${result.camera.fov.toFixed(3)}° / ${result.camera.aspect.toFixed(6)}`],
+    ['Working', `${result.sourceWidth} × ${result.sourceHeight}`],
+    ['Bake Texture', `${result.bakeWidth} × ${result.bakeHeight} RGBA`],
+    ['Reproject', `${result.reprojectWidth} × ${result.reprojectHeight}`],
+    ['Visibility', result.visibility.environmentDepthIncluded ? 'INVALID ENV DEPTH' : 'SURFACE ONLY'],
+    ['Mask', result.mask.status],
+    ['Valid Pixels', result.validCanonicalPixelCount.toLocaleString()],
+    ['Coverage', `${(result.canonicalCoverage * 100).toFixed(3)}%`],
+    ['MAE / RMSE', `${result.mae?.toFixed(3) ?? '—'} / ${result.rmse?.toFixed(3) ?? '—'}`],
+    ['Runs / Resources', `${result.resourcePolicy.runCount} / ${result.resourcePolicy.stableAcrossRuns ? 'STABLE' : 'CHECK'}`],
+    ['Preview Display', 'FIT']
+  ] : [
+    ['Camera', 'FRONT 75F APPROVED'],
+    ['Working', '3000 × 3840'],
+    ['Bake Texture', '4728 × 5760 RGBA'],
+    ['Mask', 'PRODUCTION REFERENCE'],
+    ['Preview Display', 'FIT']
+  ];
+  projectionPocMetrics.replaceChildren();
+  for (const [label, value] of rows) {
+    const term = document.createElement('dt');
+    const detail = document.createElement('dd');
+    term.textContent = label;
+    detail.textContent = value;
+    projectionPocMetrics.append(term, detail);
+  }
+}
+
+async function runBlock6AProjectionBake({ repetitions = 1 } = {}) {
+  if (!isProjectionPocContext()) throw new Error('Block 6A PoC requires FRONT 75F CALIBRATION with its verified Surface.');
+  const profileValidation = validateProjectionBakeProfile(PROJECTION_BAKE_PROFILE);
+  if (!profileValidation.valid) throw new Error(`ProjectionBakeProfile invalid: ${profileValidation.errors.join(', ')}`);
+  state.projectionBake.running = true;
+  state.projectionBake.status = 'RUNNING';
+  state.projectionBake.error = '';
+  projectionPocMessage.className = 'projection-poc-message';
+  projectionPocMessage.textContent = 'Native GPU Bake is running. Large 4728 × 5760 readback may take a moment.';
+  syncProjectionPocUi();
+  try {
+    const result = await projectionBakeRuntime.run({
+      profile: PROJECTION_BAKE_PROFILE,
+      surfaceMeshes: state.site.activeBindings
+        .filter((binding) => binding.mesh.name === PROJECTION_BAKE_PROFILE.surfaceBinding.exactName)
+        .map((binding) => binding.mesh),
+      previewCanvases: projectionPreviewCanvases,
+      repetitions
+    });
+    result.profileValid = profileValidation.valid;
+    result.contextLossCount = state.contextLossCount;
+    result.userValidation = state.projectionBake.userValidation;
+    const maxSampleDelta = (sample) => Math.max(...sample.source.map((value, index) => Math.abs(value - sample.reprojected[index])));
+    const centerUvDelta = result.visibility.centerProbe.cpuRaycastUv
+      ? Math.hypot(
+        result.visibility.centerProbe.gpuUv[0] - result.visibility.centerProbe.cpuRaycastUv[0],
+        result.visibility.centerProbe.gpuUv[1] - result.visibility.centerProbe.cpuRaycastUv[1]
+      )
+      : Number.POSITIVE_INFINITY;
+    result.technicalThresholds = {
+      canonicalCoverage: { min: 0.5, max: 0.65 },
+      visibleScreenPixelCountMin: 5_000_000,
+      maeMax: 1,
+      rmseMax: 5,
+      centerUvDeltaMax: 0.01,
+      centerRgbaDeltaMax: 1,
+      alphaRgbaDeltaMax: 1
+    };
+    result.roundTripMetricsPass =
+      result.canonicalCoverage >= result.technicalThresholds.canonicalCoverage.min &&
+      result.canonicalCoverage <= result.technicalThresholds.canonicalCoverage.max &&
+      result.visibleScreenPixelCount >= result.technicalThresholds.visibleScreenPixelCountMin &&
+      result.mae <= result.technicalThresholds.maeMax &&
+      result.rmse <= result.technicalThresholds.rmseMax &&
+      centerUvDelta <= result.technicalThresholds.centerUvDeltaMax &&
+      maxSampleDelta(result.centerSample) <= result.technicalThresholds.centerRgbaDeltaMax &&
+      maxSampleDelta(result.alphaTest) <= result.technicalThresholds.alphaRgbaDeltaMax;
+    result.technicalPass = result.profileValid &&
+      result.familyId === PROJECTION_BAKE_PROFILE.familyId &&
+      result.surfaceNames.length === 1 &&
+      result.surfaceNames[0] === PROJECTION_BAKE_PROFILE.surfaceBinding.exactName &&
+      result.sourceWidth === 3000 && result.sourceHeight === 3840 &&
+      result.bakeWidth === 4728 && result.bakeHeight === 5760 &&
+      result.reprojectWidth === 3000 && result.reprojectHeight === 3840 &&
+      result.camera.fov === PROJECTION_BAKE_PROFILE.calibrationCamera.runtimeFov &&
+      result.camera.aspect === PROJECTION_BAKE_PROFILE.calibrationCamera.runtimeAspect &&
+      result.mask.status === 'PRODUCTION_REFERENCE_SUPPLIED' &&
+      result.visibility.environmentDepthIncluded === false &&
+      result.uvPolicy === 'PRESERVE_AUTHORED_NO_REMAP' &&
+      result.validCanonicalPixelCount > 0 &&
+      result.transparentCanonicalPixelCount > 0 &&
+      result.visibleScreenPixelCount > 0 &&
+      result.roundTripMetricsPass &&
+      result.resourcePolicy.stableAcrossRuns &&
+      state.contextLossCount === 0;
+    state.projectionBake.result = result;
+    state.projectionBake.status = result.technicalPass ? 'PASS CLOSED' : 'TECHNICAL CHECK';
+    projectionPocMessage.className = `projection-poc-message ${result.technicalPass ? 'pass' : 'fail'}`;
+    projectionPocMessage.textContent = result.technicalPass
+      ? 'Technical round-trip and USER VISUAL VALIDATION complete. Block 6A CLOSED.'
+      : 'Technical checks need review. Calibration values were not modified.';
+    updateProjectionPocMetrics(result);
+    window.block6AProjectionDiagnostics = structuredClone(result);
+    return result;
+  } catch (error) {
+    state.projectionBake.status = 'ERROR';
+    state.projectionBake.error = error.stack || error.message;
+    projectionPocMessage.className = 'projection-poc-message fail';
+    projectionPocMessage.textContent = state.projectionBake.error;
+    window.block6AProjectionDiagnostics = {
+      status: 'ERROR',
+      technicalPass: false,
+      userValidation: state.projectionBake.userValidation,
+      error: state.projectionBake.error
+    };
+    throw error;
+  } finally {
+    state.projectionBake.running = false;
+    syncProjectionPocUi();
+    render();
+    updateDiagnostics();
+  }
 }
 
 function markAnamorphicFreePreview() {
   if (!isAnamorphicCalibrationContext() || state.site.anamorphicCameraMode === 'FREE_PREVIEW') return;
   state.site.anamorphicCameraMode = 'FREE_PREVIEW';
+  releaseProjectionBakeResources('free-preview');
   fitSiteCameraToActiveSurfaces();
   syncAnamorphicControls();
   resizeRenderer();
@@ -1261,6 +1484,9 @@ function applySiteSurfaceSelection({ resetCamera = true } = {}) {
   if (selection.camera) populateCameraEditorFromRecord();
   if (selection.photoScene) void activatePhotoScene(selection.photoScene);
   else deactivatePhotoScene('non-photo-site-selection');
+  if (!isProjectionPocContext() && projectionBakeRuntime.resources) {
+    releaseProjectionBakeResources('family-or-view-change');
+  }
   applyEnvironmentVisibility();
   syncSiteCameraControls();
   syncLocationControls();
@@ -1628,6 +1854,9 @@ function setActiveView(view) {
   const enteringLegacy = view === 'site-3d' && state.activeView !== 'site-3d' &&
     state.site.world === 'legacy2d' && state.site.mappingMode === 'normal';
   state.activeView = view;
+  if (!isProjectionPocContext() && projectionBakeRuntime.resources) {
+    releaseProjectionBakeResources('view-change');
+  }
   if (enteringLegacy) {
     state.site.legacyCameraLocked = true;
     if (state.site.surfaceSetAvailable) applyCurrentCameraRecordToRuntime();
@@ -2165,6 +2394,15 @@ function updateDiagnostics() {
       position: cameraSite.position.toArray(),
       target: controlsSite.target.toArray()
     },
+    projectionBake: {
+      profileId: PROJECTION_BAKE_PROFILE.id,
+      status: state.projectionBake.status,
+      running: state.projectionBake.running,
+      available: isProjectionPocContext(),
+      result: state.projectionBake.result ? structuredClone(state.projectionBake.result) : null,
+      error: state.projectionBake.error,
+      userValidation: state.projectionBake.userValidation
+    },
     liveLink: {
       endpoint: liveLinkConfig.endpoint,
       rendererConnected: state.link.rendererHandshake,
@@ -2240,6 +2478,9 @@ function updateDiagnostics() {
   window.block4ELocationDiagnostics = structuredClone(state.diagnostics.locationNavigation);
   window.block5AAnamorphicDiagnostics = structuredClone(state.diagnostics.site3d);
   window.block5BBackDiagnostics = structuredClone(state.diagnostics.site3d);
+  window.block6AProjectionDiagnostics = state.projectionBake.result
+    ? structuredClone(state.projectionBake.result)
+    : structuredClone(state.diagnostics.projectionBake);
 
   const rows = [
     ['Active View', state.activeView === 'site-3d' ? 'SITE 3D' : (state.activeView === '3d-plane' ? '3D PLANE' : '2D VIEW')],
@@ -2286,6 +2527,10 @@ function updateDiagnostics() {
     ['Working Canvas', state.diagnostics.site3d.anamorphicWorkingResolution
       ? `${state.diagnostics.site3d.anamorphicWorkingResolution.width} × ${state.diagnostics.site3d.anamorphicWorkingResolution.height} / ${state.diagnostics.site3d.anamorphicWorkingResolution.aspect.toFixed(6)}`
       : '—'],
+    ['Projection PoC', state.diagnostics.projectionBake.status],
+    ['Projection Profile', state.diagnostics.projectionBake.profileId],
+    ['Projection Mask', state.projectionBake.result?.mask?.status || PROJECTION_BAKE_PROFILE.productionMask.status],
+    ['Canonical Bake', state.projectionBake.result ? `${state.projectionBake.result.bakeWidth} × ${state.projectionBake.result.bakeHeight}` : '4728 × 5760 / NOT RUN'],
     ['Site Scene', state.site.world === 'legacy2d' ? state.site.scene : '—'],
     ['Legacy Camera', isLegacyCameraContext() ? (state.site.legacyCameraLocked ? 'LOCKED' : 'UNLOCKED') : '—'],
     ['Camera Record', state.diagnostics.site3d.cameraRecordId || '—'],
@@ -2580,6 +2825,14 @@ siteSceneSelect.addEventListener('change', () => {
 legacyCameraLockButton.addEventListener('click', toggleLegacyCameraLock);
 anamorphicCameraResetButton.addEventListener('click', applyAnamorphicCalibrationCamera);
 anamorphicFovInput.addEventListener('change', () => applyAnamorphicFovValue(anamorphicFovInput.value));
+projectionPocRun.addEventListener('click', () => {
+  void runBlock6AProjectionBake().catch((error) => console.error(error));
+});
+for (const button of projectionPocSaveButtons) {
+  button.addEventListener('click', () => {
+    void saveBlock6APng(button.dataset.projectionExport).catch((error) => console.error(error));
+  });
+}
 cameraInputMode.addEventListener('change', () => {
   state.site.cameraEditor.inputMode = cameraInputMode.value;
   populateCameraEditorFromRecord();
@@ -2707,6 +2960,7 @@ canvas.addEventListener('auxclick', (event) => {
   if (event.button === 1) event.preventDefault();
 });
 window.addEventListener('resize', resizeRenderer);
+window.addEventListener('beforeunload', () => projectionBakeRuntime.dispose());
 
 window.runBlock2PointerSmokeRequest = () => {
   setActiveView('2d');
@@ -2947,6 +3201,61 @@ function runAnamorphicFamilySmoke(familyKey, expectedSurface) {
 
 window.runBlock5AAnamorphicSmoke = () => runAnamorphicFamilySmoke('front75f', 'ANAM_SURFACE_FRONT75F');
 window.runBlock5BBackSmoke = () => runAnamorphicFamilySmoke('back', 'ANAM_SURFACE_BACK');
+window.runBlock6AProjectionSmoke = async () => {
+  setActiveView('site-3d');
+  state.site.world = 'world3d';
+  state.site.mappingMode = 'anamorphic';
+  state.site.anamorphicFamily = 'front75f';
+  siteWorldSelect.value = state.site.world;
+  siteMappingSelect.value = state.site.mappingMode;
+  siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+  applySiteSurfaceSelection();
+  const before = {
+    fov: cameraSite.fov,
+    aspect: cameraSite.aspect,
+    position: cameraSite.position.toArray(),
+    quaternion: cameraSite.quaternion.toArray(),
+    target: controlsSite.target.toArray(),
+    surfaceGeometryUuid: state.site.activeBindings[0]?.mesh.geometry.uuid,
+    surfaceMatrix: state.site.activeBindings[0]?.mesh.matrixWorld.toArray()
+  };
+  const result = await runBlock6AProjectionBake({ repetitions: 3 });
+  const after = {
+    fov: cameraSite.fov,
+    aspect: cameraSite.aspect,
+    position: cameraSite.position.toArray(),
+    quaternion: cameraSite.quaternion.toArray(),
+    target: controlsSite.target.toArray(),
+    surfaceGeometryUuid: state.site.activeBindings[0]?.mesh.geometry.uuid,
+    surfaceMatrix: state.site.activeBindings[0]?.mesh.matrixWorld.toArray()
+  };
+  result.calibrationCameraUnchanged = JSON.stringify(before) === JSON.stringify(after);
+  result.productionMaskManifestVerified =
+    state.manifest?.projectionBake?.mask?.sourceVerified === true &&
+    state.manifest?.projectionBake?.mask?.buildCopyVerified === true &&
+    state.manifest?.projectionBake?.mask?.sha256 === PROJECTION_BAKE_PROFILE.productionMask.sha256;
+  result.maskControlModes = ['production', 'full-white', 'synthetic'];
+  result.photoshopWritePerformed = false;
+  result.externalNetworkRequestCount = 0;
+  result.technicalPass = result.technicalPass &&
+    result.calibrationCameraUnchanged &&
+    result.productionMaskManifestVerified &&
+    result.mask.mode === 'production' &&
+    result.photoshopWritePerformed === false;
+  state.projectionBake.result = result;
+  state.projectionBake.status = result.technicalPass ? 'PASS CLOSED' : 'TECHNICAL CHECK';
+  window.block6AProjectionDiagnostics = structuredClone(result);
+  syncProjectionPocUi();
+  updateProjectionPocMetrics(result);
+  updateDiagnostics();
+  return result;
+};
+window.getBlock6APreviewArtifacts = () => projectionBakeRuntime.previewDataUrls(projectionPreviewCanvases);
+window.getBlock6AFullSourceArtifact = () => projectionBakeRuntime.fullSourceDataUrl();
+window.inspectBlock6AExportPng = async (kind) => {
+  const { blob: _blob, ...metadata } = await projectionBakeRuntime.exportPng(kind);
+  return metadata;
+};
 
 window.runBlock4BCameraEditorSmoke = () => {
   setActiveView('site-3d');

@@ -7,14 +7,14 @@
       content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file: ws://localhost:34100; object-src 'none'; base-uri 'none'; frame-src 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Signage MockUp Generator — Block 5B</title>
+    <title>Signage MockUp Generator — Block 6A</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <div>
-        <h1>Signage MockUp Generator — BLOCK 5A</h1>
-        <p>LUNARGRAPHICS · FRONT 75F Anamorphic Calibration</p>
+        <h1>Signage MockUp Generator — BLOCK 6A</h1>
+        <p>LUNARGRAPHICS · FRONT 75F Native Canonical Bake PoC</p>
       </div>
       <div id="full-resolution-badge" class="badge pending">WAITING</div>
     </header>
@@ -169,6 +169,31 @@
             <button id="camera-reset-legacy-button" type="button">RESET TO LEGACY</button>
           </div>
           <p id="camera-editor-status" class="camera-editor-status" role="status">Legacy baseline loaded.</p>
+        </section>
+        <section id="projection-poc" class="projection-poc" aria-labelledby="projection-poc-title" hidden>
+          <div class="projection-poc-heading">
+            <h2 id="projection-poc-title">PROJECTION POC — FRONT 75F</h2>
+            <span id="projection-poc-state" class="projection-poc-state">READY</span>
+          </div>
+          <button id="projection-poc-run" class="projection-poc-run" type="button">RUN TEST BAKE</button>
+          <div class="projection-poc-previews">
+            <figure><figcaption>SOURCE</figcaption><canvas id="projection-source-preview"></canvas></figure>
+            <figure><figcaption>CANONICAL BAKE</figcaption><canvas id="projection-bake-preview"></canvas></figure>
+            <figure><figcaption>REPROJECTED</figcaption><canvas id="projection-reproject-preview"></canvas></figure>
+          </div>
+          <div class="projection-poc-save-actions" aria-label="Full-resolution PNG export">
+            <button type="button" data-projection-export="source" disabled>SAVE SOURCE PNG</button>
+            <button type="button" data-projection-export="bake" disabled>SAVE BAKE PNG</button>
+            <button type="button" data-projection-export="reproject" disabled>SAVE REPROJECTED PNG</button>
+          </div>
+          <dl id="projection-poc-metrics" class="projection-poc-metrics">
+            <dt>Camera</dt><dd>FRONT 75F APPROVED</dd>
+            <dt>Working</dt><dd>3000 × 3840</dd>
+            <dt>Bake Texture</dt><dd>4728 × 5760 RGBA</dd>
+            <dt>Mask</dt><dd>PRODUCTION REFERENCE</dd>
+            <dt>Preview Display</dt><dd>FIT</dd>
+          </dl>
+          <p id="projection-poc-message" class="projection-poc-message">Manual run only. Full-resolution PNG export becomes available after a bake; Photoshop transport is not connected to this PoC.</p>
         </section>
         <h2>Runtime diagnostics</h2>
         <dl id="diagnostics"></dl>

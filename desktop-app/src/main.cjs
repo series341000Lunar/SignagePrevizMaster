@@ -39,6 +39,13 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+function writePngDataUrl(filePath, dataUrl) {
+  const match = /^data:image\/png;base64,(.+)$/i.exec(dataUrl || '');
+  if (!match) throw new Error(`Invalid PNG data URL for ${path.basename(filePath)}.`);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, Buffer.from(match[1], 'base64'));
+}
+
 async function waitForDiagnostics(window) {
   const deadline = Date.now() + 60000;
   while (Date.now() < deadline) {
@@ -142,6 +149,24 @@ async function runSmokeTest(window) {
       })()`,
       true
     );
+    const block6a = await window.webContents.executeJavaScript('window.runBlock6AProjectionSmoke()', true);
+    const block6aPreviewData = await window.webContents.executeJavaScript('window.getBlock6APreviewArtifacts()', true);
+    const block6aFullSourceData = await window.webContents.executeJavaScript('window.getBlock6AFullSourceArtifact()', true);
+    const block6aExportMetadata = {};
+    for (const kind of ['source', 'bake', 'reproject']) {
+      block6aExportMetadata[kind] = await window.webContents.executeJavaScript(`window.inspectBlock6AExportPng('${kind}')`, true);
+    }
+    const block6aArtifactDirectory = path.dirname(reportPath);
+    const block6aArtifacts = {
+      fullSource: path.join(block6aArtifactDirectory, 'Block6A_Source_3000x3840.png'),
+      sourcePreview: path.join(block6aArtifactDirectory, 'block6a-source-preview.png'),
+      bakePreview: path.join(block6aArtifactDirectory, 'block6a-bake-preview.png'),
+      reprojectPreview: path.join(block6aArtifactDirectory, 'block6a-reproject-preview.png')
+    };
+    writePngDataUrl(block6aArtifacts.fullSource, block6aFullSourceData);
+    writePngDataUrl(block6aArtifacts.sourcePreview, block6aPreviewData.source);
+    writePngDataUrl(block6aArtifacts.bakePreview, block6aPreviewData.bake);
+    writePngDataUrl(block6aArtifacts.reprojectPreview, block6aPreviewData.reproject);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -185,6 +210,22 @@ async function runSmokeTest(window) {
       anamorphicScreenshotState.anamorphicFamily === 'ANAMORPHIC_BACK' &&
       anamorphicScreenshotState.activeSurfaces.length === 1 &&
       anamorphicScreenshotState.activeSurfaces[0].meshName === 'ANAM_SURFACE_BACK' &&
+      block6a.technicalPass === true &&
+      block6a.userValidation === 'PASS_CLOSED' &&
+      block6a.profileValid === true &&
+      block6a.calibrationCameraUnchanged === true &&
+      block6a.productionMaskManifestVerified === true &&
+      block6a.mask.mode === 'production' &&
+      block6a.mask.status === 'PRODUCTION_REFERENCE_SUPPLIED' &&
+      block6a.validCanonicalPixelCount > 0 &&
+      block6a.transparentCanonicalPixelCount > 0 &&
+      block6a.visibleScreenPixelCount > 0 &&
+      block6a.resourcePolicy.stableAcrossRuns === true &&
+      block6a.contextLossCount === 0 &&
+      block6aExportMetadata.source.width === 3000 && block6aExportMetadata.source.height === 3840 &&
+      block6aExportMetadata.bake.width === 4728 && block6aExportMetadata.bake.height === 5760 &&
+      block6aExportMetadata.reproject.width === 3000 && block6aExportMetadata.reproject.height === 3840 &&
+      Object.values(block6aExportMetadata).every((entry) => entry.mimeType === 'image/png' && entry.bytes > 0) &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -208,6 +249,9 @@ async function runSmokeTest(window) {
       anamorphic75f,
       anamorphicBack,
       anamorphicScreenshotState,
+      block6a,
+      block6aArtifacts,
+      block6aExportMetadata,
       screenshotPath
     };
     writeJson(reportPath, report);
