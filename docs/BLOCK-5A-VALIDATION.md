@@ -8,8 +8,9 @@
 ~~~text
 Repository:       C:\_InternalProjects\SignagePrevizMaster
 Branch:           main
-HEAD:             6242adf Complete Block 4E site location navigation
-Block 5A commit:  PENDING / working tree implementation
+Baseline HEAD:    6242adf Complete Block 4E site location navigation
+Implementation:  03fad61 Complete Block 5A anamorphic calibration
+Branch:           main
 Block 0–4F:       BASIC CORE CLOSED / regression baseline
 ~~~
 

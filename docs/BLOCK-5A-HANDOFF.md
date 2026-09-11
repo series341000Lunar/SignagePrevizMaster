@@ -27,9 +27,9 @@ FOV에 복귀한다.
 
 ~~~text
 Branch:                 main
-HEAD:                   6242adf Complete Block 4E site location navigation
-origin/main:            b3747bf Complete Block 4D site environment foundation
-Block 5A commit:        PENDING
+Baseline HEAD:          6242adf Complete Block 4E site location navigation
+Implementation commit: 03fad61 Complete Block 5A anamorphic calibration
+origin/main pre-push:   b3747bf Complete Block 4D site environment foundation
 Pre-existing worktree:  Block 4F source/docs and asset were already uncommitted
 ~~~
 
