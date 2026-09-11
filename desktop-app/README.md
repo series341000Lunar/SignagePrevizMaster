@@ -1,4 +1,4 @@
-# Desktop App — Block 6A Native Canonical Bake
+# Desktop App — Block 6B Shared Direct Projection / Canonical Bake
 
 Block 0 proves that a 4728 x 5760-class source can remain full resolution from
 disk decode through a Three.js GPU texture in both development and a Windows
@@ -113,6 +113,17 @@ Photoshop write/import/layer authoring remains out of scope. Automated technical
 validation and the user's external DCC difference-image review both pass; Block 6A
 is CLOSED as of 2026-09-11.
 
+Block 6B reuses one family-driven runtime for FRONT 75F and LUUX BACK. It adds
+DIRECT PROJECTED, sampled from the original family-native working source through
+the approved camera and exact surface without reading the canonical texture.
+SOURCE, DIRECT PROJECTED, CANONICAL BAKE, and CANONICAL REPROJECTED are shown in
+a larger 2×2 preview grid and can be saved as four PNGs. BACK uses 2100×3840
+working targets and a 4728×5760 canonical target. Its production mask remains
+`NOT_SUPPLIED`; a full-white diagnostic fallback is used without treating it as
+production validation. The user accepted both Direct and Canonical variants on
+2026-09-11: Canonical shows slightly more difference and less sharpness, while
+Direct is sharper. Both remain available for use by purpose. Block 6B is CLOSED.
+
 ## Commands
 
 ```powershell
@@ -129,6 +140,7 @@ npm run test:block4f
 npm run test:block5a
 npm run test:block5b
 npm run test:block6a
+npm run test:block6b
 npm run test:runtime
 npm run test:link
 npm run dist

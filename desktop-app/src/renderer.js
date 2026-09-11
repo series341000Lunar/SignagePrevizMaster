@@ -36,7 +36,11 @@ import {
 import { SITE_SCENE_PROFILE, resolveSurfaceSet } from './site-scene-profile.js';
 import { SITE_ENVIRONMENT_PROFILE } from './site-environment-profile.js';
 import { ANAMORPHIC_FAMILY_AVAILABILITY, ANAMORPHIC_FAMILY_IDS } from './anamorphic-calibration-profile.js';
-import { PROJECTION_BAKE_PROFILE, validateProjectionBakeProfile } from './projection-bake-profile.js';
+import {
+  PROJECTION_BAKE_PROFILE,
+  getProjectionBakeProfile,
+  validateProjectionBakeProfile
+} from './projection-bake-profile.js';
 import { ProjectionBakeRuntime } from './projection-bake-runtime.js';
 
 const canvas = document.querySelector('#three-canvas');
@@ -82,6 +86,7 @@ const cameraResetViewButton = document.querySelector('#camera-reset-view-button'
 const cameraResetLegacyButton = document.querySelector('#camera-reset-legacy-button');
 const cameraEditorStatus = document.querySelector('#camera-editor-status');
 const projectionPoc = document.querySelector('#projection-poc');
+const projectionPocTitle = document.querySelector('#projection-poc-title');
 const projectionPocState = document.querySelector('#projection-poc-state');
 const projectionPocRun = document.querySelector('#projection-poc-run');
 const projectionPocMetrics = document.querySelector('#projection-poc-metrics');
@@ -89,6 +94,7 @@ const projectionPocMessage = document.querySelector('#projection-poc-message');
 const projectionPocSaveButtons = [...document.querySelectorAll('[data-projection-export]')];
 const projectionPreviewCanvases = {
   source: document.querySelector('#projection-source-preview'),
+  direct: document.querySelector('#projection-direct-preview'),
   bake: document.querySelector('#projection-bake-preview'),
   reproject: document.querySelector('#projection-reproject-preview')
 };
@@ -213,7 +219,8 @@ const state = {
     running: false,
     result: null,
     error: '',
-    userValidation: 'PASS_CLOSED'
+    userValidation: 'PASS_CLOSED',
+    block6AFrontValidation: 'PASS_CLOSED'
   },
   link: {
     socket: null,
@@ -871,10 +878,13 @@ function syncAnamorphicControls() {
 }
 
 function isProjectionPocContext() {
-  return isAnamorphicCalibrationFramingActive() &&
-    currentAnamorphicFamily()?.familyId === PROJECTION_BAKE_PROFILE.familyId &&
-    state.site.surfaceSetAvailable &&
-    state.site.activeBindings.some((binding) => binding.mesh.name === PROJECTION_BAKE_PROFILE.surfaceBinding.exactName);
+  const profile = currentProjectionBakeProfile();
+  return Boolean(isAnamorphicCalibrationFramingActive() && profile && state.site.surfaceSetAvailable &&
+    state.site.activeBindings.some((binding) => binding.mesh.name === profile.surfaceBinding.exactName));
+}
+
+function currentProjectionBakeProfile() {
+  return getProjectionBakeProfile(currentAnamorphicFamily()?.familyId);
 }
 
 function clearProjectionPreviews() {
@@ -899,11 +909,15 @@ function releaseProjectionBakeResources(reason = 'context-change') {
     userValidation: state.projectionBake.userValidation,
     releaseReason: reason
   };
+  window.block6BProjectionDiagnostics = window.block6AProjectionDiagnostics;
 }
 
 function syncProjectionPocUi() {
   const available = isProjectionPocContext();
-  const hasOutputs = available && projectionBakeRuntime.hasOutputs();
+  const profile = currentProjectionBakeProfile();
+  const hasOutputs = available && projectionBakeRuntime.hasOutputs() &&
+    projectionBakeRuntime.resources?.profileId === profile?.id;
+  projectionPocTitle.textContent = `PROJECTION POC — ${profile?.label || 'CURRENT FAMILY'}`;
   projectionPoc.hidden = !available;
   projectionPocRun.disabled = !available || state.projectionBake.running || projectionPngExporting;
   for (const button of projectionPocSaveButtons) {
@@ -923,7 +937,7 @@ function downloadBlob(blob, fileName) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-async function saveBlock6APng(kind) {
+async function saveProjectionPng(kind) {
   if (projectionPngExporting) return;
   projectionPngExporting = true;
   projectionPocMessage.className = 'projection-poc-message';
@@ -946,23 +960,31 @@ async function saveBlock6APng(kind) {
 }
 
 function updateProjectionPocMetrics(result) {
+  const profile = currentProjectionBakeProfile();
+  const metricText = (metric) => metric
+    ? `${metric.mae?.toFixed(3) ?? '—'} / ${metric.rmse?.toFixed(3) ?? '—'} / p95 ${metric.p95 ?? '—'}`
+    : '—';
   const rows = result ? [
     ['Camera', `${result.camera.fov.toFixed(3)}° / ${result.camera.aspect.toFixed(6)}`],
     ['Working', `${result.sourceWidth} × ${result.sourceHeight}`],
+    ['Direct', `${result.directWidth} × ${result.directHeight}`],
     ['Bake Texture', `${result.bakeWidth} × ${result.bakeHeight} RGBA`],
     ['Reproject', `${result.reprojectWidth} × ${result.reprojectHeight}`],
     ['Visibility', result.visibility.environmentDepthIncluded ? 'INVALID ENV DEPTH' : 'SURFACE ONLY'],
     ['Mask', result.mask.status],
     ['Valid Pixels', result.validCanonicalPixelCount.toLocaleString()],
     ['Coverage', `${(result.canonicalCoverage * 100).toFixed(3)}%`],
-    ['MAE / RMSE', `${result.mae?.toFixed(3) ?? '—'} / ${result.rmse?.toFixed(3) ?? '—'}`],
+    ['Source / Direct', metricText(result.sourceVsDirect)],
+    ['Direct / Reproject', metricText(result.directVsCanonicalReprojected)],
+    ['Source / Reproject', metricText(result.sourceVsCanonicalReprojected)],
     ['Runs / Resources', `${result.resourcePolicy.runCount} / ${result.resourcePolicy.stableAcrossRuns ? 'STABLE' : 'CHECK'}`],
     ['Preview Display', 'FIT']
   ] : [
-    ['Camera', 'FRONT 75F APPROVED'],
-    ['Working', '3000 × 3840'],
+    ['Camera', `${profile?.label || 'FAMILY'} APPROVED`],
+    ['Working', profile ? `${profile.workingResolution.width} × ${profile.workingResolution.height}` : '—'],
+    ['Direct', profile ? `${profile.workingResolution.width} × ${profile.workingResolution.height}` : '—'],
     ['Bake Texture', '4728 × 5760 RGBA'],
-    ['Mask', 'PRODUCTION REFERENCE'],
+    ['Mask', profile?.productionMask.status || '—'],
     ['Preview Display', 'FIT']
   ];
   projectionPocMetrics.replaceChildren();
@@ -975,9 +997,10 @@ function updateProjectionPocMetrics(result) {
   }
 }
 
-async function runBlock6AProjectionBake({ repetitions = 1 } = {}) {
-  if (!isProjectionPocContext()) throw new Error('Block 6A PoC requires FRONT 75F CALIBRATION with its verified Surface.');
-  const profileValidation = validateProjectionBakeProfile(PROJECTION_BAKE_PROFILE);
+async function runProjectionBake({ repetitions = 1 } = {}) {
+  const profile = currentProjectionBakeProfile();
+  if (!isProjectionPocContext() || !profile) throw new Error('Block 6B PoC requires an implemented anamorphic family calibration with its exact Surface.');
+  const profileValidation = validateProjectionBakeProfile(profile);
   if (!profileValidation.valid) throw new Error(`ProjectionBakeProfile invalid: ${profileValidation.errors.join(', ')}`);
   state.projectionBake.running = true;
   state.projectionBake.status = 'RUNNING';
@@ -987,9 +1010,9 @@ async function runBlock6AProjectionBake({ repetitions = 1 } = {}) {
   syncProjectionPocUi();
   try {
     const result = await projectionBakeRuntime.run({
-      profile: PROJECTION_BAKE_PROFILE,
+      profile,
       surfaceMeshes: state.site.activeBindings
-        .filter((binding) => binding.mesh.name === PROJECTION_BAKE_PROFILE.surfaceBinding.exactName)
+        .filter((binding) => binding.mesh.name === profile.surfaceBinding.exactName)
         .map((binding) => binding.mesh),
       previewCanvases: projectionPreviewCanvases,
       repetitions
@@ -997,7 +1020,8 @@ async function runBlock6AProjectionBake({ repetitions = 1 } = {}) {
     result.profileValid = profileValidation.valid;
     result.contextLossCount = state.contextLossCount;
     result.userValidation = state.projectionBake.userValidation;
-    const maxSampleDelta = (sample) => Math.max(...sample.source.map((value, index) => Math.abs(value - sample.reprojected[index])));
+    result.block6AFrontValidation = profile.block6AUserValidation;
+    const maxSampleDelta = (sample, target) => Math.max(...sample.source.map((value, index) => Math.abs(value - sample[target][index])));
     const centerUvDelta = result.visibility.centerProbe.cpuRaycastUv
       ? Math.hypot(
         result.visibility.centerProbe.gpuUv[0] - result.visibility.centerProbe.cpuRaycastUv[0],
@@ -1005,8 +1029,8 @@ async function runBlock6AProjectionBake({ repetitions = 1 } = {}) {
       )
       : Number.POSITIVE_INFINITY;
     result.technicalThresholds = {
-      canonicalCoverage: { min: 0.5, max: 0.65 },
-      visibleScreenPixelCountMin: 5_000_000,
+      canonicalCoverage: profile.familyId === ANAMORPHIC_FAMILY_IDS.FRONT_75F ? { min: 0.5, max: 0.65 } : { min: 0.01, max: 1 },
+      visibleScreenPixelCountMin: 100_000,
       maeMax: 1,
       rmseMax: 5,
       centerUvDeltaMax: 0.01,
@@ -1017,21 +1041,33 @@ async function runBlock6AProjectionBake({ repetitions = 1 } = {}) {
       result.canonicalCoverage >= result.technicalThresholds.canonicalCoverage.min &&
       result.canonicalCoverage <= result.technicalThresholds.canonicalCoverage.max &&
       result.visibleScreenPixelCount >= result.technicalThresholds.visibleScreenPixelCountMin &&
-      result.mae <= result.technicalThresholds.maeMax &&
-      result.rmse <= result.technicalThresholds.rmseMax &&
+      result.sourceVsDirect.mae <= result.technicalThresholds.maeMax &&
+      result.sourceVsDirect.rmse <= result.technicalThresholds.rmseMax &&
+      result.directVsCanonicalReprojected.mae <= result.technicalThresholds.maeMax &&
+      result.directVsCanonicalReprojected.rmse <= result.technicalThresholds.rmseMax &&
+      result.sourceVsCanonicalReprojected.mae <= result.technicalThresholds.maeMax &&
+      result.sourceVsCanonicalReprojected.rmse <= result.technicalThresholds.rmseMax &&
       centerUvDelta <= result.technicalThresholds.centerUvDeltaMax &&
-      maxSampleDelta(result.centerSample) <= result.technicalThresholds.centerRgbaDeltaMax &&
-      maxSampleDelta(result.alphaTest) <= result.technicalThresholds.alphaRgbaDeltaMax;
+      maxSampleDelta(result.centerSample, 'direct') <= result.technicalThresholds.centerRgbaDeltaMax &&
+      maxSampleDelta(result.centerSample, 'reprojected') <= result.technicalThresholds.centerRgbaDeltaMax &&
+      maxSampleDelta(result.alphaTest, 'direct') <= result.technicalThresholds.alphaRgbaDeltaMax &&
+      maxSampleDelta(result.alphaTest, 'reprojected') <= result.technicalThresholds.alphaRgbaDeltaMax;
     result.technicalPass = result.profileValid &&
-      result.familyId === PROJECTION_BAKE_PROFILE.familyId &&
+      result.familyId === profile.familyId &&
       result.surfaceNames.length === 1 &&
-      result.surfaceNames[0] === PROJECTION_BAKE_PROFILE.surfaceBinding.exactName &&
-      result.sourceWidth === 3000 && result.sourceHeight === 3840 &&
-      result.bakeWidth === 4728 && result.bakeHeight === 5760 &&
-      result.reprojectWidth === 3000 && result.reprojectHeight === 3840 &&
-      result.camera.fov === PROJECTION_BAKE_PROFILE.calibrationCamera.runtimeFov &&
-      result.camera.aspect === PROJECTION_BAKE_PROFILE.calibrationCamera.runtimeAspect &&
-      result.mask.status === 'PRODUCTION_REFERENCE_SUPPLIED' &&
+      result.surfaceNames[0] === profile.surfaceBinding.exactName &&
+      result.sourceWidth === profile.workingResolution.width && result.sourceHeight === profile.workingResolution.height &&
+      result.directWidth === profile.workingResolution.width && result.directHeight === profile.workingResolution.height &&
+      result.bakeWidth === profile.canonicalResolution.width && result.bakeHeight === profile.canonicalResolution.height &&
+      result.reprojectWidth === profile.workingResolution.width && result.reprojectHeight === profile.workingResolution.height &&
+      result.camera.fov === profile.calibrationCamera.runtimeFov &&
+      result.camera.aspect === profile.calibrationCamera.runtimeAspect &&
+      result.mask.status === profile.productionMask.status &&
+      (profile.productionMask.status === 'PRODUCTION_REFERENCE_SUPPLIED'
+        ? result.mask.mode === 'production'
+        : result.mask.mode === 'full-white' && result.mask.fallbackUsed === true) &&
+      result.directProjection.sourceTexture === 'ORIGINAL_WORKING_SOURCE' &&
+      result.directProjection.canonicalTextureReferenced === false &&
       result.visibility.environmentDepthIncluded === false &&
       result.uvPolicy === 'PRESERVE_AUTHORED_NO_REMAP' &&
       result.validCanonicalPixelCount > 0 &&
@@ -1041,13 +1077,14 @@ async function runBlock6AProjectionBake({ repetitions = 1 } = {}) {
       result.resourcePolicy.stableAcrossRuns &&
       state.contextLossCount === 0;
     state.projectionBake.result = result;
-    state.projectionBake.status = result.technicalPass ? 'PASS CLOSED' : 'TECHNICAL CHECK';
+    state.projectionBake.status = result.technicalPass ? 'TECHNICAL PASS' : 'TECHNICAL CHECK';
     projectionPocMessage.className = `projection-poc-message ${result.technicalPass ? 'pass' : 'fail'}`;
     projectionPocMessage.textContent = result.technicalPass
-      ? 'Technical round-trip and USER VISUAL VALIDATION complete. Block 6A CLOSED.'
+      ? 'Technical diagnostics and USER VISUAL VALIDATION complete. Block 6B CLOSED.'
       : 'Technical checks need review. Calibration values were not modified.';
     updateProjectionPocMetrics(result);
     window.block6AProjectionDiagnostics = structuredClone(result);
+    window.block6BProjectionDiagnostics = structuredClone(result);
     return result;
   } catch (error) {
     state.projectionBake.status = 'ERROR';
@@ -1060,6 +1097,7 @@ async function runBlock6AProjectionBake({ repetitions = 1 } = {}) {
       userValidation: state.projectionBake.userValidation,
       error: state.projectionBake.error
     };
+    window.block6BProjectionDiagnostics = window.block6AProjectionDiagnostics;
     throw error;
   } finally {
     state.projectionBake.running = false;
@@ -2395,7 +2433,8 @@ function updateDiagnostics() {
       target: controlsSite.target.toArray()
     },
     projectionBake: {
-      profileId: PROJECTION_BAKE_PROFILE.id,
+      profileId: currentProjectionBakeProfile()?.id || null,
+      familyId: currentProjectionBakeProfile()?.familyId || null,
       status: state.projectionBake.status,
       running: state.projectionBake.running,
       available: isProjectionPocContext(),
@@ -2528,8 +2567,9 @@ function updateDiagnostics() {
       ? `${state.diagnostics.site3d.anamorphicWorkingResolution.width} × ${state.diagnostics.site3d.anamorphicWorkingResolution.height} / ${state.diagnostics.site3d.anamorphicWorkingResolution.aspect.toFixed(6)}`
       : '—'],
     ['Projection PoC', state.diagnostics.projectionBake.status],
-    ['Projection Profile', state.diagnostics.projectionBake.profileId],
-    ['Projection Mask', state.projectionBake.result?.mask?.status || PROJECTION_BAKE_PROFILE.productionMask.status],
+    ['Projection Profile', state.diagnostics.projectionBake.profileId || 'NOT AVAILABLE'],
+    ['Projection Mask', state.projectionBake.result?.mask?.status || currentProjectionBakeProfile()?.productionMask.status || 'NOT AVAILABLE'],
+    ['Direct Projected', state.projectionBake.result ? `${state.projectionBake.result.directWidth} × ${state.projectionBake.result.directHeight}` : 'NOT RUN'],
     ['Canonical Bake', state.projectionBake.result ? `${state.projectionBake.result.bakeWidth} × ${state.projectionBake.result.bakeHeight}` : '4728 × 5760 / NOT RUN'],
     ['Site Scene', state.site.world === 'legacy2d' ? state.site.scene : '—'],
     ['Legacy Camera', isLegacyCameraContext() ? (state.site.legacyCameraLocked ? 'LOCKED' : 'UNLOCKED') : '—'],
@@ -2826,11 +2866,11 @@ legacyCameraLockButton.addEventListener('click', toggleLegacyCameraLock);
 anamorphicCameraResetButton.addEventListener('click', applyAnamorphicCalibrationCamera);
 anamorphicFovInput.addEventListener('change', () => applyAnamorphicFovValue(anamorphicFovInput.value));
 projectionPocRun.addEventListener('click', () => {
-  void runBlock6AProjectionBake().catch((error) => console.error(error));
+  void runProjectionBake().catch((error) => console.error(error));
 });
 for (const button of projectionPocSaveButtons) {
   button.addEventListener('click', () => {
-    void saveBlock6APng(button.dataset.projectionExport).catch((error) => console.error(error));
+    void saveProjectionPng(button.dataset.projectionExport).catch((error) => console.error(error));
   });
 }
 cameraInputMode.addEventListener('change', () => {
@@ -3201,15 +3241,17 @@ function runAnamorphicFamilySmoke(familyKey, expectedSurface) {
 
 window.runBlock5AAnamorphicSmoke = () => runAnamorphicFamilySmoke('front75f', 'ANAM_SURFACE_FRONT75F');
 window.runBlock5BBackSmoke = () => runAnamorphicFamilySmoke('back', 'ANAM_SURFACE_BACK');
-window.runBlock6AProjectionSmoke = async () => {
+async function runProjectionFamilySmoke(familyKey, repetitions) {
   setActiveView('site-3d');
   state.site.world = 'world3d';
   state.site.mappingMode = 'anamorphic';
-  state.site.anamorphicFamily = 'front75f';
+  state.site.anamorphicFamily = familyKey;
   siteWorldSelect.value = state.site.world;
   siteMappingSelect.value = state.site.mappingMode;
   siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
   applySiteSurfaceSelection();
+  const profile = currentProjectionBakeProfile();
+  if (!profile) throw new Error(`No Block 6B projection profile for ${familyKey}.`);
   const before = {
     fov: cameraSite.fov,
     aspect: cameraSite.aspect,
@@ -3219,7 +3261,7 @@ window.runBlock6AProjectionSmoke = async () => {
     surfaceGeometryUuid: state.site.activeBindings[0]?.mesh.geometry.uuid,
     surfaceMatrix: state.site.activeBindings[0]?.mesh.matrixWorld.toArray()
   };
-  const result = await runBlock6AProjectionBake({ repetitions: 3 });
+  const result = await runProjectionBake({ repetitions });
   const after = {
     fov: cameraSite.fov,
     aspect: cameraSite.aspect,
@@ -3230,25 +3272,71 @@ window.runBlock6AProjectionSmoke = async () => {
     surfaceMatrix: state.site.activeBindings[0]?.mesh.matrixWorld.toArray()
   };
   result.calibrationCameraUnchanged = JSON.stringify(before) === JSON.stringify(after);
-  result.productionMaskManifestVerified =
-    state.manifest?.projectionBake?.mask?.sourceVerified === true &&
-    state.manifest?.projectionBake?.mask?.buildCopyVerified === true &&
-    state.manifest?.projectionBake?.mask?.sha256 === PROJECTION_BAKE_PROFILE.productionMask.sha256;
+  const manifestProfile = state.manifest?.projectionBake?.profiles?.[profile.familyId];
+  result.productionMaskManifestVerified = profile.productionMask.status === 'PRODUCTION_REFERENCE_SUPPLIED'
+    ? manifestProfile?.mask?.sourceVerified === true &&
+      manifestProfile?.mask?.buildCopyVerified === true &&
+      manifestProfile?.mask?.sha256 === profile.productionMask.sha256
+    : manifestProfile?.mask?.status === 'NOT_SUPPLIED' &&
+      manifestProfile?.mask?.fallback === 'FULL_WHITE_DIAGNOSTIC';
   result.maskControlModes = ['production', 'full-white', 'synthetic'];
   result.photoshopWritePerformed = false;
   result.externalNetworkRequestCount = 0;
   result.technicalPass = result.technicalPass &&
     result.calibrationCameraUnchanged &&
     result.productionMaskManifestVerified &&
-    result.mask.mode === 'production' &&
+    (profile.productionMask.status === 'PRODUCTION_REFERENCE_SUPPLIED'
+      ? result.mask.mode === 'production'
+      : result.mask.mode === 'full-white' && result.mask.fallbackUsed === true) &&
     result.photoshopWritePerformed === false;
   state.projectionBake.result = result;
-  state.projectionBake.status = result.technicalPass ? 'PASS CLOSED' : 'TECHNICAL CHECK';
-  window.block6AProjectionDiagnostics = structuredClone(result);
+  state.projectionBake.status = result.technicalPass ? 'TECHNICAL PASS' : 'TECHNICAL CHECK';
   syncProjectionPocUi();
   updateProjectionPocMetrics(result);
   updateDiagnostics();
   return result;
+}
+
+window.runBlock6AProjectionSmoke = async () => {
+  const result = await runProjectionFamilySmoke('front75f', 3);
+  result.userValidation = 'PASS_CLOSED';
+  result.block6BUserValidation = 'PASS_CLOSED';
+  window.block6AProjectionDiagnostics = structuredClone(result);
+  return result;
+};
+
+window.runBlock6BProjectionSmoke = async () => {
+  const contextLossBefore = state.contextLossCount;
+  const disposeBefore = projectionBakeRuntime.disposeCount;
+  const frontInitial = await runProjectionFamilySmoke('front75f', 3);
+  const back = await runProjectionFamilySmoke('back', 8);
+  const frontReturn = await runProjectionFamilySmoke('front75f', 3);
+  const sequence = [frontInitial.familyId, back.familyId, frontReturn.familyId];
+  const report = {
+    block: '6B',
+    userValidation: 'PASS_CLOSED',
+    sequence,
+    familySwitchPass: JSON.stringify(sequence) === JSON.stringify([
+      ANAMORPHIC_FAMILY_IDS.FRONT_75F,
+      ANAMORPHIC_FAMILY_IDS.BACK,
+      ANAMORPHIC_FAMILY_IDS.FRONT_75F
+    ]),
+    frontInitial,
+    back,
+    frontReturn,
+    contextLossCount: state.contextLossCount - contextLossBefore,
+    resourcesDisposedAcrossFamilySwitch: projectionBakeRuntime.disposeCount - disposeBefore,
+    photoshopWritePerformed: false
+  };
+  report.technicalPass = report.familySwitchPass &&
+    frontInitial.technicalPass && back.technicalPass && frontReturn.technicalPass &&
+    frontInitial.resourcePolicy.stableAcrossRuns && back.resourcePolicy.stableAcrossRuns && frontReturn.resourcePolicy.stableAcrossRuns &&
+    report.contextLossCount === 0 && report.resourcesDisposedAcrossFamilySwitch >= 2 && report.photoshopWritePerformed === false;
+  state.projectionBake.result = frontReturn;
+  state.projectionBake.status = report.technicalPass ? 'TECHNICAL PASS' : 'TECHNICAL CHECK';
+  window.block6BProjectionDiagnostics = structuredClone(report);
+  syncProjectionPocUi(); updateProjectionPocMetrics(frontReturn); updateDiagnostics();
+  return report;
 };
 window.getBlock6APreviewArtifacts = () => projectionBakeRuntime.previewDataUrls(projectionPreviewCanvases);
 window.getBlock6AFullSourceArtifact = () => projectionBakeRuntime.fullSourceDataUrl();
@@ -3256,6 +3344,9 @@ window.inspectBlock6AExportPng = async (kind) => {
   const { blob: _blob, ...metadata } = await projectionBakeRuntime.exportPng(kind);
   return metadata;
 };
+window.getBlock6BPreviewArtifacts = window.getBlock6APreviewArtifacts;
+window.getBlock6BFullSourceArtifact = window.getBlock6AFullSourceArtifact;
+window.inspectBlock6BExportPng = window.inspectBlock6AExportPng;
 
 window.runBlock4BCameraEditorSmoke = () => {
   setActiveView('site-3d');

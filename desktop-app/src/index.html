@@ -172,28 +172,31 @@
         </section>
         <section id="projection-poc" class="projection-poc" aria-labelledby="projection-poc-title" hidden>
           <div class="projection-poc-heading">
-            <h2 id="projection-poc-title">PROJECTION POC — FRONT 75F</h2>
+            <h2 id="projection-poc-title">PROJECTION POC — CURRENT FAMILY</h2>
             <span id="projection-poc-state" class="projection-poc-state">READY</span>
           </div>
           <button id="projection-poc-run" class="projection-poc-run" type="button">RUN TEST BAKE</button>
           <div class="projection-poc-previews">
             <figure><figcaption>SOURCE</figcaption><canvas id="projection-source-preview"></canvas></figure>
+            <figure><figcaption>DIRECT PROJECTED</figcaption><canvas id="projection-direct-preview"></canvas></figure>
             <figure><figcaption>CANONICAL BAKE</figcaption><canvas id="projection-bake-preview"></canvas></figure>
-            <figure><figcaption>REPROJECTED</figcaption><canvas id="projection-reproject-preview"></canvas></figure>
+            <figure><figcaption>CANONICAL REPROJECTED</figcaption><canvas id="projection-reproject-preview"></canvas></figure>
           </div>
           <div class="projection-poc-save-actions" aria-label="Full-resolution PNG export">
             <button type="button" data-projection-export="source" disabled>SAVE SOURCE PNG</button>
+            <button type="button" data-projection-export="direct" disabled>SAVE DIRECT PNG</button>
             <button type="button" data-projection-export="bake" disabled>SAVE BAKE PNG</button>
             <button type="button" data-projection-export="reproject" disabled>SAVE REPROJECTED PNG</button>
           </div>
           <dl id="projection-poc-metrics" class="projection-poc-metrics">
-            <dt>Camera</dt><dd>FRONT 75F APPROVED</dd>
-            <dt>Working</dt><dd>3000 × 3840</dd>
+            <dt>Camera</dt><dd>CURRENT FAMILY APPROVED</dd>
+            <dt>Working</dt><dd>FAMILY NATIVE</dd>
+            <dt>Direct</dt><dd>FAMILY NATIVE</dd>
             <dt>Bake Texture</dt><dd>4728 × 5760 RGBA</dd>
-            <dt>Mask</dt><dd>PRODUCTION REFERENCE</dd>
+            <dt>Mask</dt><dd>FAMILY CONTRACT</dd>
             <dt>Preview Display</dt><dd>FIT</dd>
           </dl>
-          <p id="projection-poc-message" class="projection-poc-message">Manual run only. Full-resolution PNG export becomes available after a bake; Photoshop transport is not connected to this PoC.</p>
+          <p id="projection-poc-message" class="projection-poc-message">Manual run only. Four full-resolution PNG exports become available after a run; Photoshop transport is not connected to this PoC. Block 6B user visual validation: PASS.</p>
         </section>
         <h2>Runtime diagnostics</h2>
         <dl id="diagnostics"></dl>

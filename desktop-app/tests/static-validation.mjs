@@ -51,7 +51,7 @@ assert(!/unpkg\.com|cdn\.jsdelivr\.net/i.test(`${rendererSource}\n${htmlSource}\
 assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
 assert(!/_TestSource/i.test(`${mainSource}\n${rendererSource}\n${htmlSource}`), 'Runtime references _TestSource.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.6.0-block6a', 'Package version must identify the Block 6A projection-bake checkpoint.');
+assert(packageJson.version === '0.6.1-block6b', 'Package version must identify the Block 6B shared projection checkpoint.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');

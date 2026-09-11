@@ -120,3 +120,13 @@ round-trip validation passed, and the user approved the external difference
 comparison on 2026-09-11; Block 6A is CLOSED. See
 [Block 6A Validation](docs/BLOCK-6A-VALIDATION.md) and
 [Block 6A Handoff](docs/BLOCK-6A-HANDOFF.md).
+
+Block 6B generalizes the projection PoC into one shared FRONT 75F / LUUX BACK
+core and adds an independent `DIRECT PROJECTED` output. The UI now compares
+SOURCE, DIRECT PROJECTED, CANONICAL BAKE, and CANONICAL REPROJECTED and exports
+all four at native family resolution. FRONT keeps its supplied production mask;
+BACK explicitly reports `NOT_SUPPLIED` and uses full-white only as a diagnostic
+fallback. The user accepted both variants for purpose-dependent use on 2026-09-11,
+closing the Block 6B visual gate.
+See [Block 6B Validation](docs/BLOCK-6B-VALIDATION.md) and
+[Block 6B Handoff](docs/BLOCK-6B-HANDOFF.md).

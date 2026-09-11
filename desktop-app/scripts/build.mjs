@@ -7,7 +7,7 @@ import sharp from 'sharp';
 import { SITE_ASSETS } from '../src/site-scene-profile.js';
 import { PHOTO_SCENE_RECORDS } from '../src/site-calibration-profile.js';
 import { ENVIRONMENT_ASSET } from '../src/site-environment-profile.js';
-import { PROJECTION_BAKE_PROFILE, validateProjectionBakeProfile } from '../src/projection-bake-profile.js';
+import { PROJECTION_BAKE_PROFILES, validateProjectionBakeProfile } from '../src/projection-bake-profile.js';
 import { inspectEnvironmentGlb } from './glb-inspection.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -112,40 +112,47 @@ const manifest = {
   projectionBake: null
 };
 
-const projectionProfileValidation = validateProjectionBakeProfile(PROJECTION_BAKE_PROFILE);
-if (!projectionProfileValidation.valid) {
-  throw new Error(`Projection Bake profile invalid: ${projectionProfileValidation.errors.join(', ')}`);
-}
-const maskContract = PROJECTION_BAKE_PROFILE.productionMask;
-const maskSourcePath = path.join(projectRoot, maskContract.sourcePath);
-const maskDestinationPath = path.join(buildRoot, 'assets', 'projection', maskContract.fileName);
-const maskSourceBytes = await readFile(maskSourcePath);
-const maskDimensions = readPngDimensions(maskSourceBytes);
-const maskMetadata = await sharp(maskSourceBytes).metadata();
-if (maskDimensions.width !== maskContract.width || maskDimensions.height !== maskContract.height ||
-    sha256(maskSourceBytes) !== maskContract.sha256 || !['b-w', 'srgb', 'rgb16'].includes(maskMetadata.space)) {
-  throw new Error(`Projection validity mask source contract mismatch: ${maskContract.sourcePath}`);
-}
-await copyFile(maskSourcePath, maskDestinationPath);
-const maskDestinationBytes = await readFile(maskDestinationPath);
-if (maskDestinationBytes.length !== maskSourceBytes.length || sha256(maskDestinationBytes) !== maskContract.sha256) {
-  throw new Error(`Projection validity mask build copy mismatch: ${maskContract.fileName}`);
-}
 manifest.projectionBake = {
-  profileId: PROJECTION_BAKE_PROFILE.id,
-  familyId: PROJECTION_BAKE_PROFILE.familyId,
-  workingResolution: PROJECTION_BAKE_PROFILE.workingResolution,
-  canonicalResolution: PROJECTION_BAKE_PROFILE.canonicalResolution,
-  mask: {
-    ...maskContract,
-    bytes: maskSourceBytes.length,
-    decodedSpace: maskMetadata.space,
-    decodedChannels: maskMetadata.channels,
-    decodedDepth: maskMetadata.depth,
-    sourceVerified: true,
-    buildCopyVerified: true
-  }
+  block: '6B',
+  profiles: {}
 };
+for (const profile of Object.values(PROJECTION_BAKE_PROFILES)) {
+  const validation = validateProjectionBakeProfile(profile);
+  if (!validation.valid) throw new Error(`Projection Bake profile invalid (${profile.familyId}): ${validation.errors.join(', ')}`);
+  const maskContract = profile.productionMask;
+  let maskManifest = { ...maskContract, sourceVerified: false, buildCopyVerified: false };
+  if (maskContract.status === 'PRODUCTION_REFERENCE_SUPPLIED') {
+    const maskSourcePath = path.join(projectRoot, maskContract.sourcePath);
+    const maskDestinationPath = path.join(buildRoot, 'assets', 'projection', maskContract.fileName);
+    const maskSourceBytes = await readFile(maskSourcePath);
+    const maskDimensions = readPngDimensions(maskSourceBytes);
+    const maskMetadata = await sharp(maskSourceBytes).metadata();
+    if (maskDimensions.width !== maskContract.width || maskDimensions.height !== maskContract.height ||
+        sha256(maskSourceBytes) !== maskContract.sha256 || !['b-w', 'srgb', 'rgb16'].includes(maskMetadata.space)) {
+      throw new Error(`Projection validity mask source contract mismatch: ${maskContract.sourcePath}`);
+    }
+    await copyFile(maskSourcePath, maskDestinationPath);
+    const destinationBytes = await readFile(maskDestinationPath);
+    if (destinationBytes.length !== maskSourceBytes.length || sha256(destinationBytes) !== maskContract.sha256) {
+      throw new Error(`Projection validity mask build copy mismatch: ${maskContract.fileName}`);
+    }
+    maskManifest = {
+      ...maskContract, bytes: maskSourceBytes.length, decodedSpace: maskMetadata.space,
+      decodedChannels: maskMetadata.channels, decodedDepth: maskMetadata.depth,
+      sourceVerified: true, buildCopyVerified: true
+    };
+  }
+  manifest.projectionBake.profiles[profile.familyId] = {
+    profileId: profile.id,
+    familyId: profile.familyId,
+    workingResolution: profile.workingResolution,
+    canonicalResolution: profile.canonicalResolution,
+    mask: maskManifest
+  };
+}
+// Block 6A readers retain the verified FRONT contract through this alias.
+const frontProjectionManifest = manifest.projectionBake.profiles.ANAMORPHIC_FRONT_75F;
+Object.assign(manifest.projectionBake, frontProjectionManifest);
 
 for (const photoScene of PHOTO_SCENE_RECORDS) {
   const contract = photoScene.photoAsset;
