@@ -7,14 +7,14 @@
       content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file: ws://localhost:34100; object-src 'none'; base-uri 'none'; frame-src 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Signage MockUp Generator — Block 7</title>
+    <title>Signage MockUp Generator — Block 8A</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <div>
-        <h1>Signage MockUp Generator — BLOCK 7</h1>
-        <p>LUNARGRAPHICS · Photoshop Full-Image Reverse Transport</p>
+        <h1>Signage MockUp Generator — BLOCK 8A</h1>
+        <p>LUNARGRAPHICS · Single Image Projection Authoring</p>
       </div>
       <div id="full-resolution-badge" class="badge pending">WAITING</div>
     </header>
@@ -93,6 +93,15 @@
           <span class="pointer-marker-ring"></span>
           <span class="pointer-marker-label">POINT</span>
         </div>
+        <div id="authoring-overlay" class="authoring-overlay" hidden>
+          <canvas id="authoring-coverage-mask" hidden aria-hidden="true"></canvas>
+          <canvas id="authoring-coverage-preview" class="authoring-coverage-preview" aria-hidden="true"></canvas>
+          <div id="authoring-image-layer" class="authoring-image-layer" aria-label="Authoring image layer">
+            <img id="authoring-image-preview" alt="Imported authoring source" draggable="false">
+            <button id="authoring-scale-handle" class="authoring-handle scale" type="button" aria-label="Uniform scale handle"></button>
+            <button id="authoring-rotate-handle" class="authoring-handle rotate" type="button" aria-label="Rotation handle"></button>
+          </div>
+        </div>
         <div id="drag-hint">2D NAVIGATE: Left/Middle drag: pan · Wheel: zoom</div>
       </section>
 
@@ -169,6 +178,52 @@
             <button id="camera-reset-legacy-button" type="button">RESET TO LEGACY</button>
           </div>
           <p id="camera-editor-status" class="camera-editor-status" role="status">Legacy baseline loaded.</p>
+        </section>
+        <section id="projection-authoring" class="projection-authoring" aria-labelledby="projection-authoring-title" hidden>
+          <div class="projection-poc-heading">
+            <h2 id="projection-authoring-title">PROJECTION AUTHORING</h2>
+            <span id="authoring-state" class="projection-poc-state">NO IMAGE</span>
+          </div>
+          <dl class="projection-poc-metrics authoring-context">
+            <dt>Family</dt><dd id="authoring-family">—</dd>
+            <dt>View</dt><dd>APPROVED PROJECTION VIEW</dd>
+            <dt>Coordinate</dt><dd>FRAME NORMALIZED</dd>
+          </dl>
+          <div class="authoring-camera-row">
+            <span>Camera</span>
+            <button id="authoring-camera-lock" class="authoring-camera-lock unlocked" type="button" aria-pressed="false" title="Toggle camera lock outside Layout Edit">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10V7a5 5 0 0 1 9.8-1.4M6 10h12v10H6z"></path></svg>
+              <span>FREE</span>
+            </button>
+          </div>
+          <button id="layout-edit-button" class="layout-edit-button" type="button" aria-pressed="false" disabled>LAYOUT EDIT</button>
+          <div class="authoring-source-row">
+            <button id="authoring-image-button" type="button">+ IMAGE</button>
+            <input id="authoring-image-input" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" hidden>
+            <div><strong id="authoring-source-name">No image selected</strong><span id="authoring-source-meta">PNG / JPG · original bitmap</span></div>
+          </div>
+          <section class="outside-signage-control" aria-labelledby="outside-signage-title">
+            <div class="outside-signage-heading">
+              <strong id="outside-signage-title">OUTSIDE SIGNAGE</strong>
+              <output id="outside-signage-opacity-value" for="outside-signage-opacity">0.50</output>
+            </div>
+            <div class="outside-signage-presets" aria-label="Outside Preview Opacity presets">
+              <button type="button" data-outside-signage-preset="HIDE">HIDE</button>
+              <button type="button" data-outside-signage-preset="50%" class="active">50%</button>
+              <button type="button" data-outside-signage-preset="FULL">FULL</button>
+            </div>
+            <label for="outside-signage-opacity">Outside Preview Opacity</label>
+            <input id="outside-signage-opacity" type="range" min="0" max="1" step="0.01" value="0.5">
+          </section>
+          <fieldset id="authoring-transform-fields" class="authoring-transform-fields" disabled>
+            <legend>TRANSFORM</legend>
+            <label>X <input id="authoring-transform-x" type="number" step="0.001" value="0.5"></label>
+            <label>Y <input id="authoring-transform-y" type="number" step="0.001" value="0.5"></label>
+            <label>Scale <input id="authoring-transform-scale" type="number" min="0.01" max="20" step="0.01" value="1"></label>
+            <label>Rotation <input id="authoring-transform-rotation" type="number" step="0.1" value="0"></label>
+          </fieldset>
+          <button id="authoring-reset-transform" type="button" disabled>RESET TRANSFORM</button>
+          <p id="authoring-message" class="projection-poc-message">Import one PNG or JPG. A second import replaces the current source.</p>
         </section>
         <section id="projection-poc" class="projection-poc" aria-labelledby="projection-poc-title" hidden>
           <div class="projection-poc-heading">

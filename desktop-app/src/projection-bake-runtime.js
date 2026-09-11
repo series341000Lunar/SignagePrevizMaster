@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { computeNormalizedImageSize, normalizeAuthoringTransform } from './screen-image-authoring.js';
 
 const PREVIEW_WIDTH = 320;
 const SAMPLE_STRIDE = 2;
@@ -21,6 +22,20 @@ varying vec4 vCameraClip;
 uniform sampler2D sourceTexture;
 uniform sampler2D validityMask;
 uniform float maskInvert;
+uniform float authoringEnabled;
+uniform vec2 authoringCenter;
+uniform vec2 authoringSize;
+uniform float authoringRotation;
+vec4 sampleScreenSource(vec2 screenUv) {
+  if (authoringEnabled < 0.5) return texture2D(sourceTexture, screenUv);
+  vec2 delta = vec2(screenUv.x, 1.0 - screenUv.y) - authoringCenter;
+  float cosine = cos(authoringRotation);
+  float sine = sin(authoringRotation);
+  vec2 local = vec2(cosine * delta.x + sine * delta.y, -sine * delta.x + cosine * delta.y);
+  vec2 sourceUv = local / authoringSize + 0.5;
+  if (sourceUv.x < 0.0 || sourceUv.x > 1.0 || sourceUv.y < 0.0 || sourceUv.y > 1.0) return vec4(0.0);
+  return texture2D(sourceTexture, vec2(sourceUv.x, 1.0 - sourceUv.y));
+}
 void main() {
   if (vCameraClip.w <= 0.0) discard;
   vec3 ndc = vCameraClip.xyz / vCameraClip.w;
@@ -29,7 +44,7 @@ void main() {
   float sampledMask = texture2D(validityMask, vCanonicalUv).r;
   float maskWeight = mix(sampledMask, 1.0 - sampledMask, maskInvert);
   if (maskWeight <= 0.0) discard;
-  vec4 source = texture2D(sourceTexture, screenUv);
+  vec4 source = sampleScreenSource(screenUv);
   gl_FragColor = vec4(source.rgb, source.a * maskWeight);
 }`;
 
@@ -65,6 +80,20 @@ uniform sampler2D visibilityDepth;
 uniform sampler2D validityMask;
 uniform float maskInvert;
 uniform float visibilityDepthEpsilon;
+uniform float authoringEnabled;
+uniform vec2 authoringCenter;
+uniform vec2 authoringSize;
+uniform float authoringRotation;
+vec4 sampleScreenSource(vec2 screenUv) {
+  if (authoringEnabled < 0.5) return texture2D(sourceTexture, screenUv);
+  vec2 delta = vec2(screenUv.x, 1.0 - screenUv.y) - authoringCenter;
+  float cosine = cos(authoringRotation);
+  float sine = sin(authoringRotation);
+  vec2 local = vec2(cosine * delta.x + sine * delta.y, -sine * delta.x + cosine * delta.y);
+  vec2 sourceUv = local / authoringSize + 0.5;
+  if (sourceUv.x < 0.0 || sourceUv.x > 1.0 || sourceUv.y < 0.0 || sourceUv.y > 1.0) return vec4(0.0);
+  return texture2D(sourceTexture, vec2(sourceUv.x, 1.0 - sourceUv.y));
+}
 void main() {
   if (vCameraClip.w <= 0.0) discard;
   vec3 ndc = vCameraClip.xyz / vCameraClip.w;
@@ -76,7 +105,7 @@ void main() {
   float sampledMask = texture2D(validityMask, vCanonicalUv).r;
   float maskWeight = mix(sampledMask, 1.0 - sampledMask, maskInvert);
   if (maskWeight <= 0.0) discard;
-  vec4 source = texture2D(sourceTexture, screenUv);
+  vec4 source = sampleScreenSource(screenUv);
   gl_FragColor = vec4(source.rgb, source.a * maskWeight);
 }`;
 
@@ -171,6 +200,59 @@ function createNativeSyntheticSource(profile) {
   texture.minFilter = THREE.LinearFilter; texture.magFilter = THREE.LinearFilter;
   texture.wrapS = THREE.ClampToEdgeWrapping; texture.wrapT = THREE.ClampToEdgeWrapping; texture.needsUpdate = true;
   return { canvas, context, texture, markers, center: { x: cx, y: cy }, alphaProbe };
+}
+
+function drawAuthoringFrame(source, profile, transform) {
+  const { width, height } = profile.workingResolution;
+  const current = normalizeAuthoringTransform(transform);
+  const normalizedSize = computeNormalizedImageSize({
+    sourceWidth: source.original.width,
+    sourceHeight: source.original.height,
+    frameAspect: profile.workingResolution.aspect,
+    scale: current.scale
+  });
+  const drawWidth = normalizedSize.width * width;
+  const drawHeight = normalizedSize.height * height;
+  source.context.clearRect(0, 0, width, height);
+  source.context.save();
+  source.context.translate(current.x * width, current.y * height);
+  source.context.rotate(current.rotationDegrees * Math.PI / 180);
+  source.context.drawImage(source.original.image, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight);
+  source.context.restore();
+  source.normalizedSize = normalizedSize;
+  source.transform = current;
+}
+
+function createOriginalFileSource(profile, authoringSource, transform) {
+  if (!authoringSource?.image || !(authoringSource.width > 0 && authoringSource.height > 0)) {
+    throw new Error('Block 8A Projection Bake requires a decoded original File Bitmap.');
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = profile.workingResolution.width;
+  canvas.height = profile.workingResolution.height;
+  const context = canvas.getContext('2d', { alpha: true, willReadFrequently: true });
+  const texture = new THREE.Texture(authoringSource.image);
+  texture.name = `BLOCK8A_ORIGINAL_FILE_${authoringSource.id}`;
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.flipY = true;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
+  const source = {
+    kind: 'ORIGINAL_FILE_BITMAP',
+    canvas,
+    context,
+    texture,
+    markers: [],
+    center: { x: Math.floor(canvas.width / 2), y: Math.floor(canvas.height / 2) },
+    alphaProbe: { x: Math.floor(canvas.width / 2), y: Math.floor(canvas.height / 2) },
+    original: authoringSource
+  };
+  drawAuthoringFrame(source, profile, transform);
+  return source;
 }
 
 function makeTarget(width, height, depth = false) {
@@ -401,9 +483,14 @@ export class ProjectionBakeRuntime {
     this.renderer = renderer; this.resources = null; this.runCount = 0; this.disposeCount = 0; this.lastCompletedProfileId = null;
   }
 
-  async ensureResources(profile) {
-    if (this.resources?.profileId === profile.id) return this.resources;
-    this.dispose(); const source = createNativeSyntheticSource(profile); let mask = null;
+  async ensureResources(profile, authoringSource = null, authoringTransform = null) {
+    const sourceKey = authoringSource ? `${profile.id}:FILE:${authoringSource.id}` : `${profile.id}:SYNTHETIC`;
+    if (this.resources?.sourceKey === sourceKey) return this.resources;
+    this.dispose();
+    const source = authoringSource
+      ? createOriginalFileSource(profile, authoringSource, authoringTransform)
+      : createNativeSyntheticSource(profile);
+    let mask = null;
     if (profile.productionMask.runtimeUrl) {
       mask = await new THREE.TextureLoader().loadAsync(new URL(profile.productionMask.runtimeUrl, import.meta.url).href);
       const width = mask.image.naturalWidth || mask.image.width; const height = mask.image.naturalHeight || mask.image.height;
@@ -420,7 +507,7 @@ export class ProjectionBakeRuntime {
     const visibilityTarget = makeVisibilityTarget(profile.workingResolution.width, profile.workingResolution.height);
     const visibilityDiagnosticHeight = Math.max(1, Math.round(VISIBILITY_DIAGNOSTIC_WIDTH * profile.canonicalResolution.height / profile.canonicalResolution.width));
     this.resources = {
-      profileId: profile.id, profile, source, mask, fullWhiteMask, syntheticMask, visibilityTarget,
+      profileId: profile.id, sourceKey, profile, source, mask, fullWhiteMask, syntheticMask, visibilityTarget,
       visibilityDiagnosticTarget: makeTarget(VISIBILITY_DIAGNOSTIC_WIDTH, visibilityDiagnosticHeight),
       directTarget: makeTarget(profile.workingResolution.width, profile.workingResolution.height, true),
       bakeTarget: makeTarget(profile.canonicalResolution.width, profile.canonicalResolution.height),
@@ -429,7 +516,7 @@ export class ProjectionBakeRuntime {
     return this.resources;
   }
 
-  async run({ profile, surfaceMeshes, occluderMeshes, previewCanvases, repetitions = 1, maskMode = 'profile' }) {
+  async run({ profile, surfaceMeshes, occluderMeshes, previewCanvases, repetitions = 1, maskMode = 'profile', authoringSource = null, authoringTransform = null }) {
     if (!Array.isArray(surfaceMeshes) || surfaceMeshes.length === 0) throw new Error('Projection Bake requires at least one bound Surface mesh.');
     for (const mesh of surfaceMeshes) if (!mesh.geometry?.getAttribute('uv')) throw new Error(`Surface ${mesh.name} has no authored TEXCOORD_0.`);
     if (!Array.isArray(occluderMeshes) || occluderMeshes.length === 0) throw new Error('Projection Bake requires the exact building depth occluder mesh.');
@@ -439,7 +526,8 @@ export class ProjectionBakeRuntime {
       throw new Error(`Projection Bake exact occluder binding mismatch: expected ${expectedOccluders.join(', ')}; received ${receivedOccluders.join(', ') || 'none'}.`);
     }
     if (!['profile', 'production', 'full-white', 'synthetic'].includes(maskMode)) throw new Error(`Unknown Projection Bake mask mode: ${maskMode}`);
-    const resources = await this.ensureResources(profile);
+    const resources = await this.ensureResources(profile, authoringSource, authoringTransform);
+    if (authoringSource) drawAuthoringFrame(resources.source, profile, authoringTransform);
     const effectiveMaskMode = maskMode === 'profile'
       ? (profile.productionMask.runtimeUrl ? 'production' : 'full-white') : maskMode;
     if (effectiveMaskMode === 'production' && !resources.mask) throw new Error(`${profile.label} production mask is NOT_SUPPLIED.`);
@@ -455,7 +543,24 @@ export class ProjectionBakeRuntime {
     const maskStatus = maskEnabled
       ? profile.productionMask.status
       : (effectiveMaskMode === 'synthetic' ? 'SYNTHETIC_CONTROL' : 'DISABLED_FULL_WHITE_CONTROL');
-    const commonUniforms = { sourceTexture: { value: resources.source.texture }, validityMask: { value: validityMask }, maskInvert: { value: maskInvert } };
+    const transform = normalizeAuthoringTransform(authoringTransform || undefined);
+    const authoringSize = authoringSource
+      ? computeNormalizedImageSize({
+        sourceWidth: authoringSource.width,
+        sourceHeight: authoringSource.height,
+        frameAspect: profile.workingResolution.aspect,
+        scale: transform.scale
+      })
+      : { width: 1, height: 1 };
+    const commonUniforms = {
+      sourceTexture: { value: resources.source.texture },
+      validityMask: { value: validityMask },
+      maskInvert: { value: maskInvert },
+      authoringEnabled: { value: authoringSource ? 1 : 0 },
+      authoringCenter: { value: new THREE.Vector2(transform.x, transform.y) },
+      authoringSize: { value: new THREE.Vector2(authoringSize.width, authoringSize.height) },
+      authoringRotation: { value: THREE.MathUtils.degToRad(transform.rotationDegrees) }
+    };
     const directMaterial = new THREE.ShaderMaterial({ uniforms: commonUniforms, vertexShader: directVertexShader, fragmentShader: directFragmentShader, side: THREE.DoubleSide, transparent: false, blending: THREE.NoBlending, depthTest: true, depthWrite: true, toneMapped: false });
     const occluderDepthMaterial = new THREE.MeshBasicMaterial({
       color: 0x000000, colorWrite: false, side: THREE.DoubleSide,
@@ -532,8 +637,23 @@ export class ProjectionBakeRuntime {
           colorSpace: profile.productionMask.colorSpace, flipY: validityMask.flipY, interpretation: profile.productionMask.meaning,
           sourceOfTruth: maskEnabled ? profile.productionMask.sourceOfTruth : 'FULL_WHITE_CONTROL',
           scalarOperation: maskEnabled ? profile.productionMask.scalarOperation : 'MASK_DISABLED_IDENTITY_ONE', exactLinearInversion: maskInvert === 1 },
+        authoring: authoringSource ? {
+          enabled: true,
+          coordinateSpace: 'PROJECTION_FRAME_NORMALIZED_TOP_LEFT',
+          source: {
+            filename: authoringSource.filename,
+            mimeType: authoringSource.mimeType,
+            originalWidth: authoringSource.width,
+            originalHeight: authoringSource.height,
+            hasAlpha: authoringSource.hasAlpha
+          },
+          transform,
+          normalizedSize: authoringSize,
+          productionSampling: 'ORIGINAL_FILE_BITMAP_DIRECT_TEXTURE_SAMPLE',
+          blendMode: 'NORMAL'
+        } : { enabled: false },
         directProjection: {
-          sourceTexture: 'ORIGINAL_WORKING_SOURCE',
+          sourceTexture: authoringSource ? 'ORIGINAL_FILE_BITMAP' : 'ORIGINAL_WORKING_SOURCE',
           canonicalTextureReferenced: false,
           environmentIncluded: false,
           environmentColorIncluded: false,
@@ -628,7 +748,8 @@ export class ProjectionBakeRuntime {
 
   async exportPng(kind) {
     if (!this.hasOutputs()) throw new Error('Run the Projection Bake before exporting PNG files.');
-    const profile = this.resources.profile; const prefix = `Block6B_${profile.familySlug}`;
+    const profile = this.resources.profile;
+    const prefix = this.resources.source.kind === 'ORIGINAL_FILE_BITMAP' ? `Block8A_${profile.familySlug}` : `Block6B_${profile.familySlug}`;
     const exports = {
       source: { fileName: `${prefix}_Source_${profile.workingResolution.width}x${profile.workingResolution.height}.png`, canvas: this.resources.source.canvas },
       direct: { fileName: `${prefix}_DirectProjected_${profile.workingResolution.width}x${profile.workingResolution.height}.png`, target: this.resources.directTarget },

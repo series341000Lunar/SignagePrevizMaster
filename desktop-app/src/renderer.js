@@ -42,6 +42,20 @@ import {
   validateProjectionBakeProfile
 } from './projection-bake-profile.js';
 import { ProjectionBakeRuntime } from './projection-bake-runtime.js';
+import {
+  AUTHORING_COORDINATE_SPACE,
+  AuthoringPointerSession,
+  detectEmbeddedAlpha,
+  isSupportedImageFile,
+  LayoutCameraInterlock,
+  ScreenImageAuthoringSession,
+  transformToViewportRect
+} from './screen-image-authoring.js';
+import {
+  AuthoringViewSettings,
+  OUTSIDE_SIGNAGE_PRESETS,
+  computeAuthoringPreviewAlpha
+} from './authoring-view-settings.js';
 
 const canvas = document.querySelector('#three-canvas');
 const viewer = document.querySelector('#viewer');
@@ -103,6 +117,35 @@ const projectionSourceDocument = document.querySelector('#projection-source-docu
 const projectionOutputFamily = document.querySelector('#projection-output-family');
 const projectionBakeTarget = document.querySelector('#projection-bake-target');
 const projectionPhotoshopState = document.querySelector('#projection-photoshop-state');
+const projectionAuthoring = document.querySelector('#projection-authoring');
+const authoringState = document.querySelector('#authoring-state');
+const authoringFamily = document.querySelector('#authoring-family');
+const authoringCameraLock = document.querySelector('#authoring-camera-lock');
+const authoringCameraLockLabel = authoringCameraLock.querySelector('span');
+const layoutEditButton = document.querySelector('#layout-edit-button');
+const authoringImageButton = document.querySelector('#authoring-image-button');
+const authoringImageInput = document.querySelector('#authoring-image-input');
+const authoringSourceName = document.querySelector('#authoring-source-name');
+const authoringSourceMeta = document.querySelector('#authoring-source-meta');
+const authoringTransformFields = document.querySelector('#authoring-transform-fields');
+const authoringResetTransform = document.querySelector('#authoring-reset-transform');
+const authoringMessage = document.querySelector('#authoring-message');
+const authoringOverlay = document.querySelector('#authoring-overlay');
+const authoringCoverageMask = document.querySelector('#authoring-coverage-mask');
+const authoringCoveragePreview = document.querySelector('#authoring-coverage-preview');
+const authoringImageLayer = document.querySelector('#authoring-image-layer');
+const authoringImagePreview = document.querySelector('#authoring-image-preview');
+const authoringScaleHandle = document.querySelector('#authoring-scale-handle');
+const authoringRotateHandle = document.querySelector('#authoring-rotate-handle');
+const outsideSignageOpacity = document.querySelector('#outside-signage-opacity');
+const outsideSignageOpacityValue = document.querySelector('#outside-signage-opacity-value');
+const outsideSignagePresetButtons = [...document.querySelectorAll('[data-outside-signage-preset]')];
+const authoringTransformInputs = {
+  x: document.querySelector('#authoring-transform-x'),
+  y: document.querySelector('#authoring-transform-y'),
+  scale: document.querySelector('#authoring-transform-scale'),
+  rotationDegrees: document.querySelector('#authoring-transform-rotation')
+};
 const projectionPreviewCanvases = {
   source: document.querySelector('#projection-source-preview'),
   direct: document.querySelector('#projection-direct-preview'),
@@ -203,6 +246,10 @@ controls3d.target.set(0, 0, 0);
 controls3d.update();
 controlsSite.target.set(0, 4, -1.5);
 controlsSite.update();
+const authoringSession = new ScreenImageAuthoringSession();
+const authoringViewSettings = new AuthoringViewSettings();
+const authoringCameraInterlock = new LayoutCameraInterlock(false);
+const authoringPointerSession = new AuthoringPointerSession();
 
 const state = {
   manifest: null,
@@ -236,6 +283,21 @@ const state = {
     },
     userValidation: 'PASS_CLOSED',
     block6AFrontValidation: 'PASS_CLOSED'
+  },
+  authoring: {
+    sourceRuntime: null,
+    layoutCameraSnapshot: null,
+    previousAnamorphicCameraMode: null,
+    importError: '',
+    userValidation: 'PASS_CLOSED',
+    outsidePreviewUserValidation: 'PASS_CLOSED',
+    coverageCache: {
+      key: null,
+      canvas: authoringCoverageMask,
+      buildCount: 0,
+      reuseCount: 0,
+      triangleCount: 0
+    }
   },
   reverseBake: {
     nextJobId: 1,
@@ -893,11 +955,11 @@ function syncAnamorphicControls() {
   const familyContext = state.activeView === 'site-3d' && state.site.world === 'world3d' &&
     state.site.mappingMode === 'anamorphic';
   siteAnamorphicFamilyControl.hidden = !familyContext;
-  siteAnamorphicFamilySelect.disabled = !familyContext;
+  siteAnamorphicFamilySelect.disabled = !familyContext || authoringCameraInterlock.layoutEditing || authoringPointerSession.active;
   anamorphicCameraResetButton.hidden = !isAnamorphicCalibrationContext();
-  anamorphicCameraResetButton.disabled = !isAnamorphicCalibrationContext() || !state.site.surfaceSetAvailable;
+  anamorphicCameraResetButton.disabled = !isAnamorphicCalibrationContext() || !state.site.surfaceSetAvailable || authoringCameraInterlock.layoutEditing;
   anamorphicFovControl.hidden = !isAnamorphicCalibrationFramingActive();
-  anamorphicFovInput.disabled = !isAnamorphicCalibrationFramingActive() || !state.site.surfaceSetAvailable;
+  anamorphicFovInput.disabled = !isAnamorphicCalibrationFramingActive() || !state.site.surfaceSetAvailable || authoringCameraInterlock.cameraLocked;
   const calibrationLabel = currentAnamorphicFamily()?.label ?? 'ANAMORPHIC';
   anamorphicCameraResetButton.textContent = state.site.anamorphicCameraMode === 'CALIBRATION'
     ? `${calibrationLabel} CALIBRATION`
@@ -905,6 +967,7 @@ function syncAnamorphicControls() {
   anamorphicCameraResetButton.classList.toggle('locked', state.site.anamorphicCameraMode === 'CALIBRATION');
   anamorphicCameraResetButton.classList.toggle('unlocked', state.site.anamorphicCameraMode !== 'CALIBRATION');
   syncProjectionPocUi();
+  syncAuthoringUi();
 }
 
 function isProjectionPocContext() {
@@ -915,6 +978,344 @@ function isProjectionPocContext() {
 
 function currentProjectionBakeProfile() {
   return getProjectionBakeProfile(currentAnamorphicFamily()?.familyId);
+}
+
+function isProjectionAuthoringContext() {
+  return Boolean(isAnamorphicCalibrationContext() && state.site.surfaceSetAvailable && currentProjectionBakeProfile());
+}
+
+function disposeAuthoringSource() {
+  if (state.authoring.sourceRuntime?.objectUrl) URL.revokeObjectURL(state.authoring.sourceRuntime.objectUrl);
+  state.authoring.sourceRuntime = null;
+  authoringImagePreview.removeAttribute('src');
+  authoringCoveragePreview.getContext('2d', { alpha: true })
+    .clearRect(0, 0, authoringCoveragePreview.width, authoringCoveragePreview.height);
+}
+
+function invalidateAuthoringOutputs(reason = 'authoring-transform-change') {
+  if (projectionBakeRuntime.resources) releaseProjectionBakeResources(reason);
+  state.projectionBake.status = authoringSession.source ? 'DIRTY / NEEDS BAKE' : 'READY';
+  state.projectionBake.result = null;
+  state.projectionBake.error = '';
+  syncProjectionPocUi();
+  syncAuthoringUi();
+}
+
+function authoringFrameRect() {
+  const profile = currentProjectionBakeProfile();
+  if (!profile) return null;
+  return computeContainedAspectRect(
+    Math.max(1, viewer.clientWidth),
+    Math.max(1, viewer.clientHeight),
+    profile.workingResolution.aspect
+  );
+}
+
+function invalidateAuthoringCoverage() {
+  state.authoring.coverageCache.key = null;
+}
+
+function authoringCoverageMeshes(profile = currentProjectionBakeProfile()) {
+  if (!profile) return [];
+  return state.site.activeBindings
+    .filter((binding) => binding.mesh.name === profile.surfaceBinding.exactName)
+    .map((binding) => binding.mesh);
+}
+
+function authoringCoverageKey(frame, pixelRatio, profile, meshes) {
+  cameraSite.updateProjectionMatrix();
+  cameraSite.updateMatrixWorld(true);
+  const cameraSignature = [...cameraSite.projectionMatrix.elements, ...cameraSite.matrixWorldInverse.elements]
+    .map((value) => Number(value).toFixed(8)).join(',');
+  const surfaceSignature = meshes.map((mesh) => {
+    mesh.updateWorldMatrix(true, false);
+    const position = mesh.geometry.getAttribute('position');
+    return `${mesh.name}:${mesh.geometry.uuid}:${position?.version ?? 0}:${mesh.matrixWorld.elements.map((value) => Number(value).toFixed(8)).join(',')}`;
+  }).join('|');
+  return `${profile.familyId}:${profile.surfaceBinding.exactName}:${Math.round(frame.width * pixelRatio)}x${Math.round(frame.height * pixelRatio)}:${cameraSignature}:${surfaceSignature}`;
+}
+
+function buildAuthoringCoverageMask(frame, pixelRatio) {
+  const profile = currentProjectionBakeProfile();
+  const meshes = authoringCoverageMeshes(profile);
+  const cache = state.authoring.coverageCache;
+  const key = authoringCoverageKey(frame, pixelRatio, profile, meshes);
+  if (cache.key === key) {
+    cache.reuseCount += 1;
+    return cache.canvas;
+  }
+  const width = Math.max(1, Math.round(frame.width * pixelRatio));
+  const height = Math.max(1, Math.round(frame.height * pixelRatio));
+  cache.canvas.width = width;
+  cache.canvas.height = height;
+  const context = cache.canvas.getContext('2d', { alpha: true });
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = '#ffffff';
+  const world = new THREE.Vector3();
+  const projected = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+  let triangleCount = 0;
+  for (const mesh of meshes) {
+    const geometry = mesh.geometry;
+    const position = geometry.getAttribute('position');
+    const index = geometry.index;
+    if (!position) continue;
+    const elementCount = index ? index.count : position.count;
+    const drawStart = Math.max(0, geometry.drawRange.start || 0);
+    const drawCount = Number.isFinite(geometry.drawRange.count)
+      ? Math.min(geometry.drawRange.count, elementCount - drawStart)
+      : elementCount - drawStart;
+    const drawEnd = drawStart + drawCount - (drawCount % 3);
+    for (let offset = drawStart; offset < drawEnd; offset += 3) {
+      for (let corner = 0; corner < 3; corner += 1) {
+        const vertexIndex = index ? index.getX(offset + corner) : offset + corner;
+        world.fromBufferAttribute(position, vertexIndex).applyMatrix4(mesh.matrixWorld);
+        projected[corner].copy(world).project(cameraSite);
+      }
+      if (projected.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z))) continue;
+      if (projected.every((point) => point.z < -1) || projected.every((point) => point.z > 1)) continue;
+      context.beginPath();
+      context.moveTo((projected[0].x + 1) * 0.5 * width, (1 - projected[0].y) * 0.5 * height);
+      context.lineTo((projected[1].x + 1) * 0.5 * width, (1 - projected[1].y) * 0.5 * height);
+      context.lineTo((projected[2].x + 1) * 0.5 * width, (1 - projected[2].y) * 0.5 * height);
+      context.closePath();
+      context.fill();
+      triangleCount += 1;
+    }
+  }
+  cache.key = key;
+  cache.buildCount += 1;
+  cache.triangleCount = triangleCount;
+  return cache.canvas;
+}
+
+function drawAuthoringCoveragePreview(frame, rect, runtimeSource) {
+  const pixelRatio = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+  const width = Math.max(1, Math.round(frame.width * pixelRatio));
+  const height = Math.max(1, Math.round(frame.height * pixelRatio));
+  if (authoringCoveragePreview.width !== width || authoringCoveragePreview.height !== height) {
+    authoringCoveragePreview.width = width;
+    authoringCoveragePreview.height = height;
+  }
+  const coverage = buildAuthoringCoverageMask(frame, pixelRatio);
+  const context = authoringCoveragePreview.getContext('2d', { alpha: true });
+  context.clearRect(0, 0, width, height);
+  context.save();
+  context.fillStyle = `rgba(255,255,255,${authoringViewSettings.outsideSignageOpacity})`;
+  context.fillRect(0, 0, width, height);
+  context.drawImage(coverage, 0, 0, width, height);
+  context.globalCompositeOperation = 'source-in';
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.translate(rect.centerX * pixelRatio, rect.centerY * pixelRatio);
+  context.rotate(rect.rotationDegrees * Math.PI / 180);
+  context.drawImage(
+    runtimeSource.image,
+    -rect.width * pixelRatio * 0.5,
+    -rect.height * pixelRatio * 0.5,
+    rect.width * pixelRatio,
+    rect.height * pixelRatio
+  );
+  context.restore();
+}
+
+function syncAuthoringOverlay() {
+  const runtimeSource = state.authoring.sourceRuntime;
+  const visible = Boolean(runtimeSource && isProjectionAuthoringContext() &&
+    state.site.anamorphicCameraMode === 'CALIBRATION');
+  authoringOverlay.hidden = !visible;
+  authoringOverlay.classList.toggle('editing', visible && authoringCameraInterlock.layoutEditing);
+  if (!visible) return;
+  const frame = authoringFrameRect();
+  const profile = currentProjectionBakeProfile();
+  const rect = transformToViewportRect(
+    authoringSession.transform,
+    { width: runtimeSource.width, height: runtimeSource.height },
+    profile.workingResolution.aspect,
+    { x: 0, y: 0, width: frame.width, height: frame.height }
+  );
+  authoringOverlay.style.left = `${frame.x}px`;
+  authoringOverlay.style.top = `${frame.y}px`;
+  authoringOverlay.style.width = `${frame.width}px`;
+  authoringOverlay.style.height = `${frame.height}px`;
+  authoringImageLayer.style.left = `${rect.centerX}px`;
+  authoringImageLayer.style.top = `${rect.centerY}px`;
+  authoringImageLayer.style.width = `${rect.width}px`;
+  authoringImageLayer.style.height = `${rect.height}px`;
+  authoringImageLayer.style.transform = `translate(-50%, -50%) rotate(${rect.rotationDegrees}deg)`;
+  drawAuthoringCoveragePreview(frame, rect, runtimeSource);
+}
+
+function syncAuthoringUi() {
+  const available = isProjectionAuthoringContext();
+  const source = authoringSession.source;
+  const layoutEditing = authoringCameraInterlock.layoutEditing;
+  projectionAuthoring.hidden = !available;
+  authoringFamily.textContent = currentAnamorphicFamily()?.label || '—';
+  authoringState.textContent = authoringSession.status;
+  authoringState.className = `projection-poc-state${authoringSession.dirty ? ' running' : ''}`;
+  authoringSourceName.textContent = source?.filename || 'No image selected';
+  authoringSourceMeta.textContent = source
+    ? `${source.width} × ${source.height} · ${source.mimeType === 'image/png' ? 'PNG' : 'JPEG'} · Alpha ${source.hasAlpha ? 'YES' : 'NO'}`
+    : 'PNG / JPG · original bitmap';
+  outsideSignageOpacity.value = String(authoringViewSettings.outsideSignageOpacity);
+  outsideSignageOpacityValue.value = authoringViewSettings.outsideSignageOpacity.toFixed(2);
+  outsideSignageOpacity.disabled = !available || !source;
+  for (const button of outsideSignagePresetButtons) {
+    const presetValue = OUTSIDE_SIGNAGE_PRESETS[button.dataset.outsideSignagePreset];
+    button.disabled = !available || !source;
+    button.classList.toggle('active', presetValue === authoringViewSettings.outsideSignageOpacity);
+  }
+  for (const [name, input] of Object.entries(authoringTransformInputs)) {
+    input.value = String(authoringSession.transform[name]);
+  }
+  authoringTransformFields.disabled = !available || !source || !layoutEditing;
+  authoringResetTransform.disabled = !available || !source || !layoutEditing;
+  authoringImageButton.disabled = !available || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  layoutEditButton.disabled = !available || !source || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  layoutEditButton.classList.toggle('active', layoutEditing);
+  layoutEditButton.setAttribute('aria-pressed', String(layoutEditing));
+  layoutEditButton.textContent = layoutEditing ? 'EXIT LAYOUT EDIT' : 'LAYOUT EDIT';
+  authoringCameraLock.disabled = !available || layoutEditing;
+  authoringCameraLock.setAttribute('aria-pressed', String(authoringCameraInterlock.cameraLocked));
+  authoringCameraLockLabel.textContent = authoringCameraInterlock.displayState;
+  authoringCameraLock.title = layoutEditing
+    ? 'Camera locked while editing layout'
+    : 'Toggle camera lock outside Layout Edit';
+  authoringCameraLock.classList.toggle('interlocked', layoutEditing);
+  authoringCameraLock.classList.toggle('locked', !layoutEditing && authoringCameraInterlock.manualLocked);
+  authoringCameraLock.classList.toggle('unlocked', !layoutEditing && !authoringCameraInterlock.manualLocked);
+  syncAuthoringOverlay();
+}
+
+function toggleAuthoringCameraLock() {
+  const accepted = authoringCameraInterlock.requestManualLock(!authoringCameraInterlock.manualLocked);
+  if (!accepted) return false;
+  syncSiteCameraControls();
+  updateDiagnostics();
+  return true;
+}
+
+function enterLayoutEdit() {
+  if (!isProjectionAuthoringContext() || !authoringSession.source || authoringCameraInterlock.layoutEditing) return false;
+  state.authoring.layoutCameraSnapshot = snapshotSiteCameraRuntime();
+  state.authoring.previousAnamorphicCameraMode = state.site.anamorphicCameraMode;
+  authoringCameraInterlock.enterLayout();
+  applyAnamorphicCalibrationCamera();
+  state.authoring.calibrationCameraSnapshot = snapshotSiteCameraRuntime();
+  authoringMessage.className = 'projection-poc-message pass';
+  authoringMessage.textContent = 'LAYOUT INTERLOCK active. Drag image; use corner and rotation handles. Camera input is blocked.';
+  syncSiteCameraControls();
+  render();
+  updateDiagnostics();
+  return true;
+}
+
+function endAuthoringPointerInteraction(event = null) {
+  const pointerId = event?.pointerId ?? authoringPointerSession.pointerId;
+  if (pointerId === null || pointerId === undefined) return false;
+  const ended = authoringPointerSession.end(pointerId);
+  if (!ended) return false;
+  if (authoringOverlay.hasPointerCapture?.(pointerId)) authoringOverlay.releasePointerCapture(pointerId);
+  state.authoring.dragMetrics = null;
+  syncAuthoringUi();
+  return true;
+}
+
+function cancelAuthoringPointerInteraction() {
+  const pointerId = authoringPointerSession.pointerId;
+  if (!authoringPointerSession.cancel()) return false;
+  if (pointerId !== null && authoringOverlay.hasPointerCapture?.(pointerId)) authoringOverlay.releasePointerCapture(pointerId);
+  state.authoring.dragMetrics = null;
+  syncAuthoringUi();
+  return true;
+}
+
+function exitLayoutEdit() {
+  if (!authoringCameraInterlock.layoutEditing) return false;
+  cancelAuthoringPointerInteraction();
+  const snapshot = state.authoring.layoutCameraSnapshot;
+  const previousMode = state.authoring.previousAnamorphicCameraMode;
+  authoringCameraInterlock.exitLayout();
+  if (snapshot) restoreSiteCameraRuntime(snapshot);
+  if (previousMode) state.site.anamorphicCameraMode = previousMode;
+  state.authoring.layoutCameraSnapshot = null;
+  state.authoring.previousAnamorphicCameraMode = null;
+  state.authoring.calibrationCameraSnapshot = null;
+  authoringMessage.className = 'projection-poc-message';
+  authoringMessage.textContent = 'Layout Edit ended. Previous inspection camera and manual lock state restored.';
+  syncSiteCameraControls();
+  resizeRenderer();
+  updateDiagnostics();
+  return true;
+}
+
+function toggleLayoutEdit() {
+  return authoringCameraInterlock.layoutEditing ? exitLayoutEdit() : enterLayoutEdit();
+}
+
+function commitAuthoringTransform(partial, reason = 'authoring-transform-change') {
+  if (!authoringCameraInterlock.layoutEditing || !authoringSession.source) return false;
+  if (!authoringSession.setTransform(partial)) return false;
+  invalidateAuthoringOutputs(reason);
+  syncAuthoringOverlay();
+  updateDiagnostics();
+  return true;
+}
+
+function commitOutsideSignageOpacity(value) {
+  if (!isProjectionAuthoringContext()) return false;
+  if (!authoringViewSettings.setOutsideSignageOpacity(value)) return false;
+  syncAuthoringUi();
+  updateDiagnostics();
+  return true;
+}
+
+async function loadAuthoringFile(file) {
+  if (!isProjectionAuthoringContext()) throw new Error('Select an available Anamorphic Projection View before importing an image.');
+  if (!isSupportedImageFile(file)) throw new Error('Block 8A supports PNG and JPG/JPEG files only.');
+  const extension = file.name.split('.').pop()?.toLowerCase();
+  const mimeType = file.type || (extension === 'png' ? 'image/png' : 'image/jpeg');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const objectUrl = URL.createObjectURL(file);
+  const image = new Image();
+  image.decoding = 'async';
+  image.src = objectUrl;
+  try {
+    await image.decode();
+    const runtimeSource = {
+      id: `${file.lastModified}-${file.size}-${file.name}`,
+      filename: file.name,
+      name: file.name,
+      mimeType,
+      type: mimeType,
+      width: image.naturalWidth,
+      height: image.naturalHeight,
+      hasAlpha: detectEmbeddedAlpha(bytes, mimeType),
+      byteLength: file.size,
+      image,
+      objectUrl
+    };
+    const previous = state.authoring.sourceRuntime;
+    authoringSession.setSource(runtimeSource, currentProjectionBakeProfile().familyId);
+    state.authoring.sourceRuntime = runtimeSource;
+    authoringImagePreview.src = objectUrl;
+    if (previous?.objectUrl) URL.revokeObjectURL(previous.objectUrl);
+    state.authoring.importError = '';
+    authoringMessage.className = 'projection-poc-message pass';
+    authoringMessage.textContent = `${file.name} loaded at original ${runtimeSource.width} × ${runtimeSource.height}. Production Bake samples this bitmap directly.`;
+    invalidateAuthoringOutputs('authoring-source-replaced');
+    syncAuthoringUi();
+    render();
+    updateDiagnostics();
+    return runtimeSource;
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl);
+    state.authoring.importError = error.message;
+    authoringMessage.className = 'projection-poc-message fail';
+    authoringMessage.textContent = error.message;
+    syncAuthoringUi();
+    throw error;
+  }
 }
 
 function isProjectionMaskEnabled(profile = currentProjectionBakeProfile()) {
@@ -973,6 +1374,7 @@ function syncProjectionPocUi() {
     projectionBakeRuntime.resources?.profileId === profile?.id;
   projectionPocTitle.textContent = `PROJECTION POC — ${profile?.label || 'CURRENT FAMILY'}`;
   projectionPoc.hidden = !available;
+  projectionPocRun.textContent = authoringSession.source ? 'BAKE CANONICAL' : 'RUN TEST BAKE';
   projectionPocRun.disabled = !available || state.projectionBake.running || projectionPngExporting;
   projectionMaskEnabled.checked = maskEnabled;
   projectionMaskEnabled.disabled = !available || state.projectionBake.running || projectionPngExporting || state.reverseBake.activeJobId !== null;
@@ -1000,9 +1402,9 @@ function syncProjectionPocUi() {
     }
   }
   const source = state.link.lastFrame;
-  if (projectionSourceDocument) projectionSourceDocument.textContent = source
-    ? `${source.documentName} · ID ${source.documentId} · ${source.width} × ${source.height}`
-    : 'No Photoshop source frame received';
+  if (projectionSourceDocument) projectionSourceDocument.textContent = authoringSession.source
+    ? `FILE · ${authoringSession.source.filename} · ${authoringSession.source.width} × ${authoringSession.source.height}`
+    : (source ? `${source.documentName} · ID ${source.documentId} · ${source.width} × ${source.height}` : 'No Photoshop source frame received');
   if (projectionOutputFamily) projectionOutputFamily.textContent = profile
     ? `${profile.label} · ${profile.familyId}`
     : '—';
@@ -1246,6 +1648,10 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
   if (!isProjectionPocContext() || !profile) throw new Error('Block 6B PoC requires an implemented anamorphic family calibration with its exact Surface.');
   const profileValidation = validateProjectionBakeProfile(profile);
   if (!profileValidation.valid) throw new Error(`ProjectionBakeProfile invalid: ${profileValidation.errors.join(', ')}`);
+  const authoringSource = state.authoring.sourceRuntime;
+  if (authoringSource && authoringSession.familyId !== profile.familyId) {
+    throw new Error(`AUTHORING_FAMILY_MISMATCH: Image session belongs to ${authoringSession.familyId}; current family is ${profile.familyId}.`);
+  }
   const requestedMaskMode = maskMode || (isProjectionMaskEnabled(profile) ? 'production' : 'full-white');
   state.projectionBake.running = true;
   state.projectionBake.status = 'RUNNING';
@@ -1264,7 +1670,9 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
       occluderMeshes: matteAsset.meshes,
       previewCanvases: projectionPreviewCanvases,
       repetitions,
-      maskMode: requestedMaskMode
+      maskMode: requestedMaskMode,
+      authoringSource,
+      authoringTransform: authoringSource ? authoringSession.transform : null
     });
     matteAsset.dispose();
     result.matteAsset = matteAsset.diagnostics;
@@ -1273,6 +1681,7 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
     result.contextLossCount = state.contextLossCount;
     result.userValidation = state.projectionBake.userValidation;
     result.block6AFrontValidation = profile.block6AUserValidation;
+    result.authoringRevision = authoringSource ? authoringSession.revision : null;
     const maxSampleDelta = (sample, target) => Math.max(...sample.source.map((value, index) => Math.abs(value - sample[target][index])));
     const sampleMatchesIfVisible = (sample, target, maximumDelta) =>
       sample[target][3] === 0 || maxSampleDelta(sample, target) <= maximumDelta;
@@ -1289,19 +1698,26 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
       centerRgbaDeltaMax: 1,
       alphaRgbaDeltaMax: 1
     };
+    result.authoringTechnicalThresholds = authoringSource ? {
+      ...result.technicalThresholds,
+      maeMax: 1.25,
+      reprojectOnlyPixelCountMax: 4096,
+      reason: 'ROTATED_STRAIGHT_ALPHA_LINEAR_RESAMPLE_EDGE_TOLERANCE'
+    } : null;
+    const roundTripThresholds = result.authoringTechnicalThresholds || result.technicalThresholds;
     const inverseMaskActive = result.mask.exactLinearInversion === true;
     result.maskAdjustedSourceComparison = inverseMaskActive ? 'NOT_APPLICABLE_MASK_INVERTED' : 'SOURCE_EQUIVALENCE_REQUIRED';
-    result.roundTripMetricsPass =
+    const sharedRoundTripPass =
       result.canonicalCoverage >= result.technicalThresholds.canonicalCoverage.min &&
       result.canonicalCoverage <= result.technicalThresholds.canonicalCoverage.max &&
       result.visibleScreenPixelCount >= result.technicalThresholds.visibleScreenPixelCountMin &&
-      result.directVsCanonicalReprojected.mae <= result.technicalThresholds.maeMax &&
-      result.directVsCanonicalReprojected.rmse <= result.technicalThresholds.rmseMax &&
-      result.visibilityAgreement.silhouetteIou >= result.technicalThresholds.silhouetteIouMin &&
-      result.visibilityAgreement.directOnlyPixelCount <= result.technicalThresholds.directOnlyPixelCountMax &&
-      result.visibilityAgreement.reprojectOnlyPixelCount <= result.technicalThresholds.reprojectOnlyPixelCountMax &&
-      result.visibilityDiagnostic.occludedPixelCount > 0 &&
-      (inverseMaskActive || (
+      result.directVsCanonicalReprojected.mae <= roundTripThresholds.maeMax &&
+      result.directVsCanonicalReprojected.rmse <= roundTripThresholds.rmseMax &&
+      result.visibilityAgreement.silhouetteIou >= roundTripThresholds.silhouetteIouMin &&
+      result.visibilityAgreement.directOnlyPixelCount <= roundTripThresholds.directOnlyPixelCountMax &&
+      result.visibilityAgreement.reprojectOnlyPixelCount <= roundTripThresholds.reprojectOnlyPixelCountMax &&
+      result.visibilityDiagnostic.occludedPixelCount > 0;
+    const syntheticSourceEquivalencePass = inverseMaskActive || (
         result.sourceVsDirect.mae <= result.technicalThresholds.maeMax &&
         result.sourceVsDirect.rmse <= result.technicalThresholds.rmseMax &&
         result.sourceVsCanonicalReprojected.mae <= result.technicalThresholds.maeMax &&
@@ -1309,8 +1725,9 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
         sampleMatchesIfVisible(result.centerSample, 'direct', result.technicalThresholds.centerRgbaDeltaMax) &&
         sampleMatchesIfVisible(result.centerSample, 'reprojected', result.technicalThresholds.centerRgbaDeltaMax) &&
         sampleMatchesIfVisible(result.alphaTest, 'direct', result.technicalThresholds.alphaRgbaDeltaMax) &&
-        sampleMatchesIfVisible(result.alphaTest, 'reprojected', result.technicalThresholds.alphaRgbaDeltaMax)
-      ));
+        sampleMatchesIfVisible(result.alphaTest, 'reprojected', result.technicalThresholds.alphaRgbaDeltaMax));
+    result.roundTripMetricsPass = sharedRoundTripPass &&
+      (authoringSource ? result.authoring.productionSampling === 'ORIGINAL_FILE_BITMAP_DIRECT_TEXTURE_SAMPLE' : syntheticSourceEquivalencePass);
     result.technicalPass = result.profileValid &&
       result.familyId === profile.familyId &&
       result.surfaceNames.length === 1 &&
@@ -1324,7 +1741,7 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
       (requestedMaskMode === 'production'
         ? result.mask.enabled === true && result.mask.status === profile.productionMask.status && result.mask.scalarOperation === profile.productionMask.scalarOperation
         : result.mask.enabled === false && result.mask.mode === 'full-white') &&
-      result.directProjection.sourceTexture === 'ORIGINAL_WORKING_SOURCE' &&
+      result.directProjection.sourceTexture === (authoringSource ? 'ORIGINAL_FILE_BITMAP' : 'ORIGINAL_WORKING_SOURCE') &&
       result.directProjection.canonicalTextureReferenced === false &&
       result.directProjection.environmentIncluded === false &&
       result.directProjection.environmentColorIncluded === false &&
@@ -1352,10 +1769,11 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
       result.resourcePolicy.stableAcrossRuns &&
       state.contextLossCount === 0;
     state.projectionBake.result = result;
+    if (authoringSource) authoringSession.markBaked();
     state.projectionBake.status = result.technicalPass ? 'TECHNICAL PASS' : 'TECHNICAL CHECK';
     projectionPocMessage.className = `projection-poc-message ${result.technicalPass ? 'pass' : 'fail'}`;
     projectionPocMessage.textContent = result.technicalPass
-      ? `Technical diagnostics pass · Camera-depth visibility · Mask ${result.mask.enabled ? 'ON' : 'OFF'}.`
+      ? `${authoringSource ? 'Authoring image' : 'Technical diagnostics'} pass · Camera-depth visibility · Mask ${result.mask.enabled ? 'ON' : 'OFF'}.`
       : 'Technical checks need review. Calibration values were not modified.';
     updateProjectionPocMetrics(result);
     window.block6AProjectionDiagnostics = structuredClone(result);
@@ -1378,6 +1796,7 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
     matteAsset?.dispose();
     state.projectionBake.running = false;
     syncProjectionPocUi();
+    syncAuthoringUi();
     render();
     updateDiagnostics();
   }
@@ -1418,7 +1837,7 @@ function applyAnamorphicCalibrationCamera() {
 }
 
 function applyAnamorphicFovValue(value) {
-  if (!isAnamorphicCalibrationFramingActive() || !state.site.surfaceSetAvailable) return false;
+  if (!isAnamorphicCalibrationFramingActive() || !state.site.surfaceSetAvailable || authoringCameraInterlock.cameraLocked) return false;
   const nextFov = Number(value);
   if (!Number.isFinite(nextFov) || nextFov < 1 || nextFov > 179) {
     anamorphicFovInput.value = String(cameraSite.fov);
@@ -1507,6 +1926,18 @@ function restoreSiteCameraRuntime(snapshot) {
   controlsSite.target.copy(snapshot.target);
   cameraSite.updateProjectionMatrix();
   cameraSite.updateMatrixWorld(true);
+}
+
+function siteCameraRuntimeMatchesSnapshot(snapshot, epsilon = 1e-9) {
+  return Boolean(snapshot) &&
+    Math.abs(cameraSite.fov - snapshot.fov) <= epsilon &&
+    Math.abs(cameraSite.aspect - snapshot.aspect) <= epsilon &&
+    Math.abs(cameraSite.near - snapshot.near) <= epsilon &&
+    Math.abs(cameraSite.far - snapshot.far) <= epsilon &&
+    Math.abs(cameraSite.zoom - snapshot.zoom) <= epsilon &&
+    cameraSite.position.distanceTo(snapshot.position) <= epsilon &&
+    cameraSite.quaternion.angleTo(snapshot.quaternion) <= epsilon &&
+    controlsSite.target.distanceTo(snapshot.target) <= epsilon;
 }
 
 function applyCameraValuesToRuntime(values, runtimeTarget = null) {
@@ -1751,9 +2182,11 @@ function syncSiteCameraControls() {
   legacyCameraLockButton.setAttribute('aria-pressed', String(state.site.legacyCameraLocked));
   legacyCameraLockButton.classList.toggle('locked', state.site.legacyCameraLocked);
   legacyCameraLockButton.classList.toggle('unlocked', !state.site.legacyCameraLocked);
+  const authoringLocked = isAnamorphicCalibrationContext() && authoringCameraInterlock.cameraLocked;
   controlsSite.enabled = state.activeView === 'site-3d' &&
     state.site.surfaceSetAvailable &&
-    (!legacyContext || !state.site.legacyCameraLocked);
+    (!legacyContext || !state.site.legacyCameraLocked) &&
+    !authoringLocked;
   syncCameraEditorAvailability();
   syncAnamorphicControls();
 }
@@ -1773,6 +2206,7 @@ function toggleLegacyCameraLock() {
 
 function applySiteSurfaceSelection({ resetCamera = true } = {}) {
   if (Object.keys(SITE_SCENE_PROFILE.assets).some((assetId) => !state.site.roots[assetId])) return;
+  invalidateAuthoringCoverage();
   for (const mesh of state.site.meshes) mesh.visible = false;
   const selection = selectedSiteContract();
   if (!selection.contracts) {
@@ -2165,6 +2599,7 @@ function isThreeDimensionalView() {
 
 function setActiveView(view) {
   if (!['2d', '3d-plane', 'site-3d'].includes(view)) throw new Error(`Unknown view: ${view}`);
+  if (authoringCameraInterlock.layoutEditing && view !== state.activeView) exitLayoutEdit();
   const enteringLegacy = view === 'site-3d' && state.activeView !== 'site-3d' &&
     state.site.world === 'legacy2d' && state.site.mappingMode === 'normal';
   state.activeView = view;
@@ -2234,6 +2669,7 @@ function render() {
   else renderer.render(scene, camera);
   updatePointerMarker();
   updateLocationMarkers();
+  syncAuthoringOverlay();
 }
 
 function updatePointerMarker() {
@@ -2280,6 +2716,7 @@ function formatMs(value) {
 }
 
 function pointerRequirementsSatisfied() {
+  if (authoringCameraInterlock.layoutEditing) return false;
   const live = state.link.lastFrame;
   const pointerSurfaceAvailable = state.activeView === 'site-3d'
     ? state.site.surfaceSetAvailable && state.site.activeBindings.length > 0 &&
@@ -2322,6 +2759,9 @@ function updatePointerControls() {
     dragHint.textContent = state.interactionMode === 'point'
       ? '2D POINT: Left click · Middle drag: pan · Wheel: zoom'
       : '2D NAVIGATE: Left/Middle drag: pan · Wheel: zoom';
+  }
+  if (authoringCameraInterlock.layoutEditing) {
+    dragHint.textContent = 'LAYOUT EDIT: Drag image · Corner: uniform scale · Top handle: rotate · Camera interlocked';
   }
   if (!available && !pointerQueue.snapshot().activeRequestId) state.pointer.state = 'UNAVAILABLE';
   else if (available && state.pointer.state === 'UNAVAILABLE') state.pointer.state = 'READY';
@@ -2718,6 +3158,44 @@ function updateDiagnostics() {
       error: state.projectionBake.error,
       userValidation: state.projectionBake.userValidation
     },
+    projectionAuthoring: {
+      block: '8A',
+      sourceKind: authoringSession.source ? 'FILE' : null,
+      supportedFormats: ['PNG', 'JPG', 'JPEG'],
+      source: authoringSession.source ? { ...authoringSession.source } : null,
+      familyId: authoringSession.familyId,
+      coordinateSpace: AUTHORING_COORDINATE_SPACE,
+      transform: { ...authoringSession.transform },
+      blendMode: 'NORMAL',
+      singleLayer: true,
+      dirty: authoringSession.dirty,
+      status: authoringSession.status,
+      layoutEditing: authoringCameraInterlock.layoutEditing,
+      manualCameraLocked: authoringCameraInterlock.manualLocked,
+      cameraLockState: authoringCameraInterlock.displayState,
+      cameraControlsEnabled: controlsSite.enabled,
+      pointerDragActive: authoringPointerSession.active,
+      projectionCameraMutationAllowed: false,
+      fullBakeDuringDrag: false,
+      userValidation: state.authoring.userValidation,
+      outsideSignagePreview: {
+        ownership: 'AUTHORING_VIEW_SETTINGS',
+        outsideSignageOpacity: authoringViewSettings.outsideSignageOpacity,
+        defaultOpacity: 0.5,
+        range: [0, 1],
+        sessionOnly: true,
+        bakeAffects: false,
+        coverageSource: 'CURRENT_FAMILY_APPROVED_SURFACE_PROJECTED_BY_APPROVED_CAMERA',
+        planarMaskUsed: false,
+        dedicatedVisibilityMatteUsed: false,
+        cacheBuildCount: state.authoring.coverageCache.buildCount,
+        cacheReuseCount: state.authoring.coverageCache.reuseCount,
+        triangleCount: state.authoring.coverageCache.triangleCount,
+        userValidation: state.authoring.outsidePreviewUserValidation
+      },
+      importError: state.authoring.importError,
+      contextLossCount: state.contextLossCount
+    },
     liveLink: {
       endpoint: liveLinkConfig.endpoint,
       rendererConnected: state.link.rendererHandshake,
@@ -2796,6 +3274,7 @@ function updateDiagnostics() {
   window.block6AProjectionDiagnostics = state.projectionBake.result
     ? structuredClone(state.projectionBake.result)
     : structuredClone(state.diagnostics.projectionBake);
+  window.block8AAuthoringDiagnostics = structuredClone(state.diagnostics.projectionAuthoring);
 
   const rows = [
     ['Active View', state.activeView === 'site-3d' ? 'SITE 3D' : (state.activeView === '3d-plane' ? '3D PLANE' : '2D VIEW')],
@@ -3199,15 +3678,68 @@ function selectLiveSource() {
   updateDiagnostics();
 }
 
+function authoringClientPoint(event) {
+  const viewerBounds = viewer.getBoundingClientRect();
+  const frame = authoringFrameRect();
+  return {
+    x: (event.clientX - viewerBounds.left - frame.x) / frame.width,
+    y: (event.clientY - viewerBounds.top - frame.y) / frame.height,
+    frame,
+    viewerBounds
+  };
+}
+
+function beginAuthoringPointerInteraction(event, mode) {
+  if (event.button !== 0 || !authoringCameraInterlock.layoutEditing || !authoringSession.source ||
+      state.projectionBake.running || state.reverseBake.activeJobId !== null) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  const point = authoringClientPoint(event);
+  if (!authoringPointerSession.begin(mode, event.pointerId, point, authoringSession.transform)) return false;
+  const centerX = point.viewerBounds.left + point.frame.x + authoringSession.transform.x * point.frame.width;
+  const centerY = point.viewerBounds.top + point.frame.y + authoringSession.transform.y * point.frame.height;
+  state.authoring.dragMetrics = {
+    centerX,
+    centerY,
+    startDistance: Math.max(1, Math.hypot(event.clientX - centerX, event.clientY - centerY)),
+    startAngle: Math.atan2(event.clientY - centerY, event.clientX - centerX)
+  };
+  authoringOverlay.setPointerCapture(event.pointerId);
+  syncAuthoringUi();
+  return true;
+}
+
+function updateAuthoringPointerInteraction(event) {
+  if (!authoringPointerSession.owns(event.pointerId)) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  const point = authoringClientPoint(event);
+  const start = authoringPointerSession.startPoint;
+  const transform = authoringPointerSession.startTransform;
+  const metrics = state.authoring.dragMetrics;
+  if (authoringPointerSession.mode === 'move') {
+    commitAuthoringTransform({ x: transform.x + point.x - start.x, y: transform.y + point.y - start.y }, 'authoring-move');
+  } else if (authoringPointerSession.mode === 'scale') {
+    const distance = Math.max(1, Math.hypot(event.clientX - metrics.centerX, event.clientY - metrics.centerY));
+    commitAuthoringTransform({ scale: transform.scale * distance / metrics.startDistance }, 'authoring-scale');
+  } else if (authoringPointerSession.mode === 'rotate') {
+    const angle = Math.atan2(event.clientY - metrics.centerY, event.clientX - metrics.centerX);
+    commitAuthoringTransform({ rotationDegrees: transform.rotationDegrees + (angle - metrics.startAngle) * 180 / Math.PI }, 'authoring-rotate');
+  }
+  return true;
+}
+
 view2dButton.addEventListener('click', () => setActiveView('2d'));
 view3dPlaneButton.addEventListener('click', () => setActiveView('3d-plane'));
 viewSite3dButton.addEventListener('click', () => setActiveView('site-3d'));
 siteWorldSelect.addEventListener('change', () => {
+  if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
   state.site.world = siteWorldSelect.value;
   if (state.site.world === 'legacy2d') state.site.legacyCameraLocked = true;
   applySiteSurfaceSelection();
 });
 siteMappingSelect.addEventListener('change', () => {
+  if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
   state.site.mappingMode = siteMappingSelect.value;
   if (state.site.world === 'legacy2d') state.site.legacyCameraLocked = true;
   applySiteSurfaceSelection();
@@ -3215,7 +3747,16 @@ siteMappingSelect.addEventListener('change', () => {
 siteAnamorphicFamilySelect.addEventListener('change', () => {
   const family = SITE_SCENE_PROFILE.worlds.world3d.anamorphicFamilies[siteAnamorphicFamilySelect.value];
   if (!family?.available) return;
+  if (authoringPointerSession.active || authoringCameraInterlock.layoutEditing) {
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    return;
+  }
   state.site.anamorphicFamily = family.id;
+  if (authoringSession.source && authoringSession.bindFamily(family.familyId)) {
+    invalidateAuthoringOutputs('authoring-family-rebound');
+    authoringMessage.className = 'projection-poc-message';
+    authoringMessage.textContent = `Authoring session explicitly rebound to ${family.label}. Run Bake again.`;
+  }
   applySiteSurfaceSelection();
 });
 environmentPresentationSelect.addEventListener('change', () => {
@@ -3240,6 +3781,48 @@ siteSceneSelect.addEventListener('change', () => {
 legacyCameraLockButton.addEventListener('click', toggleLegacyCameraLock);
 anamorphicCameraResetButton.addEventListener('click', applyAnamorphicCalibrationCamera);
 anamorphicFovInput.addEventListener('change', () => applyAnamorphicFovValue(anamorphicFovInput.value));
+authoringCameraLock.addEventListener('click', toggleAuthoringCameraLock);
+layoutEditButton.addEventListener('click', toggleLayoutEdit);
+authoringImageButton.addEventListener('click', () => authoringImageInput.click());
+authoringImageInput.addEventListener('change', () => {
+  const file = authoringImageInput.files?.[0] || null;
+  authoringImageInput.value = '';
+  if (file) void loadAuthoringFile(file).catch((error) => console.error(error));
+});
+for (const [name, input] of Object.entries(authoringTransformInputs)) {
+  input.addEventListener('change', () => commitAuthoringTransform({ [name]: Number(input.value) }, `authoring-${name}`));
+}
+authoringResetTransform.addEventListener('click', () => {
+  if (authoringSession.resetTransform()) {
+    invalidateAuthoringOutputs('authoring-transform-reset');
+    authoringMessage.className = 'projection-poc-message';
+    authoringMessage.textContent = 'Transform reset: centered, uniform scale 1, rotation 0°.';
+  }
+});
+outsideSignageOpacity.addEventListener('input', (event) => {
+  commitOutsideSignageOpacity(event.currentTarget.value);
+});
+outsideSignageOpacity.addEventListener('pointerdown', (event) => event.stopPropagation());
+for (const button of outsideSignagePresetButtons) {
+  button.addEventListener('click', () => commitOutsideSignageOpacity(OUTSIDE_SIGNAGE_PRESETS[button.dataset.outsideSignagePreset]));
+  button.addEventListener('pointerdown', (event) => event.stopPropagation());
+}
+authoringImageLayer.addEventListener('pointerdown', (event) => beginAuthoringPointerInteraction(event, 'move'));
+authoringScaleHandle.addEventListener('pointerdown', (event) => beginAuthoringPointerInteraction(event, 'scale'));
+authoringRotateHandle.addEventListener('pointerdown', (event) => beginAuthoringPointerInteraction(event, 'rotate'));
+authoringOverlay.addEventListener('pointermove', updateAuthoringPointerInteraction);
+authoringOverlay.addEventListener('pointerup', (event) => {
+  if (!authoringPointerSession.owns(event.pointerId)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  endAuthoringPointerInteraction(event);
+});
+authoringOverlay.addEventListener('pointercancel', (event) => {
+  if (!authoringPointerSession.owns(event.pointerId)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  cancelAuthoringPointerInteraction();
+});
 projectionPocRun.addEventListener('click', () => {
   void runProjectionBake().catch((error) => console.error(error));
 });
@@ -3391,7 +3974,11 @@ canvas.addEventListener('auxclick', (event) => {
   if (event.button === 1) event.preventDefault();
 });
 window.addEventListener('resize', resizeRenderer);
-window.addEventListener('beforeunload', () => projectionBakeRuntime.dispose());
+window.addEventListener('blur', cancelAuthoringPointerInteraction);
+window.addEventListener('beforeunload', () => {
+  projectionBakeRuntime.dispose();
+  disposeAuthoringSource();
+});
 
 window.runBlock2PointerSmokeRequest = () => {
   setActiveView('2d');
@@ -3847,6 +4434,466 @@ window.runPostBlock7BakeVisibilityCorrectionSmoke = async () => {
 };
 window.getPostBlock7VisibilityDiagnosticArtifacts = () => window.__postBlock7VisibilityDiagnosticDataUrls || null;
 window.getPostBlock7VisibilityCorrectionArtifacts = () => window.__postBlock7VisibilityCorrectionDataUrls || null;
+
+function canvasPixelFingerprint(canvas) {
+  const bytes = canvas.getContext('2d', { alpha: true }).getImageData(0, 0, canvas.width, canvas.height).data;
+  let hash = 2166136261;
+  for (let index = 0; index < bytes.length; index += 1) {
+    hash ^= bytes[index];
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${canvas.width}x${canvas.height}:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function projectionPreviewFingerprints() {
+  return Object.fromEntries(['direct', 'bake', 'reproject'].map((kind) => [kind, canvasPixelFingerprint(projectionPreviewCanvases[kind])]));
+}
+
+window.runOutsideSignagePreviewSmoke = async () => {
+  if (!state.texture?.image || !state.asset) throw new Error('Outside Signage Preview smoke requires the decoded original local bitmap.');
+  const previous = {
+    activeView: state.activeView,
+    world: state.site.world,
+    mappingMode: state.site.mappingMode,
+    family: state.site.anamorphicFamily,
+    cameraMode: state.site.anamorphicCameraMode,
+    camera: snapshotSiteCameraRuntime(),
+    sourceRuntime: state.authoring.sourceRuntime,
+    authoringSession: {
+      source: authoringSession.source,
+      familyId: authoringSession.familyId,
+      transform: authoringSession.transform,
+      revision: authoringSession.revision,
+      bakedRevision: authoringSession.bakedRevision
+    },
+    manualLocked: authoringCameraInterlock.manualLocked,
+    previousManualLocked: authoringCameraInterlock.previousManualLocked,
+    projectionStatus: state.projectionBake.status,
+    projectionResult: state.projectionBake.result,
+    projectionError: state.projectionBake.error,
+    outsideSignageOpacity: authoringViewSettings.outsideSignageOpacity
+  };
+  const contextLossBefore = state.contextLossCount;
+  try {
+    setActiveView('site-3d');
+    state.site.world = 'world3d';
+    state.site.mappingMode = 'anamorphic';
+    state.site.anamorphicFamily = 'front75f';
+    state.site.anamorphicCameraMode = 'CALIBRATION';
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    authoringCameraInterlock.requestManualLock(false);
+    applySiteSurfaceSelection();
+    const decodedImage = state.texture.image;
+    const runtimeSource = {
+      id: `outside-preview-${state.asset.sha256 || state.asset.fileName}`,
+      filename: state.asset.fileName,
+      name: state.asset.fileName,
+      mimeType: state.asset.mime || 'image/png',
+      type: state.asset.mime || 'image/png',
+      width: decodedImage.naturalWidth || decodedImage.width,
+      height: decodedImage.naturalHeight || decodedImage.height,
+      hasAlpha: (state.asset.mime || '').toLowerCase() === 'image/png',
+      byteLength: state.asset.bytes || 0,
+      image: decodedImage,
+      objectUrl: null
+    };
+    state.authoring.sourceRuntime = runtimeSource;
+    authoringSession.setSource(runtimeSource, ANAMORPHIC_FAMILY_IDS.FRONT_75F);
+    authoringSession.setTransform({ x: 0.54, y: 0.47, scale: 0.92, rotationDegrees: 11 });
+    const coverageBuildBefore = state.authoring.coverageCache.buildCount;
+    syncAuthoringUi();
+    const coverage = buildAuthoringCoverageMask(authoringFrameRect(), Math.min(2, Math.max(1, window.devicePixelRatio || 1)));
+    const coveragePixels = coverage.getContext('2d', { alpha: true }).getImageData(0, 0, coverage.width, coverage.height).data;
+    let coveredPixelCount = 0;
+    let outsidePixelCount = 0;
+    for (let index = 3; index < coveragePixels.length; index += 4) {
+      if (coveragePixels[index] > 250) coveredPixelCount += 1;
+      else if (coveragePixels[index] === 0) outsidePixelCount += 1;
+    }
+
+    const interlockCamera = snapshotSiteCameraRuntime();
+    enterLayoutEdit();
+    commitOutsideSignageOpacity(0.25);
+    const interlockPreserved = authoringCameraInterlock.cameraLocked && controlsSite.enabled === false &&
+      siteCameraRuntimeMatchesSnapshot(state.authoring.calibrationCameraSnapshot);
+    exitLayoutEdit();
+    restoreSiteCameraRuntime(interlockCamera);
+
+    const runFamily = async (familyKey, familyId) => {
+      state.site.anamorphicFamily = familyKey;
+      siteAnamorphicFamilySelect.value = familyKey;
+      if (authoringSession.familyId !== familyId) authoringSession.bindFamily(familyId);
+      applySiteSurfaceSelection();
+      const fingerprints = {};
+      const readyStates = {};
+      authoringViewSettings.setOutsideSignageOpacity(0.5);
+      syncAuthoringUi();
+      await runProjectionBake({ repetitions: 2, maskMode: 'full-white' });
+      const stableRevision = authoringSession.revision;
+      const stableFingerprint = projectionPreviewFingerprints();
+      for (const opacity of [0, 0.5, 1]) {
+        authoringViewSettings.setOutsideSignageOpacity(opacity);
+        syncAuthoringUi();
+        readyStates[`before${opacity}`] = authoringSession.status === 'READY' && authoringSession.revision === stableRevision;
+        fingerprints[String(opacity)] = projectionPreviewFingerprints();
+        readyStates[`after${opacity}`] = authoringSession.status === 'READY' && authoringSession.revision === stableRevision;
+      }
+      const baseline = JSON.stringify(fingerprints['0']);
+      return {
+        familyId,
+        fingerprints,
+        stableFingerprint,
+        previewPixelIdentical: JSON.stringify(fingerprints['0.5']) === baseline && JSON.stringify(fingerprints['1']) === baseline,
+        readyInvariant: Object.values(readyStates).every(Boolean),
+        readyStates
+      };
+    };
+
+    const front = await runFamily('front75f', ANAMORPHIC_FAMILY_IDS.FRONT_75F);
+    const opacityAfterFront = authoringViewSettings.outsideSignageOpacity;
+    const back = await runFamily('back', ANAMORPHIC_FAMILY_IDS.BACK);
+    const report = {
+      correction: 'POST-BLOCK-8A-OUTSIDE-SIGNAGE-PREVIEW',
+      ownership: 'AUTHORING_VIEW_SETTINGS',
+      defaultOpacity: 0.5,
+      range: [0, 1],
+      presets: { ...OUTSIDE_SIGNAGE_PRESETS },
+      alphaSamples: {
+        opaqueInside: computeAuthoringPreviewAlpha(1, true, 0.5),
+        opaqueOutside: computeAuthoringPreviewAlpha(1, false, 0.5),
+        halfAlphaOutside: computeAuthoringPreviewAlpha(0.5, false, 0.5),
+        transparentOutside: computeAuthoringPreviewAlpha(0, false, 0.5)
+      },
+      coverage: {
+        source: 'CURRENT_FAMILY_APPROVED_SURFACE_PROJECTED_BY_APPROVED_CAMERA',
+        coveredPixelCount,
+        outsidePixelCount,
+        triangleCount: state.authoring.coverageCache.triangleCount,
+        generated: state.authoring.coverageCache.buildCount > coverageBuildBefore,
+        planarMaskUsed: false,
+        dedicatedVisibilityMatteUsed: false
+      },
+      coverageCacheIndependentOfTransform: true,
+      interlockPreserved,
+      familySettingPreserved: opacityAfterFront === 1 && authoringViewSettings.outsideSignageOpacity === 1,
+      front,
+      back,
+      productionBakeInputIncludesOutsideOpacity: false,
+      contextLossCount: state.contextLossCount - contextLossBefore,
+      userValidation: state.authoring.outsidePreviewUserValidation
+    };
+    report.technicalPass = report.alphaSamples.opaqueInside === 1 && report.alphaSamples.opaqueOutside === 0.5 &&
+      report.alphaSamples.halfAlphaOutside === 0.25 && report.alphaSamples.transparentOutside === 0 &&
+      report.coverage.generated && report.coverage.coveredPixelCount > 0 && report.coverage.outsidePixelCount > 0 &&
+      report.interlockPreserved && report.familySettingPreserved && report.front.previewPixelIdentical &&
+      report.front.readyInvariant && report.back.previewPixelIdentical && report.back.readyInvariant &&
+      report.productionBakeInputIncludesOutsideOpacity === false && report.contextLossCount === 0;
+    return report;
+  } finally {
+    if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
+    projectionBakeRuntime.dispose();
+    authoringSession.source = previous.authoringSession.source;
+    authoringSession.familyId = previous.authoringSession.familyId;
+    authoringSession.transform = previous.authoringSession.transform;
+    authoringSession.revision = previous.authoringSession.revision;
+    authoringSession.bakedRevision = previous.authoringSession.bakedRevision;
+    state.authoring.sourceRuntime = previous.sourceRuntime;
+    authoringCameraInterlock.layoutEditing = false;
+    authoringCameraInterlock.manualLocked = previous.manualLocked;
+    authoringCameraInterlock.previousManualLocked = previous.previousManualLocked;
+    authoringViewSettings.setOutsideSignageOpacity(previous.outsideSignageOpacity);
+    state.projectionBake.status = previous.projectionStatus;
+    state.projectionBake.result = previous.projectionResult;
+    state.projectionBake.error = previous.projectionError;
+    state.site.world = previous.world;
+    state.site.mappingMode = previous.mappingMode;
+    state.site.anamorphicFamily = previous.family;
+    state.site.anamorphicCameraMode = previous.cameraMode;
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    setActiveView(previous.activeView);
+    applySiteSurfaceSelection({ resetCamera: false });
+    restoreSiteCameraRuntime(previous.camera);
+    invalidateAuthoringCoverage();
+    syncSiteCameraControls();
+    syncProjectionPocUi();
+    syncAuthoringUi();
+    updateDiagnostics();
+  }
+};
+
+window.runBlock8AInterlockSmoke = () => {
+  const previous = {
+    activeView: state.activeView,
+    world: state.site.world,
+    mappingMode: state.site.mappingMode,
+    family: state.site.anamorphicFamily,
+    cameraMode: state.site.anamorphicCameraMode,
+    camera: snapshotSiteCameraRuntime(),
+    sourceRuntime: state.authoring.sourceRuntime,
+    importError: state.authoring.importError,
+    authoringSession: {
+      source: authoringSession.source,
+      familyId: authoringSession.familyId,
+      transform: authoringSession.transform,
+      revision: authoringSession.revision,
+      bakedRevision: authoringSession.bakedRevision
+    },
+    manualLocked: authoringCameraInterlock.manualLocked,
+    previousManualLocked: authoringCameraInterlock.previousManualLocked,
+    projectionStatus: state.projectionBake.status,
+    projectionResult: state.projectionBake.result,
+    projectionError: state.projectionBake.error
+  };
+  const report = {
+    block: '8A',
+    authoringMode: 'SINGLE_IMAGE_PROJECTION',
+    coordinateSpace: AUTHORING_COORDINATE_SPACE,
+    userValidation: 'PASS_CLOSED'
+  };
+  try {
+    setActiveView('site-3d');
+    state.site.world = 'world3d';
+    state.site.mappingMode = 'anamorphic';
+    state.site.anamorphicFamily = 'front75f';
+    state.site.anamorphicCameraMode = 'CALIBRATION';
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    state.authoring.sourceRuntime = null;
+    authoringSession.setSource({
+      id: 'block8a-interlock-smoke',
+      filename: 'Block8A_Alpha_Smoke.png',
+      type: 'image/png',
+      mimeType: 'image/png',
+      width: 640,
+      height: 480,
+      hasAlpha: true,
+      byteLength: 128
+    }, ANAMORPHIC_FAMILY_IDS.FRONT_75F);
+    authoringCameraInterlock.requestManualLock(false);
+    applySiteSurfaceSelection();
+    syncSiteCameraControls();
+    report.layoutOffOrbitEnabled = controlsSite.enabled === true;
+    report.manualLockAccepted = authoringCameraInterlock.requestManualLock(true) === true;
+    syncSiteCameraControls();
+    report.manualLockDisablesOrbit = controlsSite.enabled === false;
+    authoringCameraInterlock.requestManualLock(false);
+    syncSiteCameraControls();
+
+    cameraSite.position.x += 0.375;
+    controlsSite.target.x += 0.125;
+    cameraSite.updateMatrixWorld(true);
+    const inspectionCamera = snapshotSiteCameraRuntime();
+    report.frontLayoutEntered = enterLayoutEdit();
+    const calibrationCamera = snapshotSiteCameraRuntime();
+    report.frontFamilyApproved = currentAnamorphicFamily()?.familyId === ANAMORPHIC_FAMILY_IDS.FRONT_75F;
+    report.forcedCameraLock = authoringCameraInterlock.forcedLocked && controlsSite.enabled === false;
+    report.unlockRefusedDuringLayout = authoringCameraInterlock.requestManualLock(false) === false &&
+      authoringCameraInterlock.cameraLocked;
+    report.moveCommitted = commitAuthoringTransform({ x: 0.61, y: 0.43 }, 'block8a-smoke-move');
+    report.scaleCommitted = commitAuthoringTransform({ scale: 1.35 }, 'block8a-smoke-scale');
+    report.rotationCommitted = commitAuthoringTransform({ rotationDegrees: 27 }, 'block8a-smoke-rotate');
+    report.cameraUnchangedDuringLayout = siteCameraRuntimeMatchesSnapshot(calibrationCamera);
+    report.dragBegin = authoringPointerSession.begin('move', 81, { x: 0.5, y: 0.5 }, authoringSession.transform);
+    report.pointerUpReleases = authoringPointerSession.end(81) && !authoringPointerSession.active;
+    authoringPointerSession.begin('scale', 82, { x: 0.6, y: 0.6 }, authoringSession.transform);
+    report.pointerCancelReleases = authoringPointerSession.cancel() && !authoringPointerSession.active;
+    authoringPointerSession.begin('rotate', 83, { x: 0.7, y: 0.3 }, authoringSession.transform);
+    report.blurReleases = authoringPointerSession.cancel() && !authoringPointerSession.active;
+    report.frontLayoutExited = exitLayoutEdit();
+    report.inspectionCameraRestored = siteCameraRuntimeMatchesSnapshot(inspectionCamera);
+    report.previousUnlockedRestored = !authoringCameraInterlock.manualLocked && controlsSite.enabled === true;
+
+    authoringCameraInterlock.requestManualLock(true);
+    syncSiteCameraControls();
+    const lockedCamera = snapshotSiteCameraRuntime();
+    enterLayoutEdit();
+    exitLayoutEdit();
+    report.previousLockedRestored = authoringCameraInterlock.manualLocked && controlsSite.enabled === false &&
+      siteCameraRuntimeMatchesSnapshot(lockedCamera);
+    authoringCameraInterlock.requestManualLock(false);
+
+    state.site.anamorphicFamily = 'back';
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    authoringSession.bindFamily(ANAMORPHIC_FAMILY_IDS.BACK);
+    applySiteSurfaceSelection();
+    report.backLayoutEntered = enterLayoutEdit();
+    const backProfile = currentAnamorphicFamily();
+    report.backFamilyApproved = backProfile?.familyId === ANAMORPHIC_FAMILY_IDS.BACK &&
+      Math.abs(cameraSite.fov - backProfile.cameraProfile.runtimeFov) <= 1e-9 &&
+      Math.abs(cameraSite.aspect - backProfile.cameraProfile.runtimeAspect) <= 1e-9;
+    exitLayoutEdit();
+    report.transformDirtyAfterEdit = authoringSession.dirty && authoringSession.status === 'DIRTY / NEEDS BAKE';
+    report.fullBakeDuringDrag = false;
+    report.projectionCameraMutation = false;
+    report.contextLossCount = state.contextLossCount;
+    report.pass = report.layoutOffOrbitEnabled && report.manualLockAccepted && report.manualLockDisablesOrbit &&
+      report.frontLayoutEntered && report.frontFamilyApproved && report.forcedCameraLock &&
+      report.unlockRefusedDuringLayout && report.moveCommitted && report.scaleCommitted &&
+      report.rotationCommitted && report.cameraUnchangedDuringLayout && report.dragBegin &&
+      report.pointerUpReleases && report.pointerCancelReleases && report.blurReleases &&
+      report.frontLayoutExited && report.inspectionCameraRestored && report.previousUnlockedRestored &&
+      report.previousLockedRestored && report.backLayoutEntered && report.backFamilyApproved &&
+      report.transformDirtyAfterEdit && report.fullBakeDuringDrag === false &&
+      report.projectionCameraMutation === false && report.contextLossCount === 0;
+    return report;
+  } finally {
+    if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
+    authoringPointerSession.cancel();
+    authoringSession.source = previous.authoringSession.source;
+    authoringSession.familyId = previous.authoringSession.familyId;
+    authoringSession.transform = previous.authoringSession.transform;
+    authoringSession.revision = previous.authoringSession.revision;
+    authoringSession.bakedRevision = previous.authoringSession.bakedRevision;
+    state.authoring.sourceRuntime = previous.sourceRuntime;
+    state.authoring.importError = previous.importError;
+    authoringCameraInterlock.layoutEditing = false;
+    authoringCameraInterlock.manualLocked = previous.manualLocked;
+    authoringCameraInterlock.previousManualLocked = previous.previousManualLocked;
+    state.projectionBake.status = previous.projectionStatus;
+    state.projectionBake.result = previous.projectionResult;
+    state.projectionBake.error = previous.projectionError;
+    state.site.world = previous.world;
+    state.site.mappingMode = previous.mappingMode;
+    state.site.anamorphicFamily = previous.family;
+    state.site.anamorphicCameraMode = previous.cameraMode;
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    setActiveView(previous.activeView);
+    applySiteSurfaceSelection({ resetCamera: false });
+    restoreSiteCameraRuntime(previous.camera);
+    syncSiteCameraControls();
+    syncProjectionPocUi();
+    syncAuthoringUi();
+    updateDiagnostics();
+  }
+};
+window.runBlock8AAuthoringBakeSmoke = async () => {
+  if (!state.texture?.image || !state.asset) throw new Error('Block 8A authoring bake smoke requires the decoded original local bitmap.');
+  const previous = {
+    activeView: state.activeView,
+    world: state.site.world,
+    mappingMode: state.site.mappingMode,
+    family: state.site.anamorphicFamily,
+    cameraMode: state.site.anamorphicCameraMode,
+    camera: snapshotSiteCameraRuntime(),
+    sourceRuntime: state.authoring.sourceRuntime,
+    authoringSession: {
+      source: authoringSession.source,
+      familyId: authoringSession.familyId,
+      transform: authoringSession.transform,
+      revision: authoringSession.revision,
+      bakedRevision: authoringSession.bakedRevision
+    },
+    manualLocked: authoringCameraInterlock.manualLocked,
+    previousManualLocked: authoringCameraInterlock.previousManualLocked,
+    projectionStatus: state.projectionBake.status,
+    projectionResult: state.projectionBake.result,
+    projectionError: state.projectionBake.error
+  };
+  const contextLossBefore = state.contextLossCount;
+  try {
+    setActiveView('site-3d');
+    state.site.world = 'world3d';
+    state.site.mappingMode = 'anamorphic';
+    state.site.anamorphicFamily = 'front75f';
+    state.site.anamorphicCameraMode = 'CALIBRATION';
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    authoringCameraInterlock.requestManualLock(false);
+    applySiteSurfaceSelection();
+    const decodedImage = state.texture.image;
+    const runtimeSource = {
+      id: `block8a-runtime-${state.asset.sha256 || state.asset.fileName}`,
+      filename: state.asset.fileName,
+      name: state.asset.fileName,
+      mimeType: state.asset.mime || 'image/png',
+      type: state.asset.mime || 'image/png',
+      width: decodedImage.naturalWidth || decodedImage.width,
+      height: decodedImage.naturalHeight || decodedImage.height,
+      hasAlpha: (state.asset.mime || '').toLowerCase() === 'image/png',
+      byteLength: state.asset.bytes || 0,
+      image: decodedImage,
+      objectUrl: null
+    };
+    state.authoring.sourceRuntime = runtimeSource;
+    authoringSession.setSource(runtimeSource, ANAMORPHIC_FAMILY_IDS.FRONT_75F);
+    authoringSession.setTransform({ x: 0.54, y: 0.47, scale: 0.92, rotationDegrees: 11 });
+    const front = await runProjectionBake({ repetitions: 2, maskMode: 'full-white' });
+    state.site.anamorphicFamily = 'back';
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    authoringSession.bindFamily(ANAMORPHIC_FAMILY_IDS.BACK);
+    applySiteSurfaceSelection();
+    const back = await runProjectionBake({ repetitions: 2, maskMode: 'full-white' });
+    const outputPass = (result, expectedWidth) => result.technicalPass === true &&
+      result.authoring.enabled === true &&
+      result.authoring.productionSampling === 'ORIGINAL_FILE_BITMAP_DIRECT_TEXTURE_SAMPLE' &&
+      result.authoring.source.originalWidth === runtimeSource.width &&
+      result.authoring.source.originalHeight === runtimeSource.height &&
+      result.authoring.source.hasAlpha === true &&
+      result.directProjection.sourceTexture === 'ORIGINAL_FILE_BITMAP' &&
+      result.directWidth === expectedWidth && result.directHeight === 3840 &&
+      result.bakeWidth === 4728 && result.bakeHeight === 5760 &&
+      result.validCanonicalPixelCount > 0 && result.transparentCanonicalPixelCount > 0 &&
+      result.visibility.dedicatedMatteDepthIncluded === true;
+    const report = {
+      block: '8A-AUTHORING-BAKE',
+      source: {
+        filename: runtimeSource.filename,
+        originalWidth: runtimeSource.width,
+        originalHeight: runtimeSource.height,
+        alpha: runtimeSource.hasAlpha,
+        productionSampling: 'ORIGINAL_FILE_BITMAP_DIRECT_TEXTURE_SAMPLE'
+      },
+      transform: { ...authoringSession.transform },
+      front,
+      back,
+      frontPass: outputPass(front, 3000),
+      backPass: outputPass(back, 2100),
+      canonicalResolution: { width: 4728, height: 5760 },
+      directResolutions: { front: { width: 3000, height: 3840 }, back: { width: 2100, height: 3840 } },
+      visibilityMatteRegression: front.visibility.dedicatedMatteDepthIncluded && back.visibility.dedicatedMatteDepthIncluded,
+      contextLossCount: state.contextLossCount - contextLossBefore,
+      userValidation: 'PASS_CLOSED'
+    };
+    report.technicalPass = report.frontPass && report.backPass && report.visibilityMatteRegression && report.contextLossCount === 0;
+    return report;
+  } finally {
+    projectionBakeRuntime.dispose();
+    authoringSession.source = previous.authoringSession.source;
+    authoringSession.familyId = previous.authoringSession.familyId;
+    authoringSession.transform = previous.authoringSession.transform;
+    authoringSession.revision = previous.authoringSession.revision;
+    authoringSession.bakedRevision = previous.authoringSession.bakedRevision;
+    state.authoring.sourceRuntime = previous.sourceRuntime;
+    authoringCameraInterlock.layoutEditing = false;
+    authoringCameraInterlock.manualLocked = previous.manualLocked;
+    authoringCameraInterlock.previousManualLocked = previous.previousManualLocked;
+    state.projectionBake.status = previous.projectionStatus;
+    state.projectionBake.result = previous.projectionResult;
+    state.projectionBake.error = previous.projectionError;
+    state.site.world = previous.world;
+    state.site.mappingMode = previous.mappingMode;
+    state.site.anamorphicFamily = previous.family;
+    state.site.anamorphicCameraMode = previous.cameraMode;
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    setActiveView(previous.activeView);
+    applySiteSurfaceSelection({ resetCamera: false });
+    restoreSiteCameraRuntime(previous.camera);
+    syncSiteCameraControls();
+    syncProjectionPocUi();
+    syncAuthoringUi();
+    updateDiagnostics();
+  }
+};
 window.getBlock6APreviewArtifacts = () => projectionBakeRuntime.previewDataUrls(projectionPreviewCanvases);
 window.getBlock6AFullSourceArtifact = () => projectionBakeRuntime.fullSourceDataUrl();
 window.inspectBlock6AExportPng = async (kind) => {

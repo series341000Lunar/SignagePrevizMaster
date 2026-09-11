@@ -180,6 +180,9 @@ async function runSmokeTest(window) {
     const bakeVisibilityCorrectionData = await window.webContents.executeJavaScript(
       'window.getPostBlock7VisibilityCorrectionArtifacts()', true
     );
+    const block8a = await window.webContents.executeJavaScript('window.runBlock8AInterlockSmoke()', true);
+    const block8aAuthoringBake = await window.webContents.executeJavaScript('window.runBlock8AAuthoringBakeSmoke()', true);
+    const outsideSignagePreview = await window.webContents.executeJavaScript('window.runOutsideSignagePreviewSmoke()', true);
     const bakeVisibilityArtifacts = {
       front: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_VisibilityDiagnostic.png'),
       back: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_VisibilityDiagnostic.png'),
@@ -273,6 +276,17 @@ async function runSmokeTest(window) {
       bakeVisibilityCorrection.familyCalibrationUnchanged === true &&
       bakeVisibilityCorrection.glbGeometryModified === false &&
       bakeVisibilityCorrection.contextLossCount === 0 &&
+      block8a.pass === true && block8a.userValidation === 'PASS_CLOSED' &&
+      block8a.forcedCameraLock === true && block8a.unlockRefusedDuringLayout === true &&
+      block8a.cameraUnchangedDuringLayout === true && block8a.inspectionCameraRestored === true &&
+      block8a.previousUnlockedRestored === true && block8a.previousLockedRestored === true &&
+      block8a.frontFamilyApproved === true && block8a.backFamilyApproved === true &&
+      block8aAuthoringBake.technicalPass === true && block8aAuthoringBake.frontPass === true &&
+      block8aAuthoringBake.backPass === true && block8aAuthoringBake.contextLossCount === 0 &&
+      outsideSignagePreview.technicalPass === true && outsideSignagePreview.defaultOpacity === 0.5 &&
+      outsideSignagePreview.front.previewPixelIdentical === true && outsideSignagePreview.back.previewPixelIdentical === true &&
+      outsideSignagePreview.front.readyInvariant === true && outsideSignagePreview.back.readyInvariant === true &&
+      outsideSignagePreview.interlockPreserved === true && outsideSignagePreview.contextLossCount === 0 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -303,6 +317,9 @@ async function runSmokeTest(window) {
       block7MaskOff,
       bakeVisibilityCorrection,
       bakeVisibilityArtifacts,
+      block8a,
+      block8aAuthoringBake,
+      outsideSignagePreview,
       screenshotPath
     };
     writeJson(reportPath, report);

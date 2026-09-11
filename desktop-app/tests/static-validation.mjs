@@ -10,6 +10,9 @@ const mainSource = await readFile(path.join(appRoot, 'src', 'main.cjs'), 'utf8')
 const brokerSource = await readFile(path.join(appRoot, 'src', 'live-link-broker.cjs'), 'utf8');
 const liveLinkConfig = JSON.parse(await readFile(path.join(appRoot, 'src', 'live-link-config.json'), 'utf8'));
 const rendererSource = await readFile(path.join(appRoot, 'src', 'renderer.js'), 'utf8');
+const projectionBakeRuntimeSource = await readFile(path.join(appRoot, 'src', 'projection-bake-runtime.js'), 'utf8');
+const screenImageAuthoringSource = await readFile(path.join(appRoot, 'src', 'screen-image-authoring.js'), 'utf8');
+const authoringViewSettingsSource = await readFile(path.join(appRoot, 'src', 'authoring-view-settings.js'), 'utf8');
 const coordinateSource = await readFile(path.join(appRoot, 'src', 'canonical-coordinate.js'), 'utf8');
 const pointerQueueSource = await readFile(path.join(appRoot, 'src', 'pointer-command-queue.js'), 'utf8');
 const siteProfileSource = await readFile(path.join(appRoot, 'src', 'site-scene-profile.js'), 'utf8');
@@ -50,13 +53,38 @@ assert(
 assert(!/unpkg\.com|cdn\.jsdelivr\.net/i.test(`${rendererSource}\n${htmlSource}\n${builtRenderer}`), 'Renderer contains a CDN dependency.');
 assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
 assert(!/_TestSource/i.test(`${mainSource}\n${rendererSource}\n${htmlSource}`), 'Runtime references _TestSource.');
+assert(/DEFAULT_OUTSIDE_SIGNAGE_OPACITY = 0\.5/.test(authoringViewSettingsSource), 'Outside Signage Preview must default to 0.5 at View level.');
+assert(/class AuthoringViewSettings/.test(authoringViewSettingsSource), 'Outside Signage Preview must be owned by AuthoringViewSettings.');
+assert(/computeAuthoringPreviewAlpha/.test(authoringViewSettingsSource), 'Outside Signage Preview must preserve multiplicative source-alpha behavior.');
+assert(!/outsideSignageOpacity|outside-signage|outside preview/i.test(projectionBakeRuntimeSource), 'Outside Signage Preview must not enter ProjectionBakeRuntime.');
+assert(/id="authoring-coverage-mask"/.test(htmlSource) && /id="authoring-coverage-preview"/.test(htmlSource), 'Authoring Coverage must use dedicated preview-only canvases.');
+assert(/window\.runOutsideSignagePreviewSmoke/.test(rendererSource), 'Outside Signage Preview runtime smoke must be exposed.');
+assert(/runOutsideSignagePreviewSmoke/.test(mainSource), 'Outside Signage Preview runtime smoke must be included in the desktop report.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.7.0-block7', 'Package version must identify the Block 7 reverse transport checkpoint.');
+assert(packageJson.version === '0.8.1-outside-preview', 'Package version must identify the post-Block-8A Outside Preview correction.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
 assert(packageJson.build.files.includes('src/live-link-broker.cjs'), 'Packaged app must include the broker.');
 assert(packageJson.build.files.includes('src/live-link-config.json'), 'Packaged app must include live-link config.');
+assert(/PROJECTION_FRAME_NORMALIZED_TOP_LEFT/.test(screenImageAuthoringSource) &&
+  /class ScreenImageAuthoringSession/.test(screenImageAuthoringSource),
+  'Block 8A must store one authoring layer in projection-frame normalized coordinates.');
+assert(/new THREE\.Texture\(authoringSource\.image\)/.test(projectionBakeRuntimeSource) &&
+  /ORIGINAL_FILE_BITMAP_DIRECT_TEXTURE_SAMPLE/.test(projectionBakeRuntimeSource),
+  'Block 8A Production Bake must sample the original decoded file bitmap directly.');
+assert(/id="authoring-image-input"/.test(htmlSource) && /id="layout-edit-button"/.test(htmlSource) &&
+  /id="authoring-camera-lock"/.test(htmlSource),
+  'Block 8A must expose file import, Layout Edit, and camera lock controls.');
+assert(/authoringCameraInterlock\.cameraLocked/.test(rendererSource) &&
+  /controlsSite\.enabled =[\s\S]*!authoringLocked/.test(rendererSource) &&
+  /window\.runBlock8AInterlockSmoke/.test(rendererSource) &&
+  /window\.runBlock8AAuthoringBakeSmoke/.test(rendererSource) &&
+  /block8a\.pass === true/.test(mainSource),
+  'Block 8A must force-disable real camera controls and include the interlock in runtime acceptance.');
+assert(/setPointerCapture\(event\.pointerId\)/.test(rendererSource) &&
+  /event\.preventDefault\(\)/.test(rendererSource) && /event\.stopPropagation\(\)/.test(rendererSource),
+  'Block 8A direct manipulation must own pointer input without leaking it to camera controls.');
 
 assert(liveLinkConfig.host === '127.0.0.1', 'Broker must bind only to 127.0.0.1.');
 const configuredEndpoint = new URL(liveLinkConfig.endpoint);
