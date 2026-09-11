@@ -6,6 +6,9 @@
 /Run_Previz_Dev.bat
 /3DAsset/BG/Previz_3Dworld_Background_v01.glb
 
+# Local DCC calibration workfiles (selected Block 6A PNG evidence remains tracked)
+/2DAsset/Calibration/
+
 # Dependencies and generated output
 node_modules/
 /desktop-app/build/
