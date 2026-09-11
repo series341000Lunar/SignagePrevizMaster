@@ -27,11 +27,30 @@ const SOURCE_CONTENT = [
   'ALPHA_TEST_SHAPE'
 ];
 
+export const PROJECTION_BAKE_MATTE_ASSET = deepFreeze({
+  assetRole: 'PROJECTION_BAKE_DEPTH_HOLDOUT',
+  assetLogicalId: 'anamorphic-bake-matte-inner',
+  sourcePath: '3DAsset/Signage/Previz_Anamorphic_BakeMatte_v01.glb',
+  fileName: 'Previz_Anamorphic_BakeMatte_v01.glb',
+  runtimeUrl: './assets/projection/Previz_Anamorphic_BakeMatte_v01.glb',
+  byteLength: 82352,
+  sha256: '378B97CACCA9D43E5DC02876F279D154E637D558E7D1AAE3F33D51B42FFA0B0D',
+  exactNames: ['ANAM_BAKE_MATTE_INNER'],
+  selectorPolicy: 'EXACT_NAME_ONLY_DEPTH_ONLY_NO_COLOR',
+  loadScope: 'PROJECTION_BAKE_RUN_ONLY',
+  ordinarySceneAttachment: 'NEVER'
+});
+
 const VALIDITY = {
-  operation: 'SURFACE_SELF_VISIBILITY_MULTIPLY_PROJECT_VALIDITY_MASK',
+  operation: 'PROJECTION_CAMERA_DEPTH_FRONTMOST_MULTIPLY_OPTIONAL_BAKE_MASK',
   environmentDepthIncluded: false,
-  backfacePolicy: 'CAMERA_DEPTH_VISIBILITY_FIRST',
-  fullWhiteRole: 'AUTOMATED_CONTROL_AND_DIAGNOSTIC_FALLBACK_ONLY'
+  dedicatedMatteDepthIncluded: true,
+  depthSource: 'FAMILY_BOUND_SIGNAGE_SURFACE_PLUS_DEDICATED_INNER_MATTE',
+  occluderBinding: PROJECTION_BAKE_MATTE_ASSET,
+  depthComparison: 'PROJECTED_DEPTH_LE_FRONTMOST_DEPTH_PLUS_QUANTIZED_EPSILON',
+  depthEpsilonPolicy: 'FOUR_ACTUAL_DEPTH_BUFFER_QUANTIZATION_STEPS',
+  backfacePolicy: 'NO_NORMAL_THRESHOLD_DEPTH_PRIMARY_GRAZING_PRESERVED',
+  fullWhiteRole: 'AUTHORITATIVE_NORMAL_BAKE_MASK_OFF'
 };
 
 const MASK_MEANING = { black: 0, white: 1, gray: 'ALPHA_MULTIPLIER_FEATHER' };
@@ -65,7 +84,7 @@ function makeProfile({ id, slug, label, calibration, productionMask, block6AUser
     renderTargets: {
       source: `${width}x${height}_RGBA_NATIVE`,
       direct: `${width}x${height}_RGBA_NATIVE`,
-      visibility: `${width}x${height}_DEPTH_SURFACE_ONLY`,
+      visibility: `${width}x${height}_DEPTH_SURFACE_PLUS_DEDICATED_INNER_MATTE`,
       canonical: '4728x5760_RGBA_NATIVE',
       reproject: `${width}x${height}_RGBA_NATIVE`
     }
@@ -142,5 +161,13 @@ export function validateProjectionBakeProfile(profile = PROJECTION_BAKE_PROFILE)
   if (!profile?.productionMask?.runtimeUrl) errors.push('productionMaskRuntimeUrl');
   if (!['IDENTITY_LINEAR_SCALAR', 'EXACT_LINEAR_ONE_MINUS_SHARED_PRODUCTION_MASK'].includes(profile?.productionMask?.scalarOperation)) errors.push('productionMaskScalarOperation');
   if (profile?.validity?.environmentDepthIncluded !== false) errors.push('environmentDepthPolicy');
+  if (profile?.validity?.dedicatedMatteDepthIncluded !== true) errors.push('dedicatedMatteDepthPolicy');
+  if (profile?.validity?.depthSource !== 'FAMILY_BOUND_SIGNAGE_SURFACE_PLUS_DEDICATED_INNER_MATTE') errors.push('depthSource');
+  if (profile?.validity?.occluderBinding?.assetLogicalId !== 'anamorphic-bake-matte-inner') errors.push('occluderAsset');
+  if (profile?.validity?.occluderBinding?.runtimeUrl !== './assets/projection/Previz_Anamorphic_BakeMatte_v01.glb') errors.push('occluderRuntimeUrl');
+  if (profile?.validity?.occluderBinding?.loadScope !== 'PROJECTION_BAKE_RUN_ONLY') errors.push('occluderLoadScope');
+  if (profile?.validity?.occluderBinding?.ordinarySceneAttachment !== 'NEVER') errors.push('occluderOrdinarySceneAttachment');
+  if (profile?.validity?.occluderBinding?.selectorPolicy !== 'EXACT_NAME_ONLY_DEPTH_ONLY_NO_COLOR') errors.push('occluderSelectorPolicy');
+  if (!Array.isArray(profile?.validity?.occluderBinding?.exactNames) || profile.validity.occluderBinding.exactNames.length === 0) errors.push('occluderExactNames');
   return Object.freeze({ valid: errors.length === 0, errors: Object.freeze(errors) });
 }

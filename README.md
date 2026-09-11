@@ -113,7 +113,7 @@ and [Block 5B Handoff](docs/BLOCK-5B-HANDOFF.md).
 
 Block 6A adds the FRONT 75F Native Canonical Bake PoC with a synthetic
 3000×3840 RGBA source, unchanged authored `TEXCOORD_0`, a production
-4728×5760 linear-scalar validity mask, surface-only self-visibility, and
+4728×5760 linear-scalar validity mask, projection-camera depth visibility, and
 same-camera reprojection. SOURCE, CANONICAL BAKE, and REPROJECTED results can
 be saved as native-resolution PNGs for external DCC inspection. Automated
 round-trip validation passed, and the user approved the external difference
@@ -149,3 +149,17 @@ optional legacy/diagnostic operation, with BACK evaluating exact linear
 on 2026-09-11. See
 [Block 7 Validation](docs/BLOCK-7-VALIDATION.md) and
 [Block 7 Handoff](docs/BLOCK-7-HANDOFF.md).
+
+The post-Block-7 Bake Visibility Correction replaces the former approximate
+8-bit authored-UV self-visibility match with a true family Projection Camera
+depth-texture comparison. User review found that Signage Surface self-depth
+alone still exposed the opposite side inside the J shape for both FRONT75 and
+BACK. The final shared path therefore lazy-loads the exact dedicated inner
+Matte `ANAM_BAKE_MATTE_INNER` as a depth-only, colorless holdout during
+Projection Bake only. It is never attached to ordinary SITE 3D and is disposed
+after every bake. MASK OFF remains the default; calibrated cameras and signage
+GLBs are preserved, and neither a normal threshold nor a planar Photoshop mask
+is used as a 3D-visibility substitute. The user accepted minor residual edge
+visibility for later planar-bake compensation and closed the correction as
+PASS. See [Bake Visibility Correction](docs/BLOCK-7-BAKE-VISIBILITY-CORRECTION.md)
+and [Dedicated Matte Handoff](docs/POST-BLOCK-7-DEDICATED-MATTE-HANDOFF.md).

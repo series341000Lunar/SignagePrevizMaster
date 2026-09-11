@@ -1096,7 +1096,9 @@ function updateProjectionPocMetrics(result) {
     ['Direct', `${result.directWidth} × ${result.directHeight}`],
     ['Bake Texture', `${result.bakeWidth} × ${result.bakeHeight} RGBA`],
     ['Reproject', `${result.reprojectWidth} × ${result.reprojectHeight}`],
-    ['Visibility', result.visibility.environmentDepthIncluded ? 'INVALID ENV DEPTH' : 'SURFACE ONLY'],
+    ['Visibility', result.visibility.dedicatedMatteDepthIncluded ? `${result.visibility.method} + DEDICATED MATTE` : result.visibility.method],
+    ['Silhouette IoU', result.visibilityAgreement.silhouetteIou.toFixed(6)],
+    ['Hidden Candidates', result.visibilityDiagnostic.occludedPixelCount.toLocaleString()],
     ['Mask', result.mask.status],
     ['Valid Pixels', result.validCanonicalPixelCount.toLocaleString()],
     ['Coverage', `${(result.canonicalCoverage * 100).toFixed(3)}%`],
@@ -1125,6 +1127,65 @@ function updateProjectionPocMetrics(result) {
   }
 }
 
+async function loadProjectionBakeMatte(profile) {
+  const contract = profile.validity.occluderBinding;
+  const loader = new GLTFLoader();
+  const runtimeUrl = new URL(contract.runtimeUrl, import.meta.url).href;
+  const gltf = await loader.loadAsync(runtimeUrl);
+  const meshes = [];
+  const geometries = new Set();
+  const materials = new Set();
+  const textures = new Set();
+  gltf.scene.updateMatrixWorld(true);
+  gltf.scene.traverse((child) => {
+    if (!child.isMesh) return;
+    if (contract.exactNames.includes(child.name)) meshes.push(child);
+    if (child.geometry) geometries.add(child.geometry);
+    const childMaterials = Array.isArray(child.material) ? child.material : [child.material];
+    for (const material of childMaterials) {
+      if (!material) continue;
+      materials.add(material);
+      for (const value of Object.values(material)) if (value?.isTexture) textures.add(value);
+    }
+  });
+  const receivedNames = meshes.map((mesh) => mesh.name);
+  const allRenderableNames = [];
+  gltf.scene.traverse((child) => { if (child.isMesh) allRenderableNames.push(child.name); });
+  const exactMatch = receivedNames.length === contract.exactNames.length &&
+    contract.exactNames.every((name) => receivedNames.includes(name)) &&
+    allRenderableNames.length === receivedNames.length;
+  const transformsFinite = meshes.every((mesh) => mesh.matrixWorld.elements.every(Number.isFinite));
+  if (!exactMatch || !transformsFinite || meshes.some((mesh) => !mesh.geometry)) {
+    for (const texture of textures) texture.dispose();
+    for (const material of materials) material.dispose();
+    for (const geometry of geometries) geometry.dispose();
+    throw new Error(`Projection Bake dedicated matte binding mismatch: expected ${contract.exactNames.join(', ')}; received ${allRenderableNames.join(', ') || 'none'}.`);
+  }
+  let disposed = false;
+  return {
+    meshes,
+    diagnostics: {
+      assetLogicalId: contract.assetLogicalId,
+      fileName: contract.fileName,
+      runtimeUrl: contract.runtimeUrl,
+      nodeNames: receivedNames,
+      loadScope: contract.loadScope,
+      ordinarySceneAttached: gltf.scene.parent !== null,
+      transformsFinite,
+      disposedAfterBake: false
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      for (const texture of textures) texture.dispose();
+      for (const material of materials) material.dispose();
+      for (const geometry of geometries) geometry.dispose();
+      gltf.scene.clear();
+      this.diagnostics.disposedAfterBake = true;
+    }
+  };
+}
+
 async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
   const profile = currentProjectionBakeProfile();
   if (!isProjectionPocContext() || !profile) throw new Error('Block 6B PoC requires an implemented anamorphic family calibration with its exact Surface.');
@@ -1137,27 +1198,29 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
   projectionPocMessage.className = 'projection-poc-message';
   projectionPocMessage.textContent = 'Native GPU Bake is running. Large 4728 × 5760 readback may take a moment.';
   syncProjectionPocUi();
+  let matteAsset = null;
   try {
+    matteAsset = await loadProjectionBakeMatte(profile);
     const result = await projectionBakeRuntime.run({
       profile,
       surfaceMeshes: state.site.activeBindings
         .filter((binding) => binding.mesh.name === profile.surfaceBinding.exactName)
         .map((binding) => binding.mesh),
+      occluderMeshes: matteAsset.meshes,
       previewCanvases: projectionPreviewCanvases,
       repetitions,
       maskMode: requestedMaskMode
     });
+    matteAsset.dispose();
+    result.matteAsset = matteAsset.diagnostics;
+    matteAsset = null;
     result.profileValid = profileValidation.valid;
     result.contextLossCount = state.contextLossCount;
     result.userValidation = state.projectionBake.userValidation;
     result.block6AFrontValidation = profile.block6AUserValidation;
     const maxSampleDelta = (sample, target) => Math.max(...sample.source.map((value, index) => Math.abs(value - sample[target][index])));
-    const centerUvDelta = result.visibility.centerProbe.cpuRaycastUv
-      ? Math.hypot(
-        result.visibility.centerProbe.gpuUv[0] - result.visibility.centerProbe.cpuRaycastUv[0],
-        result.visibility.centerProbe.gpuUv[1] - result.visibility.centerProbe.cpuRaycastUv[1]
-      )
-      : Number.POSITIVE_INFINITY;
+    const sampleMatchesIfVisible = (sample, target, maximumDelta) =>
+      sample[target][3] === 0 || maxSampleDelta(sample, target) <= maximumDelta;
     result.technicalThresholds = {
       canonicalCoverage: requestedMaskMode === 'production' && profile.familyId === ANAMORPHIC_FAMILY_IDS.FRONT_75F
         ? { min: 0.5, max: 0.65 }
@@ -1165,7 +1228,9 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
       visibleScreenPixelCountMin: 100_000,
       maeMax: 1,
       rmseMax: 5,
-      centerUvDeltaMax: 0.01,
+      silhouetteIouMin: 0.999,
+      directOnlyPixelCountMax: 1024,
+      reprojectOnlyPixelCountMax: 0,
       centerRgbaDeltaMax: 1,
       alphaRgbaDeltaMax: 1
     };
@@ -1177,16 +1242,19 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
       result.visibleScreenPixelCount >= result.technicalThresholds.visibleScreenPixelCountMin &&
       result.directVsCanonicalReprojected.mae <= result.technicalThresholds.maeMax &&
       result.directVsCanonicalReprojected.rmse <= result.technicalThresholds.rmseMax &&
-      centerUvDelta <= result.technicalThresholds.centerUvDeltaMax &&
+      result.visibilityAgreement.silhouetteIou >= result.technicalThresholds.silhouetteIouMin &&
+      result.visibilityAgreement.directOnlyPixelCount <= result.technicalThresholds.directOnlyPixelCountMax &&
+      result.visibilityAgreement.reprojectOnlyPixelCount <= result.technicalThresholds.reprojectOnlyPixelCountMax &&
+      result.visibilityDiagnostic.occludedPixelCount > 0 &&
       (inverseMaskActive || (
         result.sourceVsDirect.mae <= result.technicalThresholds.maeMax &&
         result.sourceVsDirect.rmse <= result.technicalThresholds.rmseMax &&
         result.sourceVsCanonicalReprojected.mae <= result.technicalThresholds.maeMax &&
         result.sourceVsCanonicalReprojected.rmse <= result.technicalThresholds.rmseMax &&
-        maxSampleDelta(result.centerSample, 'direct') <= result.technicalThresholds.centerRgbaDeltaMax &&
-        maxSampleDelta(result.centerSample, 'reprojected') <= result.technicalThresholds.centerRgbaDeltaMax &&
-        maxSampleDelta(result.alphaTest, 'direct') <= result.technicalThresholds.alphaRgbaDeltaMax &&
-        maxSampleDelta(result.alphaTest, 'reprojected') <= result.technicalThresholds.alphaRgbaDeltaMax
+        sampleMatchesIfVisible(result.centerSample, 'direct', result.technicalThresholds.centerRgbaDeltaMax) &&
+        sampleMatchesIfVisible(result.centerSample, 'reprojected', result.technicalThresholds.centerRgbaDeltaMax) &&
+        sampleMatchesIfVisible(result.alphaTest, 'direct', result.technicalThresholds.alphaRgbaDeltaMax) &&
+        sampleMatchesIfVisible(result.alphaTest, 'reprojected', result.technicalThresholds.alphaRgbaDeltaMax)
       ));
     result.technicalPass = result.profileValid &&
       result.familyId === profile.familyId &&
@@ -1203,7 +1271,24 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
         : result.mask.enabled === false && result.mask.mode === 'full-white') &&
       result.directProjection.sourceTexture === 'ORIGINAL_WORKING_SOURCE' &&
       result.directProjection.canonicalTextureReferenced === false &&
+      result.directProjection.environmentIncluded === false &&
+      result.directProjection.environmentColorIncluded === false &&
+      result.directProjection.matteIncluded === true &&
+      result.directProjection.matteScope === 'PROJECTION_BAKE_OFFSCREEN_ONLY' &&
       result.visibility.environmentDepthIncluded === false &&
+      result.visibility.dedicatedMatteDepthIncluded === true &&
+      result.visibility.method === 'PROJECTION_CAMERA_DEPTH_TEXTURE_FRONTMOST' &&
+      result.visibility.depthSource === 'FAMILY_BOUND_SIGNAGE_SURFACE_PLUS_DEDICATED_INNER_MATTE' &&
+      JSON.stringify(result.occluderNames) === JSON.stringify(profile.validity.occluderBinding.exactNames) &&
+      result.visibility.occluderSelectorPolicy === 'EXACT_NAME_ONLY_DEPTH_ONLY_NO_COLOR' &&
+      result.matteAsset.assetLogicalId === profile.validity.occluderBinding.assetLogicalId &&
+      result.matteAsset.loadScope === 'PROJECTION_BAKE_RUN_ONLY' &&
+      result.matteAsset.ordinarySceneAttached === false &&
+      result.matteAsset.transformsFinite === true &&
+      result.matteAsset.disposedAfterBake === true &&
+      result.visibility.depthBits >= 16 &&
+      result.visibility.depthEpsilonSteps === 4 &&
+      result.visibility.facingPolicy === 'NO_NORMAL_THRESHOLD_DEPTH_PRIMARY_GRAZING_PRESERVED' &&
       result.uvPolicy === 'PRESERVE_AUTHORED_NO_REMAP' &&
       result.validCanonicalPixelCount > 0 &&
       result.transparentCanonicalPixelCount > 0 &&
@@ -1215,7 +1300,7 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
     state.projectionBake.status = result.technicalPass ? 'TECHNICAL PASS' : 'TECHNICAL CHECK';
     projectionPocMessage.className = `projection-poc-message ${result.technicalPass ? 'pass' : 'fail'}`;
     projectionPocMessage.textContent = result.technicalPass
-      ? `Technical diagnostics pass · Mask ${result.mask.enabled ? 'ON' : 'OFF'}. Block 7 user validation remains open.`
+      ? `Technical diagnostics pass · Camera-depth visibility · Mask ${result.mask.enabled ? 'ON' : 'OFF'}.`
       : 'Technical checks need review. Calibration values were not modified.';
     updateProjectionPocMetrics(result);
     window.block6AProjectionDiagnostics = structuredClone(result);
@@ -1235,6 +1320,7 @@ async function runProjectionBake({ repetitions = 1, maskMode = null } = {}) {
     window.block6BProjectionDiagnostics = window.block6AProjectionDiagnostics;
     throw error;
   } finally {
+    matteAsset?.dispose();
     state.projectionBake.running = false;
     syncProjectionPocUi();
     render();
@@ -3479,12 +3565,19 @@ async function runProjectionFamilySmoke(familyKey, repetitions, maskMode = 'prod
       manifestProfile?.mask?.sha256 === profile.productionMask.sha256
     : manifestProfile?.mask?.status === 'NOT_SUPPLIED' &&
       manifestProfile?.mask?.fallback === 'FULL_WHITE_DIAGNOSTIC';
+  const manifestMatte = state.manifest?.projectionBake?.matte;
+  result.dedicatedMatteManifestVerified = manifestMatte?.sourceVerified === true &&
+    manifestMatte?.buildCopyVerified === true &&
+    manifestMatte?.assetLogicalId === profile.validity.occluderBinding.assetLogicalId &&
+    manifestMatte?.sha256 === profile.validity.occluderBinding.sha256 &&
+    JSON.stringify(manifestMatte?.exactNames) === JSON.stringify(profile.validity.occluderBinding.exactNames);
   result.maskControlModes = ['production', 'full-white', 'synthetic'];
   result.photoshopWritePerformed = false;
   result.externalNetworkRequestCount = 0;
   result.technicalPass = result.technicalPass &&
     result.calibrationCameraUnchanged &&
     result.productionMaskManifestVerified &&
+    result.dedicatedMatteManifestVerified &&
     (maskMode === 'production'
       ? result.mask.enabled === true && result.mask.mode === 'production' && result.mask.scalarOperation === profile.productionMask.scalarOperation
       : result.mask.enabled === false && result.mask.mode === 'full-white' && result.mask.exactLinearInversion === false) &&
@@ -3508,13 +3601,14 @@ window.runBlock6AProjectionSmoke = async () => {
 window.runBlock6BProjectionSmoke = async () => {
   const contextLossBefore = state.contextLossCount;
   const disposeBefore = projectionBakeRuntime.disposeCount;
-  const frontInitial = await runProjectionFamilySmoke('front75f', 3);
-  const back = await runProjectionFamilySmoke('back', 8);
-  const frontReturn = await runProjectionFamilySmoke('front75f', 3);
+  const frontInitial = await runProjectionFamilySmoke('front75f', 3, 'full-white');
+  const back = await runProjectionFamilySmoke('back', 8, 'full-white');
+  const frontReturn = await runProjectionFamilySmoke('front75f', 3, 'full-white');
   const sequence = [frontInitial.familyId, back.familyId, frontReturn.familyId];
   const report = {
     block: '6B',
     userValidation: 'PASS_CLOSED',
+    normalBakeMaskMode: 'OFF_FULL_WHITE',
     sequence,
     familySwitchPass: JSON.stringify(sequence) === JSON.stringify([
       ANAMORPHIC_FAMILY_IDS.FRONT_75F,
@@ -3566,6 +3660,88 @@ window.runBlock7MaskOffSmoke = async () => {
   syncProjectionPocUi(); updateProjectionPocMetrics(back); updateDiagnostics();
   return report;
 };
+window.runPostBlock7BakeVisibilityCorrectionSmoke = async () => {
+  const contextLossBefore = state.contextLossCount;
+  const disposeBefore = projectionBakeRuntime.disposeCount;
+  state.projectionBake.maskEnabledByFamily[ANAMORPHIC_FAMILY_IDS.FRONT_75F] = false;
+  state.projectionBake.maskEnabledByFamily[ANAMORPHIC_FAMILY_IDS.BACK] = false;
+  const frontInitial = await runProjectionFamilySmoke('front75f', 3, 'full-white');
+  const frontDiagnostic = projectionBakeRuntime.visibilityDiagnosticDataUrl();
+  const frontArtifacts = {
+    direct: projectionBakeRuntime.outputDataUrl('direct'),
+    canonical: projectionBakeRuntime.outputDataUrl('canonical'),
+    reprojected: projectionBakeRuntime.outputDataUrl('reprojected')
+  };
+  const back = await runProjectionFamilySmoke('back', 3, 'full-white');
+  const backDiagnostic = projectionBakeRuntime.visibilityDiagnosticDataUrl();
+  const backArtifacts = {
+    direct: projectionBakeRuntime.outputDataUrl('direct'),
+    canonical: projectionBakeRuntime.outputDataUrl('canonical'),
+    reprojected: projectionBakeRuntime.outputDataUrl('reprojected')
+  };
+  const frontReturn = await runProjectionFamilySmoke('front75f', 1, 'full-white');
+  const sequence = [frontInitial.familyId, back.familyId, frontReturn.familyId];
+  const profileDepthPass = (result) => {
+    const expectedOccluderNames = getProjectionBakeProfile(result.familyId)?.validity.occluderBinding.exactNames || [];
+    return result.mask.enabled === false &&
+      result.mask.mode === 'full-white' &&
+      result.visibility.method === 'PROJECTION_CAMERA_DEPTH_TEXTURE_FRONTMOST' &&
+      result.visibility.depthSource === 'FAMILY_BOUND_SIGNAGE_SURFACE_PLUS_DEDICATED_INNER_MATTE' &&
+      result.visibility.environmentDepthIncluded === false &&
+      result.visibility.dedicatedMatteDepthIncluded === true &&
+      result.directProjection.matteIncluded === true &&
+      result.directProjection.matteScope === 'PROJECTION_BAKE_OFFSCREEN_ONLY' &&
+      result.directProjection.environmentColorIncluded === false &&
+      result.visibility.occluderSelectorPolicy === 'EXACT_NAME_ONLY_DEPTH_ONLY_NO_COLOR' &&
+      JSON.stringify(result.occluderNames) === JSON.stringify(expectedOccluderNames) &&
+      result.matteAsset.assetLogicalId === 'anamorphic-bake-matte-inner' &&
+      result.matteAsset.loadScope === 'PROJECTION_BAKE_RUN_ONLY' &&
+      result.matteAsset.ordinarySceneAttached === false &&
+      result.matteAsset.disposedAfterBake === true &&
+      result.visibility.facingPolicy === 'NO_NORMAL_THRESHOLD_DEPTH_PRIMARY_GRAZING_PRESERVED' &&
+      result.visibilityAgreement.reprojectOnlyPixelCount === 0 &&
+      result.visibilityAgreement.silhouetteIou >= result.technicalThresholds.silhouetteIouMin &&
+      result.visibilityDiagnostic.occludedPixelCount > 0 &&
+      result.resourcePolicy.stableAcrossRuns === true;
+  };
+  const report = {
+    correction: 'POST-BLOCK-7-BAKE-VISIBILITY',
+    sequence,
+    maskOff: true,
+    visibilityArchitectureShared: frontInitial.visibility.method === back.visibility.method &&
+      frontInitial.visibility.depthComparison === back.visibility.depthComparison,
+    familyCalibrationUnchanged: frontInitial.calibrationCameraUnchanged &&
+      back.calibrationCameraUnchanged && frontReturn.calibrationCameraUnchanged,
+    glbGeometryModified: false,
+    frontInitial,
+    back,
+    frontReturn,
+    diagnostics: { frontDataUrl: frontDiagnostic, backDataUrl: backDiagnostic },
+    resourcesDisposedAcrossFamilySwitch: projectionBakeRuntime.disposeCount - disposeBefore,
+    contextLossCount: state.contextLossCount - contextLossBefore
+  };
+  report.technicalPass = JSON.stringify(sequence) === JSON.stringify([
+    ANAMORPHIC_FAMILY_IDS.FRONT_75F,
+    ANAMORPHIC_FAMILY_IDS.BACK,
+    ANAMORPHIC_FAMILY_IDS.FRONT_75F
+  ]) &&
+    report.visibilityArchitectureShared &&
+    report.familyCalibrationUnchanged &&
+    report.glbGeometryModified === false &&
+    profileDepthPass(frontInitial) && profileDepthPass(back) && profileDepthPass(frontReturn) &&
+    report.resourcesDisposedAcrossFamilySwitch >= 2 &&
+    report.contextLossCount === 0;
+  delete report.diagnostics.frontDataUrl;
+  delete report.diagnostics.backDataUrl;
+  report.diagnostics.frontFileName = 'PostBlock7_FRONT75F_VisibilityDiagnostic.png';
+  report.diagnostics.backFileName = 'PostBlock7_BACK_VisibilityDiagnostic.png';
+  window.postBlock7BakeVisibilityCorrectionDiagnostics = structuredClone(report);
+  window.__postBlock7VisibilityDiagnosticDataUrls = { front: frontDiagnostic, back: backDiagnostic };
+  window.__postBlock7VisibilityCorrectionDataUrls = { front: frontArtifacts, back: backArtifacts };
+  return report;
+};
+window.getPostBlock7VisibilityDiagnosticArtifacts = () => window.__postBlock7VisibilityDiagnosticDataUrls || null;
+window.getPostBlock7VisibilityCorrectionArtifacts = () => window.__postBlock7VisibilityCorrectionDataUrls || null;
 window.getBlock6APreviewArtifacts = () => projectionBakeRuntime.previewDataUrls(projectionPreviewCanvases);
 window.getBlock6AFullSourceArtifact = () => projectionBakeRuntime.fullSourceDataUrl();
 window.inspectBlock6AExportPng = async (kind) => {

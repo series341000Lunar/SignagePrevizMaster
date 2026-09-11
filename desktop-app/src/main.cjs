@@ -171,6 +171,33 @@ async function runSmokeTest(window) {
     writePngDataUrl(block6bArtifacts.bakePreview, block6bPreviewData.bake);
     writePngDataUrl(block6bArtifacts.reprojectPreview, block6bPreviewData.reproject);
     const block7MaskOff = await window.webContents.executeJavaScript('window.runBlock7MaskOffSmoke()', true);
+    const bakeVisibilityCorrection = await window.webContents.executeJavaScript(
+      'window.runPostBlock7BakeVisibilityCorrectionSmoke()', true
+    );
+    const bakeVisibilityDiagnosticData = await window.webContents.executeJavaScript(
+      'window.getPostBlock7VisibilityDiagnosticArtifacts()', true
+    );
+    const bakeVisibilityCorrectionData = await window.webContents.executeJavaScript(
+      'window.getPostBlock7VisibilityCorrectionArtifacts()', true
+    );
+    const bakeVisibilityArtifacts = {
+      front: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_VisibilityDiagnostic.png'),
+      back: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_VisibilityDiagnostic.png'),
+      frontDirect: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_Direct_3000x3840.png'),
+      frontCanonical: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_Canonical_4728x5760.png'),
+      frontReprojected: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_Reprojected_3000x3840.png'),
+      backDirect: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_Direct_2100x3840.png'),
+      backCanonical: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_Canonical_4728x5760.png'),
+      backReprojected: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_Reprojected_2100x3840.png')
+    };
+    writePngDataUrl(bakeVisibilityArtifacts.front, bakeVisibilityDiagnosticData.front);
+    writePngDataUrl(bakeVisibilityArtifacts.back, bakeVisibilityDiagnosticData.back);
+    writePngDataUrl(bakeVisibilityArtifacts.frontDirect, bakeVisibilityCorrectionData.front.direct);
+    writePngDataUrl(bakeVisibilityArtifacts.frontCanonical, bakeVisibilityCorrectionData.front.canonical);
+    writePngDataUrl(bakeVisibilityArtifacts.frontReprojected, bakeVisibilityCorrectionData.front.reprojected);
+    writePngDataUrl(bakeVisibilityArtifacts.backDirect, bakeVisibilityCorrectionData.back.direct);
+    writePngDataUrl(bakeVisibilityArtifacts.backCanonical, bakeVisibilityCorrectionData.back.canonical);
+    writePngDataUrl(bakeVisibilityArtifacts.backReprojected, bakeVisibilityCorrectionData.back.reprojected);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -219,16 +246,18 @@ async function runSmokeTest(window) {
       block6a.profileValid === true &&
       block6a.calibrationCameraUnchanged === true &&
       block6a.productionMaskManifestVerified === true &&
-      block6a.mask.mode === 'production' &&
-      block6a.mask.status === 'PRODUCTION_REFERENCE_SUPPLIED' &&
+      block6a.dedicatedMatteManifestVerified === true &&
+      block6a.mask.mode === 'full-white' &&
+      block6a.mask.status === 'DISABLED_FULL_WHITE_CONTROL' &&
       block6a.validCanonicalPixelCount > 0 &&
       block6a.transparentCanonicalPixelCount > 0 &&
       block6a.visibleScreenPixelCount > 0 &&
       block6a.resourcePolicy.stableAcrossRuns === true &&
       block6a.contextLossCount === 0 &&
       block6b.technicalPass === true && block6b.userValidation === 'PASS_CLOSED' &&
-      block6b.back.familyId === 'ANAMORPHIC_BACK' && block6b.back.mask.status === 'SHARED_PRODUCTION_REFERENCE_INVERTED' &&
-      block6b.back.mask.mode === 'production' && block6b.back.mask.exactLinearInversion === true &&
+      block6b.normalBakeMaskMode === 'OFF_FULL_WHITE' &&
+      block6b.back.familyId === 'ANAMORPHIC_BACK' && block6b.back.mask.status === 'DISABLED_FULL_WHITE_CONTROL' &&
+      block6b.back.mask.mode === 'full-white' && block6b.back.mask.exactLinearInversion === false &&
       block6b.back.sourceWidth === 2100 && block6b.back.sourceHeight === 3840 &&
       block6b.frontReturn.sourceVsCanonicalReprojected.mae <= 1 && block6b.frontReturn.sourceVsCanonicalReprojected.rmse <= 5 &&
       block6bExportMetadata.source.width === 3000 && block6bExportMetadata.source.height === 3840 &&
@@ -238,6 +267,12 @@ async function runSmokeTest(window) {
       Object.values(block6bExportMetadata).every((entry) => entry.mimeType === 'image/png' && entry.bytes > 0) &&
       block7MaskOff.technicalPass === true && block7MaskOff.defaultOff === true &&
       block7MaskOff.backCameraFamilyCorrect === true && block7MaskOff.contextLossCount === 0 &&
+      bakeVisibilityCorrection.technicalPass === true &&
+      bakeVisibilityCorrection.maskOff === true &&
+      bakeVisibilityCorrection.visibilityArchitectureShared === true &&
+      bakeVisibilityCorrection.familyCalibrationUnchanged === true &&
+      bakeVisibilityCorrection.glbGeometryModified === false &&
+      bakeVisibilityCorrection.contextLossCount === 0 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -266,6 +301,8 @@ async function runSmokeTest(window) {
       block6bArtifacts,
       block6bExportMetadata,
       block7MaskOff,
+      bakeVisibilityCorrection,
+      bakeVisibilityArtifacts,
       screenshotPath
     };
     writeJson(reportPath, report);

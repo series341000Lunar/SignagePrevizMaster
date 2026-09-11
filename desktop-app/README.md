@@ -141,6 +141,18 @@ The retained ON path is legacy/diagnostic only and evaluates exact linear
 3ds Max World Normal overlays for both families on 2026-09-11. Block 8 layer
 stack authoring remains deferred.
 
+The post-Block-7 Bake Visibility Correction keeps reverse transport unchanged
+and replaces Canonical Bake's approximate 8-bit UV-neighborhood visibility test
+with a depth-texture comparison from the same approved family camera. User
+review showed that self-depth alone still exposed the opposite side inside the
+J shape for both FRONT75 and BACK. The final shared path lazy-loads the exact
+dedicated inner Matte `ANAM_BAKE_MATTE_INNER` as a depth-only, colorless
+holdout. It exists only in the offscreen Projection Bake run, is never attached
+to ordinary SITE 3D, and is disposed after every bake. Planar masks,
+normal-threshold clipping, and signage GLB edits are not used. MASK OFF remains
+the normal bake state. Minor residual edge visibility is user-accepted for
+later planar-bake compensation; the correction is PASS / CLOSED.
+
 ## Commands
 
 ```powershell

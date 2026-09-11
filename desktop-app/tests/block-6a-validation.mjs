@@ -5,7 +5,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { ANAMORPHIC_FRONT_75F_PROFILE } from '../src/anamorphic-calibration-profile.js';
-import { PROJECTION_BAKE_PROFILE, validateProjectionBakeProfile } from '../src/projection-bake-profile.js';
+import {
+  PROJECTION_BAKE_MATTE_ASSET,
+  PROJECTION_BAKE_PROFILE,
+  validateProjectionBakeProfile
+} from '../src/projection-bake-profile.js';
+import { inspectAnamorphicGlb } from '../scripts/anamorphic-glb-inspection.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(appRoot, '..');
@@ -16,6 +21,8 @@ const mainSource = await readFile(path.join(appRoot, 'src', 'main.cjs'), 'utf8')
 const indexSource = await readFile(path.join(appRoot, 'src', 'index.html'), 'utf8');
 const maskPath = path.join(projectRoot, PROJECTION_BAKE_PROFILE.productionMask.sourcePath);
 const maskBytes = await readFile(maskPath);
+const matteBytes = await readFile(path.join(projectRoot, PROJECTION_BAKE_MATTE_ASSET.sourcePath));
+const matteInspection = inspectAnamorphicGlb(matteBytes);
 const maskMetadata = await sharp(maskBytes).metadata();
 const { data: maskPixels, info: maskInfo } = await sharp(maskBytes)
   .raw({ depth: 'uchar' })
@@ -29,6 +36,16 @@ assert.deepEqual(PROJECTION_BAKE_PROFILE.workingResolution, ANAMORPHIC_FRONT_75F
 assert.deepEqual(PROJECTION_BAKE_PROFILE.canonicalResolution, ANAMORPHIC_FRONT_75F_PROFILE.finalOutput);
 assert.equal(PROJECTION_BAKE_PROFILE.calibrationCamera, ANAMORPHIC_FRONT_75F_PROFILE.camera);
 assert.equal(PROJECTION_BAKE_PROFILE.validity.environmentDepthIncluded, false);
+assert.equal(PROJECTION_BAKE_PROFILE.validity.dedicatedMatteDepthIncluded, true);
+assert.deepEqual(PROJECTION_BAKE_PROFILE.validity.occluderBinding.exactNames, ['ANAM_BAKE_MATTE_INNER']);
+assert.equal(PROJECTION_BAKE_PROFILE.validity.occluderBinding.loadScope, 'PROJECTION_BAKE_RUN_ONLY');
+assert.equal(PROJECTION_BAKE_PROFILE.validity.occluderBinding.ordinarySceneAttachment, 'NEVER');
+assert.equal(matteBytes.length, PROJECTION_BAKE_MATTE_ASSET.byteLength);
+assert.equal(createHash('sha256').update(matteBytes).digest('hex').toUpperCase(), PROJECTION_BAKE_MATTE_ASSET.sha256);
+assert.equal(matteInspection.sceneNodeCount, 1);
+assert.equal(matteInspection.nodeRecords[0].name, 'ANAM_BAKE_MATTE_INNER');
+assert.equal(matteInspection.nodeRecords[0].vertexCount, 2350);
+assert.equal(matteInspection.nodeRecords[0].uv0Bounds, null);
 assert.equal(PROJECTION_BAKE_PROFILE.productionMask.colorSpace, 'NO_COLOR_SPACE_LINEAR_SCALAR');
 assert.equal(PROJECTION_BAKE_PROFILE.productionMask.width, 4728);
 assert.equal(PROJECTION_BAKE_PROFILE.productionMask.height, 5760);
@@ -64,16 +81,24 @@ assert(white > 0, 'Production validity mask must contain valid white pixels.');
 assert(gray > 0, 'Production validity mask must contain gray feather pixels.');
 
 assert.match(runtimeSource, /projectionMatrix \* modelViewMatrix \* vec4\(position, 1\.0\)/);
-assert.match(runtimeSource, /visibilitySurfaceId/);
-assert.match(runtimeSource, /BLOCK6A_VISIBILITY_AUTHORED_UV_LOOKUP/);
-assert.match(runtimeSource, /visibilityTarget\.texture\.minFilter = THREE\.NearestFilter/);
+assert.match(runtimeSource, /visibilityDepth/);
+assert.match(runtimeSource, /new THREE.DepthTexture/);
+assert.match(runtimeSource, /THREE\.UnsignedIntType/);
+assert.match(runtimeSource, /target\.depthTexture\.minFilter = THREE\.NearestFilter/);
 assert.match(runtimeSource, /this\.renderer\.setPixelRatio\(1\)/);
 assert.match(runtimeSource, /renderer\.setPixelRatio\(snapshot\.pixelRatio\)/);
-assert.match(runtimeSource, /map: resources\.visibilityUvTexture/);
-assert.match(runtimeSource, /nearestUvDistance/);
-assert.match(runtimeSource, /HARDWARE_DEPTH_FRONTMOST_AUTHORED_UV_NEAREST_3X3/);
-assert.match(runtimeSource, /visibilityTexelSize/);
+assert.match(runtimeSource, /projectedDepth - frontmostDepth > visibilityDepthEpsilon/);
+assert.match(runtimeSource, /PROJECTION_CAMERA_DEPTH_TEXTURE_FRONTMOST/);
+assert.match(runtimeSource, /VISIBILITY_DEPTH_EPSILON_STEPS = 4/);
+assert.match(runtimeSource, /NO_NORMAL_THRESHOLD_DEPTH_PRIMARY_GRAZING_PRESERVED/);
+assert.doesNotMatch(runtimeSource, /nearestUvDistance|visibilityUvEpsilon|BLOCK6A_VISIBILITY_AUTHORED_UV_LOOKUP/);
 assert.match(runtimeSource, /environmentDepthIncluded: false/);
+assert.match(runtimeSource, /dedicatedMatteDepthIncluded: true/);
+assert.match(runtimeSource, /FAMILY_BOUND_SIGNAGE_SURFACE_PLUS_DEDICATED_INNER_MATTE/);
+assert.match(runtimeSource, /colorWrite: false/);
+assert.match(rendererSource, /loadProjectionBakeMatte/);
+assert.match(rendererSource, /ordinarySceneAttached: gltf\.scene\.parent !== null/);
+assert.match(rendererSource, /matteAsset\.dispose\(\)/);
 assert.match(runtimeSource, /gl_Position = vec4\(uv\.x \* 2\.0 - 1\.0, 1\.0 - uv\.y \* 2\.0/);
 assert.match(runtimeSource, /canonicalTexture, vec2\(vCanonicalUv\.x, 1\.0 - vCanonicalUv\.y\)/);
 assert.doesNotMatch(runtimeSource, /uvMin|uvMax|normalizeUv|normalizedUv/);
@@ -128,7 +153,7 @@ console.log(JSON.stringify({
     syntheticNativeRgba: true,
     authoredUvPreserved: true,
     canonicalTopLeftExplicit: true,
-    selfVisibilitySurfaceOnly: true,
+    cameraDepthWithDedicatedInnerMatte: true,
     productionMaskLinearScalar: true,
     fullWhiteControlAvailable: true,
     syntheticMaskControlAvailable: true,

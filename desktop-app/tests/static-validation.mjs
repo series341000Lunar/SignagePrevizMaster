@@ -233,6 +233,12 @@ const environmentDetails = await stat(environmentFile);
 assert(environmentDetails.size === manifest.environmentAsset.observedFingerprint.byteLength, 'Built environment GLB size mismatch.');
 assert(manifest.environmentAsset.sourceVerified === true && manifest.environmentAsset.buildCopyVerified === true, 'Environment verification flags are missing.');
 assert(manifest.environmentAsset.revisionPolicy === 'MUTABLE_INFORMATIONAL_FINGERPRINT', 'Environment revision policy must remain mutable/informational.');
+const matteFile = path.join(appRoot, 'build', 'assets', 'projection', manifest.projectionBake.matte.fileName);
+const matteDetails = await stat(matteFile);
+assert(matteDetails.size === manifest.projectionBake.matte.byteLength, 'Built Projection Bake matte GLB size mismatch.');
+assert(manifest.projectionBake.matte.sourceVerified === true && manifest.projectionBake.matte.buildCopyVerified === true, 'Projection Bake matte verification flags are missing.');
+assert(manifest.projectionBake.matte.loadScope === 'PROJECTION_BAKE_RUN_ONLY', 'Projection Bake matte must be run-scoped.');
+assert(manifest.projectionBake.matte.ordinarySceneAttachment === 'NEVER', 'Projection Bake matte must never attach to an ordinary scene.');
 
 const result = {
   pass: failures.length === 0,

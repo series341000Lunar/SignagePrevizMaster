@@ -7,8 +7,13 @@ import sharp from 'sharp';
 import { SITE_ASSETS } from '../src/site-scene-profile.js';
 import { PHOTO_SCENE_RECORDS } from '../src/site-calibration-profile.js';
 import { ENVIRONMENT_ASSET } from '../src/site-environment-profile.js';
-import { PROJECTION_BAKE_PROFILES, validateProjectionBakeProfile } from '../src/projection-bake-profile.js';
+import {
+  PROJECTION_BAKE_MATTE_ASSET,
+  PROJECTION_BAKE_PROFILES,
+  validateProjectionBakeProfile
+} from '../src/projection-bake-profile.js';
 import { inspectEnvironmentGlb } from './glb-inspection.mjs';
+import { inspectAnamorphicGlb } from './anamorphic-glb-inspection.mjs';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(appRoot, '..');
@@ -128,8 +133,40 @@ const manifest = {
 
 manifest.projectionBake = {
   block: '6B',
-  profiles: {}
+  profiles: {},
+  matte: null
 };
+
+const matteContract = PROJECTION_BAKE_MATTE_ASSET;
+const matteSourcePath = path.join(projectRoot, matteContract.sourcePath);
+const matteDestinationPath = path.join(buildRoot, 'assets', 'projection', matteContract.fileName);
+const matteSourceBytes = await readFile(matteSourcePath);
+const matteInspection = inspectAnamorphicGlb(matteSourceBytes);
+const matteMeshNodes = matteInspection.nodeRecords.filter((node) => node.meshIndex !== null);
+if (matteSourceBytes.length !== matteContract.byteLength ||
+    sha256(matteSourceBytes) !== matteContract.sha256 ||
+    matteInspection.gltfVersion !== '2.0' ||
+    matteInspection.scenes !== 1 ||
+    matteInspection.meshes !== 1 ||
+    matteInspection.cameras !== 0 ||
+    matteInspection.animations !== 0 ||
+    matteMeshNodes.length !== matteContract.exactNames.length ||
+    matteContract.exactNames.some((name) => !matteMeshNodes.some((node) => node.name === name)) ||
+    matteMeshNodes.some((node) => node.vertexCount <= 0 || node.primitiveCount <= 0)) {
+  throw new Error(`Projection Bake dedicated matte source contract mismatch: ${matteContract.sourcePath}`);
+}
+await copyFile(matteSourcePath, matteDestinationPath);
+const matteDestinationBytes = await readFile(matteDestinationPath);
+if (matteDestinationBytes.length !== matteContract.byteLength || sha256(matteDestinationBytes) !== matteContract.sha256) {
+  throw new Error(`Projection Bake dedicated matte build copy mismatch: ${matteContract.fileName}`);
+}
+manifest.projectionBake.matte = {
+  ...matteContract,
+  inspection: matteInspection,
+  sourceVerified: true,
+  buildCopyVerified: true
+};
+
 for (const profile of Object.values(PROJECTION_BAKE_PROFILES)) {
   const validation = validateProjectionBakeProfile(profile);
   if (!validation.valid) throw new Error(`Projection Bake profile invalid (${profile.familyId}): ${validation.errors.join(', ')}`);
@@ -161,7 +198,8 @@ for (const profile of Object.values(PROJECTION_BAKE_PROFILES)) {
     familyId: profile.familyId,
     workingResolution: profile.workingResolution,
     canonicalResolution: profile.canonicalResolution,
-    mask: maskManifest
+    mask: maskManifest,
+    matteLogicalId: matteContract.assetLogicalId
   };
 }
 // Block 6A readers retain the verified FRONT contract through this alias.

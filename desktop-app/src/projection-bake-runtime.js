@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 
 const PREVIEW_WIDTH = 320;
-const VISIBILITY_UV_EPSILON = 0.015;
 const SAMPLE_STRIDE = 2;
+const VISIBILITY_DEPTH_EPSILON_STEPS = 4;
+const VISIBILITY_DIAGNOSTIC_WIDTH = 512;
 
 const directVertexShader = `
 varying vec2 vCanonicalUv;
@@ -32,6 +33,20 @@ void main() {
   gl_FragColor = vec4(source.rgb, source.a * maskWeight);
 }`;
 
+const visibilityVertexShader = `
+varying vec3 vWorldNormal;
+void main() {
+  vWorldNormal = normalize(mat3(modelMatrix) * normal);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`;
+
+const visibilityFragmentShader = `
+precision highp float;
+varying vec3 vWorldNormal;
+void main() {
+  gl_FragColor = vec4(vWorldNormal * 0.5 + 0.5, 1.0);
+}`;
+
 const bakeVertexShader = `
 varying vec2 vCanonicalUv;
 varying vec4 vCameraClip;
@@ -46,27 +61,45 @@ precision highp float;
 varying vec2 vCanonicalUv;
 varying vec4 vCameraClip;
 uniform sampler2D sourceTexture;
-uniform sampler2D visibilitySurfaceId;
+uniform sampler2D visibilityDepth;
 uniform sampler2D validityMask;
 uniform float maskInvert;
-uniform vec2 visibilityTexelSize;
-uniform float visibilityUvEpsilon;
+uniform float visibilityDepthEpsilon;
 void main() {
   if (vCameraClip.w <= 0.0) discard;
   vec3 ndc = vCameraClip.xyz / vCameraClip.w;
   vec2 screenUv = ndc.xy * 0.5 + 0.5;
   if (screenUv.x < 0.0 || screenUv.x > 1.0 || screenUv.y < 0.0 || screenUv.y > 1.0 || ndc.z < -1.0 || ndc.z > 1.0) discard;
-  float nearestUvDistance = 2.0;
-  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
-    vec4 visibleSurface = texture2D(visibilitySurfaceId, screenUv + vec2(float(x), float(y)) * visibilityTexelSize);
-    if (visibleSurface.a > 0.5) nearestUvDistance = min(nearestUvDistance, distance(vCanonicalUv, visibleSurface.rg));
-  }
-  if (nearestUvDistance > visibilityUvEpsilon) discard;
+  float projectedDepth = ndc.z * 0.5 + 0.5;
+  float frontmostDepth = texture2D(visibilityDepth, screenUv).r;
+  if (frontmostDepth >= 1.0 || projectedDepth - frontmostDepth > visibilityDepthEpsilon) discard;
   float sampledMask = texture2D(validityMask, vCanonicalUv).r;
   float maskWeight = mix(sampledMask, 1.0 - sampledMask, maskInvert);
   if (maskWeight <= 0.0) discard;
   vec4 source = texture2D(sourceTexture, screenUv);
   gl_FragColor = vec4(source.rgb, source.a * maskWeight);
+}`;
+
+const visibilityDiagnosticFragmentShader = `
+precision highp float;
+varying vec4 vCameraClip;
+uniform sampler2D visibilityDepth;
+uniform float visibilityDepthEpsilon;
+void main() {
+  if (vCameraClip.w <= 0.0) discard;
+  vec3 ndc = vCameraClip.xyz / vCameraClip.w;
+  vec2 screenUv = ndc.xy * 0.5 + 0.5;
+  if (screenUv.x < 0.0 || screenUv.x > 1.0 || screenUv.y < 0.0 || screenUv.y > 1.0 || ndc.z < -1.0 || ndc.z > 1.0) discard;
+  float projectedDepth = ndc.z * 0.5 + 0.5;
+  float frontmostDepth = texture2D(visibilityDepth, screenUv).r;
+  if (frontmostDepth >= 1.0) {
+    gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+  } else {
+    float depthDelta = projectedDepth - frontmostDepth;
+    if (depthDelta <= visibilityDepthEpsilon) gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
+    else if (depthDelta <= visibilityDepthEpsilon * 4.0) gl_FragColor = vec4(1.0, 0.75, 0.0, 1.0);
+    else gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
+  }
 }`;
 
 const reprojectVertexShader = `
@@ -149,24 +182,25 @@ function makeTarget(width, height, depth = false) {
   return target;
 }
 
+function makeVisibilityTarget(width, height) {
+  const target = makeTarget(width, height, true);
+  target.texture.minFilter = THREE.NearestFilter;
+  target.texture.magFilter = THREE.NearestFilter;
+  target.depthTexture = new THREE.DepthTexture(width, height, THREE.UnsignedIntType);
+  target.depthTexture.format = THREE.DepthFormat;
+  target.depthTexture.type = THREE.UnsignedIntType;
+  target.depthTexture.minFilter = THREE.NearestFilter;
+  target.depthTexture.magFilter = THREE.NearestFilter;
+  target.depthTexture.generateMipmaps = false;
+  return target;
+}
+
 function makeScalarMaskTexture(name, width, height, values) {
   const texture = new THREE.DataTexture(new Uint8Array(values), width, height, THREE.RedFormat, THREE.UnsignedByteType);
   texture.name = name; texture.colorSpace = THREE.NoColorSpace; texture.flipY = false; texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter; texture.magFilter = THREE.LinearFilter;
   texture.wrapS = THREE.ClampToEdgeWrapping; texture.wrapT = THREE.ClampToEdgeWrapping; texture.needsUpdate = true;
   return texture;
-}
-
-function makeUvCoordinateTexture() {
-  const width = 256; const height = 256; const values = new Uint8Array(width * height * 4);
-  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-    const offset = (y * width + x) * 4; values[offset] = x; values[offset + 1] = y; values[offset + 3] = 255;
-  }
-  const texture = new THREE.DataTexture(values, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
-  texture.name = 'BLOCK6A_VISIBILITY_AUTHORED_UV_LOOKUP'; texture.colorSpace = THREE.NoColorSpace;
-  texture.flipY = false; texture.generateMipmaps = false; texture.minFilter = THREE.NearestFilter;
-  texture.magFilter = THREE.NearestFilter; texture.wrapS = THREE.ClampToEdgeWrapping; texture.wrapT = THREE.ClampToEdgeWrapping;
-  texture.needsUpdate = true; return texture;
 }
 
 function calibrationCamera(profile) {
@@ -262,7 +296,47 @@ function compareBuffers({ sourcePixels = null, firstPixels = null, secondPixels,
   };
 }
 
-function analyze(profile, source, directPixels, bakePixels, reprojectPixels) {
+function compareVisibilityAlpha(directPixels, reprojectPixels) {
+  let intersection = 0; let union = 0; let directOnly = 0; let reprojectOnly = 0;
+  for (let offset = 3; offset < directPixels.length; offset += 4) {
+    const directVisible = directPixels[offset] > 0;
+    const reprojectVisible = reprojectPixels[offset] > 0;
+    if (directVisible || reprojectVisible) union++;
+    if (directVisible && reprojectVisible) intersection++;
+    else if (directVisible) directOnly++;
+    else if (reprojectVisible) reprojectOnly++;
+  }
+  return {
+    intersectionPixelCount: intersection,
+    unionPixelCount: union,
+    directOnlyPixelCount: directOnly,
+    reprojectOnlyPixelCount: reprojectOnly,
+    silhouetteIou: union ? intersection / union : 1
+  };
+}
+
+function analyzeVisibilityDiagnostic(pixels, width, height) {
+  let accepted = 0; let boundary = 0; let occluded = 0;
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    if (pixels[offset + 3] === 0) continue;
+    if (pixels[offset + 1] > 220 && pixels[offset] < 32) accepted++;
+    else if (pixels[offset] > 220 && pixels[offset + 1] > 128) boundary++;
+    else if (pixels[offset] > 220 && pixels[offset + 1] < 32) occluded++;
+  }
+  const candidate = accepted + boundary + occluded;
+  return {
+    width,
+    height,
+    candidatePixelCount: candidate,
+    acceptedPixelCount: accepted,
+    boundaryPixelCount: boundary,
+    occludedPixelCount: occluded,
+    acceptedRatio: candidate ? accepted / candidate : 0,
+    occludedRatio: candidate ? occluded / candidate : 0
+  };
+}
+
+function analyze(profile, source, directPixels, bakePixels, reprojectPixels, visibilityDiagnosticPixels) {
   const canonical = profile.canonicalResolution; const working = profile.workingResolution;
   const countAlpha = (pixels) => {
     let count = 0; for (let offset = 3; offset < pixels.length; offset += 4) if (pixels[offset] > 0) count++;
@@ -289,6 +363,12 @@ function analyze(profile, source, directPixels, bakePixels, reprojectPixels) {
     transparentCanonicalPixelCount: canonical.width * canonical.height - validCanonicalPixelCount,
     canonicalCoverage: validCanonicalPixelCount / (canonical.width * canonical.height),
     directVisiblePixelCount, visibleScreenPixelCount,
+    visibilityAgreement: compareVisibilityAlpha(directPixels, reprojectPixels),
+    visibilityDiagnostic: analyzeVisibilityDiagnostic(
+      visibilityDiagnosticPixels,
+      VISIBILITY_DIAGNOSTIC_WIDTH,
+      Math.max(1, Math.round(VISIBILITY_DIAGNOSTIC_WIDTH * canonical.height / canonical.width))
+    ),
     sourceVsDirect, directVsCanonicalReprojected, sourceVsCanonicalReprojected,
     comparedVisibleSampleCount: sourceVsCanonicalReprojected.comparedVisibleSampleCount,
     comparisonSampleStride: sourceVsCanonicalReprojected.comparisonSampleStride,
@@ -337,11 +417,11 @@ export class ProjectionBakeRuntime {
     }
     const fullWhiteMask = makeScalarMaskTexture('BLOCK6A_FULL_WHITE_CONTROL_MASK', 1, 1, [255]);
     const syntheticMask = makeScalarMaskTexture('BLOCK6A_SYNTHETIC_SCALAR_MASK', 2, 2, [0, 128, 255, 64]);
-    const visibilityUvTexture = makeUvCoordinateTexture();
-    const visibilityTarget = makeTarget(profile.workingResolution.width, profile.workingResolution.height, true);
-    visibilityTarget.texture.minFilter = THREE.NearestFilter; visibilityTarget.texture.magFilter = THREE.NearestFilter;
+    const visibilityTarget = makeVisibilityTarget(profile.workingResolution.width, profile.workingResolution.height);
+    const visibilityDiagnosticHeight = Math.max(1, Math.round(VISIBILITY_DIAGNOSTIC_WIDTH * profile.canonicalResolution.height / profile.canonicalResolution.width));
     this.resources = {
-      profileId: profile.id, profile, source, mask, fullWhiteMask, syntheticMask, visibilityUvTexture, visibilityTarget,
+      profileId: profile.id, profile, source, mask, fullWhiteMask, syntheticMask, visibilityTarget,
+      visibilityDiagnosticTarget: makeTarget(VISIBILITY_DIAGNOSTIC_WIDTH, visibilityDiagnosticHeight),
       directTarget: makeTarget(profile.workingResolution.width, profile.workingResolution.height, true),
       bakeTarget: makeTarget(profile.canonicalResolution.width, profile.canonicalResolution.height),
       reprojectTarget: makeTarget(profile.workingResolution.width, profile.workingResolution.height, true)
@@ -349,9 +429,15 @@ export class ProjectionBakeRuntime {
     return this.resources;
   }
 
-  async run({ profile, surfaceMeshes, previewCanvases, repetitions = 1, maskMode = 'profile' }) {
+  async run({ profile, surfaceMeshes, occluderMeshes, previewCanvases, repetitions = 1, maskMode = 'profile' }) {
     if (!Array.isArray(surfaceMeshes) || surfaceMeshes.length === 0) throw new Error('Projection Bake requires at least one bound Surface mesh.');
     for (const mesh of surfaceMeshes) if (!mesh.geometry?.getAttribute('uv')) throw new Error(`Surface ${mesh.name} has no authored TEXCOORD_0.`);
+    if (!Array.isArray(occluderMeshes) || occluderMeshes.length === 0) throw new Error('Projection Bake requires the exact building depth occluder mesh.');
+    const expectedOccluders = profile.validity.occluderBinding.exactNames;
+    const receivedOccluders = occluderMeshes.map((mesh) => mesh.name);
+    if (receivedOccluders.length !== expectedOccluders.length || expectedOccluders.some((name) => !receivedOccluders.includes(name))) {
+      throw new Error(`Projection Bake exact occluder binding mismatch: expected ${expectedOccluders.join(', ')}; received ${receivedOccluders.join(', ') || 'none'}.`);
+    }
     if (!['profile', 'production', 'full-white', 'synthetic'].includes(maskMode)) throw new Error(`Unknown Projection Bake mask mode: ${maskMode}`);
     const resources = await this.ensureResources(profile);
     const effectiveMaskMode = maskMode === 'profile'
@@ -360,7 +446,10 @@ export class ProjectionBakeRuntime {
     const validityMask = effectiveMaskMode === 'production' ? resources.mask
       : (effectiveMaskMode === 'synthetic' ? resources.syntheticMask : resources.fullWhiteMask);
     const camera = calibrationCamera(profile.calibrationCamera);
-    const visibilityMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, map: resources.visibilityUvTexture, side: THREE.DoubleSide, depthTest: true, depthWrite: true, transparent: false, toneMapped: false });
+    const visibilityMaterial = new THREE.ShaderMaterial({
+      vertexShader: visibilityVertexShader, fragmentShader: visibilityFragmentShader, side: THREE.DoubleSide,
+      transparent: false, blending: THREE.NoBlending, depthTest: true, depthWrite: true, toneMapped: false
+    });
     const maskInvert = effectiveMaskMode === 'production' && profile.productionMask.scalarOperation === 'EXACT_LINEAR_ONE_MINUS_SHARED_PRODUCTION_MASK' ? 1 : 0;
     const maskEnabled = effectiveMaskMode === 'production';
     const maskStatus = maskEnabled
@@ -368,32 +457,57 @@ export class ProjectionBakeRuntime {
       : (effectiveMaskMode === 'synthetic' ? 'SYNTHETIC_CONTROL' : 'DISABLED_FULL_WHITE_CONTROL');
     const commonUniforms = { sourceTexture: { value: resources.source.texture }, validityMask: { value: validityMask }, maskInvert: { value: maskInvert } };
     const directMaterial = new THREE.ShaderMaterial({ uniforms: commonUniforms, vertexShader: directVertexShader, fragmentShader: directFragmentShader, side: THREE.DoubleSide, transparent: false, blending: THREE.NoBlending, depthTest: true, depthWrite: true, toneMapped: false });
+    const occluderDepthMaterial = new THREE.MeshBasicMaterial({
+      color: 0x000000, colorWrite: false, side: THREE.DoubleSide,
+      depthTest: true, depthWrite: true, toneMapped: false
+    });
+    const depthUniforms = {
+      visibilityDepth: { value: resources.visibilityTarget.depthTexture },
+      visibilityDepthEpsilon: { value: 0 }
+    };
     const bakeMaterial = new THREE.ShaderMaterial({
-      uniforms: { ...commonUniforms, visibilitySurfaceId: { value: resources.visibilityTarget.texture },
-        visibilityUvEpsilon: { value: VISIBILITY_UV_EPSILON }, visibilityTexelSize: { value: new THREE.Vector2(1 / profile.workingResolution.width, 1 / profile.workingResolution.height) } },
+      uniforms: { ...commonUniforms, ...depthUniforms },
       vertexShader: bakeVertexShader, fragmentShader: bakeFragmentShader, side: THREE.DoubleSide,
       transparent: false, blending: THREE.NoBlending, depthTest: false, depthWrite: false, toneMapped: false
     });
+    const visibilityDiagnosticMaterial = new THREE.ShaderMaterial({
+      uniforms: depthUniforms, vertexShader: bakeVertexShader, fragmentShader: visibilityDiagnosticFragmentShader,
+      side: THREE.DoubleSide, transparent: false, blending: THREE.NoBlending, depthTest: false, depthWrite: false, toneMapped: false
+    });
     const reprojectMaterial = new THREE.ShaderMaterial({ uniforms: { canonicalTexture: { value: resources.bakeTarget.texture } }, vertexShader: reprojectVertexShader, fragmentShader: reprojectFragmentShader, side: THREE.DoubleSide, transparent: false, blending: THREE.NoBlending, depthTest: true, depthWrite: true, toneMapped: false });
-    const visibility = makeSurfaceScene(surfaceMeshes, visibilityMaterial); const direct = makeSurfaceScene(surfaceMeshes, directMaterial);
-    const bake = makeSurfaceScene(surfaceMeshes, bakeMaterial); const reproject = makeSurfaceScene(surfaceMeshes, reprojectMaterial);
+    const visibility = makeSurfaceScene([...surfaceMeshes, ...occluderMeshes], visibilityMaterial);
+    const occluders = makeSurfaceScene(occluderMeshes, occluderDepthMaterial);
+    const direct = makeSurfaceScene(surfaceMeshes, directMaterial);
+    const bake = makeSurfaceScene(surfaceMeshes, bakeMaterial); const diagnostic = makeSurfaceScene(surfaceMeshes, visibilityDiagnosticMaterial);
+    const reproject = makeSurfaceScene(surfaceMeshes, reprojectMaterial);
     const rendererState = snapshotRenderer(this.renderer); const textureCounts = [];
+    let visibilityDepthBits = 24; let visibilityDepthEpsilon = null;
     try {
-      this.renderer.setPixelRatio(1); this.renderer.xr.enabled = false; this.renderer.autoClear = true;
+      this.renderer.setPixelRatio(1); this.renderer.xr.enabled = false; this.renderer.autoClear = false;
       this.renderer.toneMapping = THREE.NoToneMapping; this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace; this.renderer.setScissorTest(false);
+      this.renderer.setRenderTarget(resources.visibilityTarget);
+      visibilityDepthBits = this.renderer.getContext().getParameter(this.renderer.getContext().DEPTH_BITS) || 24;
+      visibilityDepthEpsilon = VISIBILITY_DEPTH_EPSILON_STEPS / (Math.pow(2, visibilityDepthBits) - 1);
+      depthUniforms.visibilityDepthEpsilon.value = visibilityDepthEpsilon;
       for (let index = 0; index < repetitions; index++) {
         this.renderer.setRenderTarget(resources.visibilityTarget); this.renderer.setViewport(0, 0, profile.workingResolution.width, profile.workingResolution.height);
         this.renderer.setClearColor(0x000000, 0); this.renderer.clear(true, true, false); this.renderer.render(visibility.scene, camera);
         this.renderer.setRenderTarget(resources.directTarget); this.renderer.setViewport(0, 0, profile.workingResolution.width, profile.workingResolution.height);
-        this.renderer.setClearColor(0x000000, 0); this.renderer.clear(true, true, false); this.renderer.render(direct.scene, camera);
+        this.renderer.setClearColor(0x000000, 0); this.renderer.clear(true, true, false);
+        this.renderer.render(occluders.scene, camera); this.renderer.render(direct.scene, camera);
         this.renderer.setRenderTarget(resources.bakeTarget); this.renderer.setViewport(0, 0, profile.canonicalResolution.width, profile.canonicalResolution.height);
         this.renderer.setClearColor(0x000000, 0); this.renderer.clear(true, false, false); this.renderer.render(bake.scene, camera);
+        this.renderer.setRenderTarget(resources.visibilityDiagnosticTarget);
+        this.renderer.setViewport(0, 0, resources.visibilityDiagnosticTarget.width, resources.visibilityDiagnosticTarget.height);
+        this.renderer.setClearColor(0x000000, 0); this.renderer.clear(true, false, false); this.renderer.render(diagnostic.scene, camera);
         this.renderer.setRenderTarget(resources.reprojectTarget); this.renderer.setViewport(0, 0, profile.workingResolution.width, profile.workingResolution.height);
-        this.renderer.setClearColor(0x000000, 0); this.renderer.clear(true, true, false); this.renderer.render(reproject.scene, camera);
+        this.renderer.setClearColor(0x000000, 0); this.renderer.clear(true, true, false);
+        this.renderer.render(occluders.scene, camera); this.renderer.render(reproject.scene, camera);
         this.renderer.getContext().finish(); this.runCount++; textureCounts.push(this.renderer.info.memory.textures);
       }
       const directPixels = readTarget(this.renderer, resources.directTarget);
       const bakePixels = readTarget(this.renderer, resources.bakeTarget); const reprojectPixels = readTarget(this.renderer, resources.reprojectTarget);
+      const visibilityDiagnosticPixels = readTarget(this.renderer, resources.visibilityDiagnosticTarget);
       const visibilityProbePixels = new Uint8Array(4);
       this.renderer.readRenderTargetPixels(resources.visibilityTarget, Math.floor(profile.workingResolution.width / 2), Math.floor(profile.workingResolution.height / 2), 1, 1, visibilityProbePixels);
       const raycaster = new THREE.Raycaster(); raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
@@ -408,6 +522,7 @@ export class ProjectionBakeRuntime {
       return {
         profileId: profile.id, familyId: profile.familyId, familyLabel: profile.label,
         surfaceNames: surfaceMeshes.map((mesh) => mesh.name),
+        occluderNames: occluderMeshes.map((mesh) => mesh.name),
         camera: { fov: camera.fov, aspect: camera.aspect, position: camera.position.toArray(), quaternion: camera.quaternion.toArray() },
         mask: { requestedMode: maskMode, mode: effectiveMaskMode, enabled: maskEnabled, status: maskStatus,
           fallbackUsed: !profile.productionMask.runtimeUrl && effectiveMaskMode === 'full-white', fallback: profile.productionMask.fallback,
@@ -417,18 +532,35 @@ export class ProjectionBakeRuntime {
           colorSpace: profile.productionMask.colorSpace, flipY: validityMask.flipY, interpretation: profile.productionMask.meaning,
           sourceOfTruth: maskEnabled ? profile.productionMask.sourceOfTruth : 'FULL_WHITE_CONTROL',
           scalarOperation: maskEnabled ? profile.productionMask.scalarOperation : 'MASK_DISABLED_IDENTITY_ONE', exactLinearInversion: maskInvert === 1 },
-        directProjection: { sourceTexture: 'ORIGINAL_WORKING_SOURCE', canonicalTextureReferenced: false, environmentIncluded: false, matteIncluded: false },
-        visibility: { policy: profile.validity.operation, environmentDepthIncluded: false,
-          method: 'HARDWARE_DEPTH_FRONTMOST_AUTHORED_UV_NEAREST_3X3', uvEpsilon: VISIBILITY_UV_EPSILON,
-          centerProbe: { gpuBytes: Array.from(visibilityProbePixels), gpuUv: [visibilityProbePixels[0] / 255, visibilityProbePixels[1] / 255], cpuRaycastUv: probeHit?.uv?.toArray() || null, meshName: probeHit?.object?.name || null } },
+        directProjection: {
+          sourceTexture: 'ORIGINAL_WORKING_SOURCE',
+          canonicalTextureReferenced: false,
+          environmentIncluded: false,
+          environmentColorIncluded: false,
+          matteIncluded: true,
+          matteScope: 'PROJECTION_BAKE_OFFSCREEN_ONLY'
+        },
+        visibility: { policy: profile.validity.operation,
+          environmentDepthIncluded: false,
+          dedicatedMatteDepthIncluded: true,
+          method: 'PROJECTION_CAMERA_DEPTH_TEXTURE_FRONTMOST',
+          depthSource: 'FAMILY_BOUND_SIGNAGE_SURFACE_PLUS_DEDICATED_INNER_MATTE',
+          occluderAssetLogicalId: profile.validity.occluderBinding.assetLogicalId,
+          occluderSelectorPolicy: profile.validity.occluderBinding.selectorPolicy,
+          occluderNames: occluderMeshes.map((mesh) => mesh.name),
+          depthBits: visibilityDepthBits, depthEpsilonSteps: VISIBILITY_DEPTH_EPSILON_STEPS,
+          depthEpsilonNormalized: visibilityDepthEpsilon,
+          depthComparison: 'PROJECTED_DEPTH_LE_FRONTMOST_DEPTH_PLUS_QUANTIZED_EPSILON',
+          facingPolicy: 'NO_NORMAL_THRESHOLD_DEPTH_PRIMARY_GRAZING_PRESERVED',
+          centerProbe: { gpuWorldNormalBytes: Array.from(visibilityProbePixels), cpuRaycastUv: probeHit?.uv?.toArray() || null, meshName: probeHit?.object?.name || null } },
         uvPolicy: profile.surfaceBinding.uvPolicy, canonicalOrientation: profile.canonicalOrientation,
         colorPolicy: 'RAW_STRAIGHT_RGBA_NO_TONE_MAPPING_MASK_LINEAR_SCALAR',
         resourcePolicy: { reusableTargets: true, runCount: this.runCount, disposeCount: this.disposeCount, textureCounts, stableAcrossRuns: Math.max(...textureCounts) - Math.min(...textureCounts) <= 1 },
-        ...analyze(profile, resources.source, directPixels, bakePixels, reprojectPixels)
+        ...analyze(profile, resources.source, directPixels, bakePixels, reprojectPixels, visibilityDiagnosticPixels)
       };
     } finally {
       restoreRenderer(this.renderer, rendererState);
-      visibilityMaterial.dispose(); directMaterial.dispose(); bakeMaterial.dispose(); reprojectMaterial.dispose();
+      visibilityMaterial.dispose(); occluderDepthMaterial.dispose(); directMaterial.dispose(); bakeMaterial.dispose(); visibilityDiagnosticMaterial.dispose(); reprojectMaterial.dispose();
     }
   }
 
@@ -439,6 +571,26 @@ export class ProjectionBakeRuntime {
   fullSourceDataUrl() {
     if (!this.hasOutputs()) throw new Error('Run the Projection Bake before exporting PNG files.');
     return this.resources.source.canvas.toDataURL('image/png');
+  }
+
+  visibilityDiagnosticDataUrl() {
+    if (!this.hasOutputs()) throw new Error('Run the Projection Bake before exporting visibility diagnostics.');
+    const canvas = targetToTopLeftCanvas(this.renderer, this.resources.visibilityDiagnosticTarget);
+    try { return canvas.toDataURL('image/png'); } finally { canvas.width = 1; canvas.height = 1; }
+  }
+
+  outputDataUrl(outputKind) {
+    if (!this.hasOutputs()) throw new Error('Run the Projection Bake before exporting correction evidence.');
+    const kind = String(outputKind || '').toLowerCase();
+    const targets = {
+      direct: this.resources.directTarget,
+      canonical: this.resources.bakeTarget,
+      reprojected: this.resources.reprojectTarget
+    };
+    const target = targets[kind];
+    if (!target) throw new Error(`Unknown correction evidence output kind: ${outputKind}`);
+    const canvas = targetToTopLeftCanvas(this.renderer, target);
+    try { return canvas.toDataURL('image/png'); } finally { canvas.width = 1; canvas.height = 1; }
   }
 
   hasOutputs() { return Boolean(this.resources && this.lastCompletedProfileId === this.resources.profileId); }
@@ -494,7 +646,7 @@ export class ProjectionBakeRuntime {
   dispose() {
     if (!this.resources) return;
     this.resources.source.texture.dispose(); this.resources.mask?.dispose(); this.resources.fullWhiteMask.dispose();
-    this.resources.syntheticMask.dispose(); this.resources.visibilityUvTexture.dispose(); this.resources.visibilityTarget.dispose();
+    this.resources.syntheticMask.dispose(); this.resources.visibilityTarget.dispose(); this.resources.visibilityDiagnosticTarget.dispose();
     this.resources.directTarget.dispose(); this.resources.bakeTarget.dispose(); this.resources.reprojectTarget.dispose();
     this.resources = null; this.lastCompletedProfileId = null; this.disposeCount++;
   }
