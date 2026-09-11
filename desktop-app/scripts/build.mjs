@@ -103,13 +103,27 @@ for (const asset of assets) {
   });
 }
 
+const liveLinkConfig = JSON.parse(await readFile(path.join(sourceRoot, 'live-link-config.json'), 'utf8'));
 const manifest = {
   generatedAt: new Date().toISOString(),
   primaryAssetId: 'original-png',
   assets: manifestAssets,
   siteAssets: SITE_ASSETS,
   photoAssets: [],
-  projectionBake: null
+  projectionBake: null,
+  reverseTransport: {
+    block: '7',
+    protocolVersion: liveLinkConfig.protocolVersion,
+    pixelFormat: 'RGBA8',
+    alpha: 'STRAIGHT',
+    orientation: 'TOP_LEFT',
+    chunkSizeBytes: liveLinkConfig.chunkSizeBytes,
+    backpressureHighWaterMarkBytes: liveLinkConfig.backpressureHighWaterMarkBytes,
+    ackTimeoutMs: liveLinkConfig.ackTimeoutMs,
+    maxFrameBytes: liveLinkConfig.maxFrameBytes,
+    concurrency: 'ONE_ACTIVE_JOB_BUSY_REJECT',
+    completionGate: 'PHOTOSHOP_APPLIED'
+  }
 };
 
 manifest.projectionBake = {
@@ -121,7 +135,7 @@ for (const profile of Object.values(PROJECTION_BAKE_PROFILES)) {
   if (!validation.valid) throw new Error(`Projection Bake profile invalid (${profile.familyId}): ${validation.errors.join(', ')}`);
   const maskContract = profile.productionMask;
   let maskManifest = { ...maskContract, sourceVerified: false, buildCopyVerified: false };
-  if (maskContract.status === 'PRODUCTION_REFERENCE_SUPPLIED') {
+  if (maskContract.runtimeUrl) {
     const maskSourcePath = path.join(projectRoot, maskContract.sourcePath);
     const maskDestinationPath = path.join(buildRoot, 'assets', 'projection', maskContract.fileName);
     const maskSourceBytes = await readFile(maskSourcePath);

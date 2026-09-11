@@ -7,5 +7,6 @@ window.LUUX_LIVE_LINK_CONFIG = Object.freeze({
   chunkSizeBytes: 2097152,
   backpressureHighWaterMarkBytes: 8388608,
   reconnectDelayMs: 1500,
-  ackTimeoutMs: 120000
+  ackTimeoutMs: 120000,
+  maxFrameBytes: 536870912
 });

@@ -1,6 +1,6 @@
 {
   "name": "luux-signage-previz",
-  "version": "0.6.1-block6b",
+  "version": "0.7.0-block7",
   "private": true,
   "type": "module",
   "description": "LUUX Signage Previz full-resolution Photoshop link with 2D, 3D plane, and actual GLB signage surface views",
@@ -13,7 +13,7 @@
     "dist": "npm run build && electron-builder --win portable --x64",
     "test": "npm run test:static && npm run test:protocol && npm run test:runtime",
     "test:static": "npm run build && node --check ../photoshop-uxp/luux-live-link/config.js && node --check ../photoshop-uxp/luux-live-link/index.js && node tests/static-validation.mjs",
-    "test:protocol": "node tests/protocol-validation.mjs && node tests/pointer-protocol-validation.mjs && node tests/pointer-queue-validation.mjs && node tests/coordinate-validation.mjs && node tests/plane3d-coordinate-validation.mjs && node tests/site-scene-contract-validation.mjs && node tests/site-glb-raycast-validation.mjs && npm run test:block4a && npm run test:block4b && npm run test:block4c && npm run test:block4d && npm run test:block4e && npm run test:block4f && npm run test:block5a && npm run test:block5b && npm run test:block6a && npm run test:block6b",
+    "test:protocol": "node tests/protocol-validation.mjs && node tests/pointer-protocol-validation.mjs && node tests/pointer-queue-validation.mjs && node tests/coordinate-validation.mjs && node tests/plane3d-coordinate-validation.mjs && node tests/site-scene-contract-validation.mjs && node tests/site-glb-raycast-validation.mjs && npm run test:block4a && npm run test:block4b && npm run test:block4c && npm run test:block4d && npm run test:block4e && npm run test:block4f && npm run test:block5a && npm run test:block5b && npm run test:block6a && npm run test:block6b && npm run test:block7",
     "test:block4a": "node tests/block-4a-validation.mjs",
     "test:block4b": "node tests/block-4b-validation.mjs",
     "test:block4c": "node tests/block-4c-validation.mjs",
@@ -24,6 +24,7 @@
     "test:block5b": "node tests/block-5b-validation.mjs",
     "test:block6a": "node tests/block-6a-validation.mjs",
     "test:block6b": "node tests/block-6b-validation.mjs",
+    "test:block7": "node tests/block-7-validation.mjs",
     "test:link": "npm run build && electron . --link-smoke-test --report=.runtime/link-runtime.json --screenshot=.runtime/link-runtime.png",
     "test:runtime": "npm run build && electron . --smoke-test --report=.runtime/dev-runtime.json --screenshot=.runtime/dev-runtime.png",
     "test:portable": "node tests/portable-validation.mjs"

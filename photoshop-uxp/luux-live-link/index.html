@@ -13,12 +13,38 @@
     </header>
 
     <section>
-      <h2>Photoshop</h2>
+      <h2>Source Document</h2>
       <div class="diagnostics">
         <div class="diagnostic-row"><span class="label">Document</span><span id="document-name" class="value">—</span></div>
         <div class="diagnostic-row"><span class="label">Dimensions</span><span id="document-dimensions" class="value">—</span></div>
         <div class="diagnostic-row"><span class="label">Mode / Depth</span><span id="document-mode" class="value">—</span></div>
       </div>
+    </section>
+
+    <section>
+      <h2>Bake Target</h2>
+      <div class="diagnostics">
+        <div class="diagnostic-row"><span class="label">Status</span><span id="bake-target-status" class="value">NOT SET</span></div>
+        <div class="diagnostic-row"><span class="label">Document</span><span id="bake-target-name" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Identity</span><span id="bake-target-id" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Dimensions</span><span id="bake-target-dimensions" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Mode / Depth</span><span id="bake-target-mode" class="value">—</span></div>
+      </div>
+      <button id="set-bake-target" type="button">SET ACTIVE AS BAKE TARGET</button>
+      <button id="clear-bake-target" type="button" disabled>CLEAR BAKE TARGET</button>
+    </section>
+
+    <section>
+      <h2>Full-Image Write</h2>
+      <div class="diagnostics">
+        <div class="diagnostic-row"><span class="label">State</span><span id="bake-state" class="value">IDLE</span></div>
+        <div class="diagnostic-row"><span class="label">Job</span><span id="bake-job" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Output</span><span id="bake-output" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Received</span><span id="bake-received" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Layer</span><span id="bake-layer" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Auto Sync Suppressed</span><span id="bake-suppressed" class="value">0</span></div>
+      </div>
+      <div id="bake-error" class="error">No bake error.</div>
     </section>
 
     <section>

@@ -51,7 +51,7 @@ assert(!/unpkg\.com|cdn\.jsdelivr\.net/i.test(`${rendererSource}\n${htmlSource}\
 assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
 assert(!/_TestSource/i.test(`${mainSource}\n${rendererSource}\n${htmlSource}`), 'Runtime references _TestSource.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.6.1-block6b', 'Package version must identify the Block 6B shared projection checkpoint.');
+assert(packageJson.version === '0.7.0-block7', 'Package version must identify the Block 7 reverse transport checkpoint.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
@@ -63,6 +63,13 @@ const configuredEndpoint = new URL(liveLinkConfig.endpoint);
 assert(configuredEndpoint.protocol === 'ws:' && configuredEndpoint.hostname === 'localhost' && Number(configuredEndpoint.port) === liveLinkConfig.port, 'Endpoint must use localhost and the configured broker port.');
 assert(liveLinkConfig.chunkSizeBytes >= 1048576 && liveLinkConfig.chunkSizeBytes <= 4194304, 'Chunk size must remain in the 1-4 MiB range.');
 assert(liveLinkConfig.backpressureHighWaterMarkBytes > liveLinkConfig.chunkSizeBytes, 'Backpressure high-water mark must exceed one chunk.');
+assert(manifest.reverseTransport?.block === '7', 'Build manifest must identify the Block 7 reverse transport contract.');
+assert(manifest.reverseTransport?.chunkSizeBytes === liveLinkConfig.chunkSizeBytes &&
+  manifest.reverseTransport?.backpressureHighWaterMarkBytes === liveLinkConfig.backpressureHighWaterMarkBytes &&
+  manifest.reverseTransport?.ackTimeoutMs === liveLinkConfig.ackTimeoutMs &&
+  manifest.reverseTransport?.maxFrameBytes === liveLinkConfig.maxFrameBytes,
+  'Build manifest reverse transport limits must match live-link configuration.');
+assert(manifest.reverseTransport?.completionGate === 'PHOTOSHOP_APPLIED', 'Block 7 success must be gated by Photoshop apply completion.');
 assert(/new WebSocketServer\(options\)/.test(brokerSource), 'Broker must instantiate a WebSocket server.');
 assert(/replaceExistingRoles:\s*linkSmokeTest/.test(mainSource), 'Only the isolated link smoke test may replace an already connected role.');
 assert(/isolatedSmokeTestClient:\s*true/.test(mainSource), 'Synthetic Photoshop must identify itself as the isolated smoke-test client.');

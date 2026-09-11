@@ -1,17 +1,33 @@
-# LUUX Live Link — Block 1A
+# LUUX Live Link — Block 7
 
-This manifest-v5 Photoshop UXP panel captures the active 8-bit RGB document
-composite at its exact pixel dimensions and sends uncompressed RGB/RGBA bytes
-to the Electron broker at `ws://localhost:34100`.
+This manifest-v5 Photoshop UXP panel keeps the established full-resolution
+Photoshop-to-Previz manual and Auto Sync paths, plus the Block 2 Pointer path.
+Block 7 adds the reverse full-image path from ProjectionBakeRuntime to an
+explicitly selected Photoshop Bake Target.
 
-The Manifest v5 allow-list uses the portless, slash-terminated WebSocket origin
-`ws://localhost/`; the runtime endpoint remains pinned to port `34100` and the
-Electron broker remains bound only to `127.0.0.1`.
+The active Source Document and fixed Bake Target are independent states. `SET
+ACTIVE AS BAKE TARGET` records document ID, name, dimensions, mode, and depth;
+changing the active Photoshop document does not silently retarget the bake.
+Targets must remain open, identity-matched, exact-size RGB8 documents. The
+plugin never resizes, converts, flattens, or deletes user artwork.
 
-Block 1A intentionally implements only the manual `SEND FULL RES` path. Auto
-Sync remains visibly disabled until the required manual live test has passed.
+Reverse frames use protocol v1 binary `RGBA8` chunks at 2 MiB with an 8 MiB
+backpressure high-water mark, 120-second completion timeout, and 512 MiB
+maximum. Receipt and Photoshop apply completion are separate acknowledgements.
+Only the fully received and validated buffer enters `executeAsModal()`.
 
-The capture uses `imaging.getPixels({ documentID })`, then
-`PhotoshopImageData.getData({ chunky: true })`. The `PhotoshopImageData` object
-is disposed in a `finally` block. A 16-bit or 32-bit document is rejected
-without changing the Photoshop document.
+Each output is first written to a staging Pixel Layer. After `putPixels`
+succeeds, the layer is promoted to a `__LUUX_ANAMORPHIC__` output and only a
+previous layer whose ID is present in the plugin session ownership registry may
+be replaced. Similar names are never treated as ownership proof. Full-frame
+`replace: true` prevents stale pixels. A failed receive or apply preserves the
+previous confirmed output.
+
+Block 8's authored Layer Stack is not created early. Block 7 uses one owned
+output layer per `documentId + familyId + outputKind`, with Canonical and Direct
+kept independent. Auto Sync notifications generated during apply are suppressed
+temporarily and normal Auto Sync resumes afterward. If target activation is
+required, the previously active Source Document is restored.
+
+The allow-list remains `ws://localhost/`; the runtime endpoint is
+`ws://localhost:34100` and the Electron broker binds only to `127.0.0.1`.

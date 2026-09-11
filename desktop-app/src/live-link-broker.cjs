@@ -3,6 +3,25 @@
 const { WebSocket, WebSocketServer } = require('ws');
 
 const ROLES = new Set(['photoshop', 'renderer']);
+const BAKE_OUTPUT_KINDS = new Set(['CANONICAL', 'DIRECT']);
+
+function validateBakeMetadata(message, config) {
+  const integerFields = ['jobId', 'targetDocumentId', 'width', 'height', 'components', 'componentSize', 'totalBytes', 'chunkSize', 'chunkCount'];
+  for (const field of integerFields) {
+    if (!Number.isSafeInteger(message[field]) || message[field] <= 0) throw new Error(`${field} must be a positive safe integer.`);
+  }
+  if (typeof message.familyId !== 'string' || !message.familyId || message.familyId.length > 128) throw new Error('familyId must be a non-empty string of at most 128 characters.');
+  if (!BAKE_OUTPUT_KINDS.has(message.outputKind)) throw new Error('outputKind must be CANONICAL or DIRECT.');
+  if (typeof message.outputId !== 'string' || !message.outputId || message.outputId.length > 256) throw new Error('outputId must be a non-empty string of at most 256 characters.');
+  if (message.components !== 4 || message.componentSize !== 8 || message.pixelFormat !== 'RGBA') throw new Error('Block 7 accepts only RGBA8 output.');
+  if (message.alpha !== 'STRAIGHT' || message.orientation !== 'TOP_LEFT') throw new Error('Block 7 requires straight alpha and TOP_LEFT orientation.');
+  const expectedBytes = message.width * message.height * 4;
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes <= 0 || message.totalBytes !== expectedBytes) throw new Error(`totalBytes ${message.totalBytes} does not match calculated ${expectedBytes}.`);
+  if (message.totalBytes > config.maxFrameBytes) throw new Error(`Bake exceeds maxFrameBytes ${config.maxFrameBytes}.`);
+  if (message.chunkSize > config.chunkSizeBytes) throw new Error('chunkSize exceeds the configured limit.');
+  if (message.chunkCount !== Math.ceil(message.totalBytes / message.chunkSize)) throw new Error('chunkCount does not match totalBytes/chunkSize.');
+  return expectedBytes;
+}
 
 function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, replaceExistingRoles = false } = {}) {
   if (!config) throw new Error('Live-link config is required.');
@@ -10,9 +29,12 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
   const makeServer = serverFactory || ((options) => new WebSocketServer(options));
   const clients = { photoshop: null, renderer: null };
   let activeFrame = null;
+  let activeBake = null;
   let activePointerRequest = null;
   const seenPointerRequestIds = new Set();
   const seenPointerRequestOrder = [];
+  const seenBakeJobIds = new Set();
+  const seenBakeJobOrder = [];
   const server = makeServer({
     host: config.host,
     port: config.port,
@@ -72,6 +94,22 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
     if (timer) clearTimeout(timer);
     sendPointerError(renderer, requestId, code, message);
     activePointerRequest = null;
+  }
+
+  function rememberBakeJobId(jobId) {
+    seenBakeJobIds.add(jobId);
+    seenBakeJobOrder.push(jobId);
+    if (seenBakeJobOrder.length > 256) seenBakeJobIds.delete(seenBakeJobOrder.shift());
+  }
+
+  function abortActiveBake(code, message, notifyPhotoshop = true) {
+    if (!activeBake) return;
+    const { jobId } = activeBake.metadata;
+    if (activeBake.timer) clearTimeout(activeBake.timer);
+    sendJson(activeBake.renderer, { type: 'BAKE_ERROR', jobId, code, message });
+    if (notifyPhotoshop) sendJson(activeBake.photoshop, { type: 'BAKE_ABORT', jobId, code, message });
+    emit('bake-aborted', { jobId, code, message });
+    activeBake = null;
   }
 
   function rejectActivePointerResponse(socket, code, message) {
@@ -225,6 +263,124 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
     return expectedBytes;
   }
 
+  function handleBakeBegin(socket, message) {
+    if (socket !== clients.renderer) return sendError(socket, 'ROLE_VIOLATION', 'Only the renderer may begin a Photoshop bake.');
+    if (activeBake) return sendJson(socket, { type: 'BAKE_ERROR', jobId: message.jobId ?? null, code: 'BAKE_BUSY', message: 'A full-image Photoshop bake is already in progress.' });
+    if (seenBakeJobIds.has(message.jobId)) return sendJson(socket, { type: 'BAKE_ERROR', jobId: message.jobId, code: 'DUPLICATE_JOB', message: 'Bake jobId was already used in this renderer session.' });
+    if (!isOpen(clients.photoshop)) return sendJson(socket, { type: 'BAKE_ERROR', jobId: message.jobId ?? null, code: 'UXP_DISCONNECTED', message: 'Photoshop UXP is not connected.' });
+    try {
+      const expectedBytes = validateBakeMetadata(message, config);
+      rememberBakeJobId(message.jobId);
+      activeBake = {
+        metadata: { ...message, brokerReceivedAtEpochMs: Date.now() }, expectedBytes,
+        receivedBytes: 0, receivedChunks: 0, pendingChunk: null,
+        renderer: socket, photoshop: clients.photoshop, ended: false, receiveAcknowledged: false,
+        timer: setTimeout(() => {
+          if (activeBake?.metadata.jobId === message.jobId) abortActiveBake('BAKE_TIMEOUT', `Photoshop bake did not complete within ${config.ackTimeoutMs} ms.`);
+        }, config.ackTimeoutMs)
+      };
+      sendJson(activeBake.photoshop, activeBake.metadata);
+      emit('bake-begin', { jobId: message.jobId, familyId: message.familyId, outputKind: message.outputKind, totalBytes: message.totalBytes });
+    } catch (error) {
+      sendJson(socket, { type: 'BAKE_ERROR', jobId: message.jobId ?? null, code: 'INVALID_BAKE_METADATA', message: error.message });
+      emit('bake-rejected', { jobId: message.jobId ?? null, code: 'INVALID_BAKE_METADATA', message: error.message });
+    }
+  }
+
+  function handleBakeChunk(socket, message) {
+    if (!activeBake || socket !== activeBake.renderer || activeBake.ended || message.jobId !== activeBake.metadata.jobId) {
+      if (activeBake) abortActiveBake('UNEXPECTED_BAKE_CHUNK', 'BAKE_CHUNK does not match the active bake.');
+      else sendJson(socket, { type: 'BAKE_ERROR', jobId: message.jobId ?? null, code: 'UNEXPECTED_BAKE_CHUNK', message: 'BAKE_CHUNK arrived without a matching active bake.' });
+      return;
+    }
+    const expectedIndex = activeBake.receivedChunks;
+    const remaining = activeBake.expectedBytes - activeBake.receivedBytes;
+    const expectedLength = Math.min(activeBake.metadata.chunkSize, remaining);
+    if (activeBake.pendingChunk || message.chunkIndex !== expectedIndex || message.byteLength !== expectedLength) {
+      abortActiveBake('INVALID_BAKE_CHUNK', `Expected chunk ${expectedIndex} with ${expectedLength} bytes.`);
+      return;
+    }
+    activeBake.pendingChunk = { chunkIndex: message.chunkIndex, byteLength: message.byteLength };
+    sendJson(activeBake.photoshop, message);
+  }
+
+  function handleBakeBinary(socket, data) {
+    if (!activeBake || socket !== activeBake.renderer || activeBake.ended || !activeBake.pendingChunk) {
+      if (activeBake) abortActiveBake('UNEXPECTED_BAKE_BINARY', 'Bake binary arrived without a valid BAKE_CHUNK marker.');
+      else sendError(socket, 'UNEXPECTED_BINARY', 'Binary data arrived without an active transfer.');
+      return;
+    }
+    const bytes = data.byteLength;
+    if (bytes !== activeBake.pendingChunk.byteLength || activeBake.receivedBytes + bytes > activeBake.expectedBytes) {
+      abortActiveBake('INVALID_BAKE_BINARY', `Bake binary length ${bytes} does not match the declared chunk.`);
+      return;
+    }
+    if (!isOpen(activeBake.photoshop)) return abortActiveBake('UXP_DISCONNECTED', 'Photoshop disconnected during the bake.', false);
+    activeBake.receivedBytes += bytes;
+    activeBake.receivedChunks += 1;
+    activeBake.pendingChunk = null;
+    activeBake.photoshop.send(data, { binary: true });
+    const photoshopTransport = activeBake.photoshop._socket;
+    const rendererTransport = activeBake.renderer._socket;
+    if (activeBake.photoshop.bufferedAmount > config.backpressureHighWaterMarkBytes && photoshopTransport && rendererTransport && !rendererTransport.isPaused()) {
+      rendererTransport.pause();
+      photoshopTransport.once('drain', () => {
+        if (activeBake?.renderer === socket && !rendererTransport.destroyed) rendererTransport.resume();
+      });
+    }
+  }
+
+  function handleBakeEnd(socket, message) {
+    if (!activeBake || socket !== activeBake.renderer || message.jobId !== activeBake.metadata.jobId) {
+      if (activeBake) abortActiveBake('UNEXPECTED_BAKE_END', 'BAKE_END does not match the active bake.');
+      else sendJson(socket, { type: 'BAKE_ERROR', jobId: message.jobId ?? null, code: 'UNEXPECTED_BAKE_END', message: 'BAKE_END arrived without a matching bake.' });
+      return;
+    }
+    if (activeBake.pendingChunk || activeBake.receivedBytes !== activeBake.expectedBytes || activeBake.receivedChunks !== activeBake.metadata.chunkCount ||
+        message.receivedBytes !== activeBake.receivedBytes || message.receivedChunks !== activeBake.receivedChunks) {
+      abortActiveBake('INCOMPLETE_BAKE', `Received ${activeBake.receivedBytes}/${activeBake.expectedBytes} bytes and ${activeBake.receivedChunks}/${activeBake.metadata.chunkCount} chunks.`);
+      return;
+    }
+    activeBake.ended = true;
+    sendJson(activeBake.photoshop, { ...message, brokerFrameEndAtEpochMs: Date.now() });
+    emit('bake-end', { jobId: message.jobId, receivedBytes: activeBake.receivedBytes, receivedChunks: activeBake.receivedChunks });
+  }
+
+  function handleBakeResponse(socket, message) {
+    if (socket !== clients.photoshop || !activeBake || activeBake.photoshop !== socket || message.jobId !== activeBake.metadata.jobId) {
+      sendJson(socket, { type: 'BAKE_ABORT', jobId: message.jobId ?? null, code: 'UNEXPECTED_BAKE_RESPONSE', message: 'Photoshop response does not match the active bake.' });
+      return;
+    }
+    if (message.type === 'BAKE_RECEIVED') {
+      if (!activeBake.ended || message.receivedBytes !== activeBake.expectedBytes || message.receivedChunks !== activeBake.metadata.chunkCount) return abortActiveBake('INVALID_BAKE_RECEIPT', 'Photoshop receipt does not match the transferred bake.');
+      activeBake.receiveAcknowledged = true;
+      sendJson(activeBake.renderer, message);
+      emit('bake-received', { jobId: message.jobId });
+      return;
+    }
+    if (message.type === 'BAKE_APPLYING') {
+      if (!activeBake.receiveAcknowledged) return abortActiveBake('INVALID_BAKE_STATE', 'Photoshop cannot apply before acknowledging complete receipt.');
+      sendJson(activeBake.renderer, message);
+      emit('bake-applying', { jobId: message.jobId });
+      return;
+    }
+    if (message.type === 'BAKE_APPLIED') {
+      if (!activeBake.receiveAcknowledged || message.targetDocumentId !== activeBake.metadata.targetDocumentId || !Number.isSafeInteger(message.layerId) || message.layerId <= 0) return abortActiveBake('INVALID_BAKE_APPLY_ACK', 'Photoshop apply acknowledgement is invalid.');
+      if (activeBake.timer) clearTimeout(activeBake.timer);
+      sendJson(activeBake.renderer, message);
+      emit('bake-applied', { jobId: message.jobId, targetDocumentId: message.targetDocumentId, layerId: message.layerId });
+      activeBake = null;
+      return;
+    }
+    abortActiveBake(message.code || 'APPLY_ERROR', message.message || 'Photoshop failed to apply the bake.', false);
+  }
+
+  function handleBakeTargetStatus(socket, message) {
+    if (socket !== clients.photoshop) return sendError(socket, 'ROLE_VIOLATION', 'Only Photoshop may report bake target status.');
+    sendJson(clients.renderer, message);
+    emit('bake-target-status', { status: message.status || 'UNKNOWN', documentId: message.documentId ?? null });
+  }
+
   function handleHello(socket, message) {
     if (message.protocol !== config.protocol || message.protocolVersion !== config.protocolVersion || !ROLES.has(message.role)) {
       sendError(socket, 'BAD_HELLO', 'Protocol, version, or role is invalid.');
@@ -244,6 +400,9 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       }
       if (activePointerRequest && (activePointerRequest.photoshop === replaced || activePointerRequest.renderer === replaced)) {
         abortActivePointer('TEST_ROLE_REPLACED', `${message.role} was replaced by the isolated smoke-test client.`);
+      }
+      if (activeBake && (activeBake.photoshop === replaced || activeBake.renderer === replaced)) {
+        abortActiveBake('TEST_ROLE_REPLACED', `${message.role} was replaced by the isolated smoke-test client.`, activeBake.photoshop !== replaced);
       }
       clients[message.role] = null;
       replaced.close(1012, 'Replaced by isolated smoke-test client');
@@ -365,6 +524,16 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       case 'FRAME_BEGIN': handleFrameBegin(socket, message); break;
       case 'FRAME_END': handleFrameEnd(socket, message); break;
       case 'FRAME_ACK': handleFrameAck(socket, message); break;
+      case 'BAKE_BEGIN': handleBakeBegin(socket, message); break;
+      case 'BAKE_CHUNK': handleBakeChunk(socket, message); break;
+      case 'BAKE_END': handleBakeEnd(socket, message); break;
+      case 'BAKE_RECEIVED':
+      case 'BAKE_APPLYING':
+      case 'BAKE_APPLIED':
+      case 'BAKE_ERROR':
+        handleBakeResponse(socket, message);
+        break;
+      case 'BAKE_TARGET_STATUS': handleBakeTargetStatus(socket, message); break;
       case 'POINTER_SET':
       case 'POINTER_CLEAR':
         handlePointerCommand(socket, message);
@@ -391,7 +560,8 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
     socket.on('message', (data, isBinary) => {
       try {
         if (isBinary) {
-          handleBinary(socket, data);
+          if (activeBake && socket === activeBake.renderer) handleBakeBinary(socket, data);
+          else handleBinary(socket, data);
           return;
         }
         handleJson(socket, JSON.parse(data.toString('utf8')));
@@ -408,9 +578,14 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       if (activePointerRequest && (activePointerRequest.photoshop === socket || activePointerRequest.renderer === socket)) {
         abortActivePointer('PEER_DISCONNECTED', `${role || 'Unassigned client'} disconnected during a pointer request.`);
       }
+      if (activeBake && (activeBake.photoshop === socket || activeBake.renderer === socket)) {
+        abortActiveBake('PEER_DISCONNECTED', `${role || 'Unassigned client'} disconnected during a Photoshop bake.`, activeBake.photoshop !== socket);
+      }
       if (role === 'renderer') {
         seenPointerRequestIds.clear();
         seenPointerRequestOrder.length = 0;
+        seenBakeJobIds.clear();
+        seenBakeJobOrder.length = 0;
       }
       if (role) emit('client-disconnected', { role });
       broadcastStatus();
@@ -429,6 +604,7 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       rendererConnected: isOpen(clients.renderer),
       activeFrameId: activeFrame?.metadata.frameId || null,
       activePointerRequestId: activePointerRequest?.requestId || null
+      , activeBakeJobId: activeBake?.metadata.jobId || null
     }),
     close: () => new Promise((resolve) => {
       for (const socket of Object.values(clients)) {
@@ -439,4 +615,4 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
   };
 }
 
-module.exports = { createLiveLinkBroker };
+module.exports = { createLiveLinkBroker, validateBakeMetadata };

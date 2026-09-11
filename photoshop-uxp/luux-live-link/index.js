@@ -7,11 +7,26 @@ const AUTO_SYNC_EVENTS = ['historyStateChanged'];
 const AUTO_SYNC_DEBOUNCE_MS = 350;
 const POINTER_LAYER_NAME = '__LUUX_POINTER__';
 const POINTER_DIAMETER_PX = 25;
+const BAKE_LAYER_PREFIX = '__LUUX_ANAMORPHIC__';
 
 const elements = {
   documentName: document.querySelector('#document-name'),
   documentDimensions: document.querySelector('#document-dimensions'),
   documentMode: document.querySelector('#document-mode'),
+  bakeTargetStatus: document.querySelector('#bake-target-status'),
+  bakeTargetName: document.querySelector('#bake-target-name'),
+  bakeTargetId: document.querySelector('#bake-target-id'),
+  bakeTargetDimensions: document.querySelector('#bake-target-dimensions'),
+  bakeTargetMode: document.querySelector('#bake-target-mode'),
+  setBakeTarget: document.querySelector('#set-bake-target'),
+  clearBakeTarget: document.querySelector('#clear-bake-target'),
+  bakeState: document.querySelector('#bake-state'),
+  bakeJob: document.querySelector('#bake-job'),
+  bakeOutput: document.querySelector('#bake-output'),
+  bakeReceived: document.querySelector('#bake-received'),
+  bakeLayer: document.querySelector('#bake-layer'),
+  bakeSuppressed: document.querySelector('#bake-suppressed'),
+  bakeError: document.querySelector('#bake-error'),
   connectionState: document.querySelector('#connection-state'),
   connectButton: document.querySelector('#connect-button'),
   sendButton: document.querySelector('#send-button'),
@@ -81,6 +96,17 @@ const state = {
   pendingAck: null,
   lastFrame: null,
   lastError: '',
+  bake: {
+    target: null,
+    current: null,
+    processing: false,
+    phase: 'IDLE',
+    ownedOutputs: new Map(),
+    lastApplied: null,
+    lastError: '',
+    suppressAutoSyncUntil: 0,
+    suppressedNotifications: 0
+  },
   pointer: {
     processing: false,
     lastRequestId: null,
@@ -206,6 +232,11 @@ function autoSyncNotificationListener(eventName) {
   auto.notificationsSeen += 1;
   auto.lastEvent = eventName;
   auto.lastEventTime = new Date().toLocaleTimeString();
+  if (state.bake.processing || performance.now() < state.bake.suppressAutoSyncUntil) {
+    state.bake.suppressedNotifications += 1;
+    render();
+    return;
+  }
   if (!auto.enabled) {
     render();
     return;
@@ -329,6 +360,60 @@ function renderPointer() {
   elements.pointerError.textContent = pointer.lastError || 'No pointer error.';
 }
 
+function findOpenDocument(documentId) {
+  return Array.from(app.documents || []).find((doc) => doc.id === documentId) || null;
+}
+
+function documentSnapshot(doc) {
+  return {
+    documentId: doc.id,
+    documentName: doc.name,
+    width: doc.width,
+    height: doc.height,
+    documentMode: doc.mode === constants.DocumentMode.RGB ? 'RGB' : enumLabel(doc.mode),
+    documentDepth: doc.bitsPerChannel === constants.BitsPerChannelType.EIGHT ? 8 : enumLabel(doc.bitsPerChannel)
+  };
+}
+
+function currentBakeTargetStatus() {
+  if (!state.bake.target) return { type: 'BAKE_TARGET_STATUS', status: 'NOT_SET' };
+  const open = findOpenDocument(state.bake.target.documentId);
+  if (!open) return { type: 'BAKE_TARGET_STATUS', status: 'CLOSED', ...state.bake.target };
+  const snapshot = documentSnapshot(open);
+  const identityMatches = snapshot.documentName === state.bake.target.documentName
+    && snapshot.width === state.bake.target.width
+    && snapshot.height === state.bake.target.height
+    && snapshot.documentMode === state.bake.target.documentMode
+    && snapshot.documentDepth === state.bake.target.documentDepth;
+  return { type: 'BAKE_TARGET_STATUS', status: identityMatches ? 'READY' : 'IDENTITY_CHANGED', ...state.bake.target };
+}
+
+function publishBakeTargetStatus() {
+  const message = currentBakeTargetStatus();
+  if (isSocketOpen() && state.handshake) sendJson(message);
+  return message;
+}
+
+function renderBake() {
+  const target = currentBakeTargetStatus();
+  elements.bakeTargetStatus.textContent = target.status;
+  elements.bakeTargetName.textContent = target.documentName || '—';
+  elements.bakeTargetId.textContent = target.documentId ? String(target.documentId) : '—';
+  elements.bakeTargetDimensions.textContent = target.width ? `${target.width} × ${target.height}` : '—';
+  elements.bakeTargetMode.textContent = target.documentMode ? `${target.documentMode} / ${target.documentDepth}` : '—';
+  elements.setBakeTarget.disabled = state.bake.processing || !app.activeDocument;
+  elements.clearBakeTarget.disabled = state.bake.processing || !state.bake.target;
+  elements.bakeState.textContent = state.bake.phase;
+  elements.bakeJob.textContent = state.bake.current?.metadata?.jobId ? String(state.bake.current.metadata.jobId) : (state.bake.lastApplied?.jobId ? String(state.bake.lastApplied.jobId) : '—');
+  const metadata = state.bake.current?.metadata || state.bake.lastApplied;
+  elements.bakeOutput.textContent = metadata ? `${metadata.familyId} / ${metadata.outputKind}` : '—';
+  elements.bakeReceived.textContent = state.bake.current ? `${formatBytes(state.bake.current.receivedBytes)} / ${formatBytes(state.bake.current.metadata.totalBytes)}` : '—';
+  elements.bakeLayer.textContent = state.bake.lastApplied?.layerName || '—';
+  elements.bakeSuppressed.textContent = String(state.bake.suppressedNotifications);
+  elements.bakeError.className = `error ${state.bake.lastError ? 'active' : ''}`;
+  elements.bakeError.textContent = state.bake.lastError || 'No bake error.';
+}
+
 function render() {
   const connected = isReady();
   elements.connectionState.className = `state ${connected ? 'connected' : 'disconnected'}`;
@@ -347,6 +432,7 @@ function render() {
   renderAutoSync();
   renderProbe();
   renderPointer();
+  renderBake();
 }
 
 function refreshDocumentInfo() {
@@ -591,16 +677,240 @@ async function processPointerCommand(message) {
   }
 }
 
+function bakeFailure(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function validateBakeBegin(message) {
+  for (const field of ['jobId', 'targetDocumentId', 'width', 'height', 'components', 'componentSize', 'totalBytes', 'chunkSize', 'chunkCount']) {
+    if (!Number.isSafeInteger(message[field]) || message[field] <= 0) throw bakeFailure('INVALID_BAKE_METADATA', `${field} must be a positive safe integer.`);
+  }
+  if (!['CANONICAL', 'DIRECT'].includes(message.outputKind) || typeof message.familyId !== 'string' || !message.familyId || typeof message.outputId !== 'string' || !message.outputId) {
+    throw bakeFailure('INVALID_BAKE_METADATA', 'familyId, outputKind, and outputId are required.');
+  }
+  if (message.components !== 4 || message.componentSize !== 8 || message.pixelFormat !== 'RGBA' || message.alpha !== 'STRAIGHT' || message.orientation !== 'TOP_LEFT') {
+    throw bakeFailure('INVALID_BAKE_FORMAT', 'Block 7 requires top-left straight RGBA8.');
+  }
+  const expectedBytes = message.width * message.height * 4;
+  if (!Number.isSafeInteger(expectedBytes) || message.totalBytes !== expectedBytes || message.totalBytes > config.maxFrameBytes) throw bakeFailure('INVALID_BAKE_BYTES', 'Bake byte count is invalid or exceeds the configured maximum.');
+  if (message.chunkSize > config.chunkSizeBytes || message.chunkCount !== Math.ceil(message.totalBytes / message.chunkSize)) throw bakeFailure('INVALID_BAKE_CHUNKS', 'Bake chunk contract is invalid.');
+  const targetStatus = currentBakeTargetStatus();
+  if (targetStatus.status !== 'READY') throw bakeFailure('TARGET_NOT_READY', `Bake Target is ${targetStatus.status}.`);
+  if (targetStatus.documentId !== message.targetDocumentId) throw bakeFailure('TARGET_IDENTITY_MISMATCH', 'Bake Target identity does not match the request.');
+  if (targetStatus.width !== message.width || targetStatus.height !== message.height) throw bakeFailure('TARGET_DIMENSION_MISMATCH', `Target is ${targetStatus.width} × ${targetStatus.height}; output is ${message.width} × ${message.height}.`);
+  if (targetStatus.documentMode !== 'RGB' || targetStatus.documentDepth !== 8) throw bakeFailure('TARGET_UNSUPPORTED', 'Block 7 requires an RGB 8-bit Bake Target.');
+}
+
+function sendBakeError(message, error) {
+  const code = error.code || 'APPLY_ERROR';
+  const detail = error.message || String(error);
+  state.bake.phase = code.startsWith('TARGET_') ? 'TARGET_ERROR' : (code.includes('APPLY') ? 'APPLY_ERROR' : 'VALIDATION_ERROR');
+  state.bake.lastError = `${code}: ${detail}`;
+  if (isSocketOpen()) sendJson({ type: 'BAKE_ERROR', jobId: message?.jobId ?? null, code, message: detail });
+  state.bake.current = null;
+  state.bake.processing = false;
+  render();
+}
+
+function handleBakeBegin(message) {
+  if (state.bake.current || state.bake.processing) {
+    if (isSocketOpen()) sendJson({ type: 'BAKE_ERROR', jobId: message.jobId ?? null, code: 'BAKE_BUSY', message: 'A full-image Photoshop bake is already in progress.' });
+    return;
+  }
+  try {
+    validateBakeBegin(message);
+    state.bake.current = {
+      metadata: message,
+      bytes: new Uint8Array(message.totalBytes),
+      receivedBytes: 0,
+      receivedChunks: 0,
+      pendingChunk: null
+    };
+    state.bake.phase = 'TRANSFERRING';
+    state.bake.lastError = '';
+  } catch (error) {
+    sendBakeError(message, error);
+  }
+  render();
+}
+
+function handleBakeChunkMarker(message) {
+  const frame = state.bake.current;
+  if (!frame || message.jobId !== frame.metadata.jobId) return sendBakeError(message, bakeFailure('WRONG_JOB_ID', 'BAKE_CHUNK does not match the active job.'));
+  const expectedIndex = frame.receivedChunks;
+  const expectedLength = Math.min(frame.metadata.chunkSize, frame.metadata.totalBytes - frame.receivedBytes);
+  if (frame.pendingChunk || message.chunkIndex !== expectedIndex || message.byteLength !== expectedLength) return sendBakeError(message, bakeFailure('INVALID_BAKE_CHUNK', `Expected chunk ${expectedIndex} with ${expectedLength} bytes.`));
+  frame.pendingChunk = { chunkIndex: message.chunkIndex, byteLength: message.byteLength };
+}
+
+function handleBakeBinary(arrayBuffer) {
+  const frame = state.bake.current;
+  if (!frame || !frame.pendingChunk) return sendBakeError(frame?.metadata || null, bakeFailure('UNEXPECTED_BAKE_BINARY', 'Binary data arrived without a BAKE_CHUNK marker.'));
+  const chunk = new Uint8Array(arrayBuffer);
+  if (chunk.byteLength !== frame.pendingChunk.byteLength || frame.receivedBytes + chunk.byteLength > frame.metadata.totalBytes) return sendBakeError(frame.metadata, bakeFailure('INVALID_BAKE_BINARY', 'Binary chunk length does not match its marker.'));
+  frame.bytes.set(chunk, frame.receivedBytes);
+  frame.receivedBytes += chunk.byteLength;
+  frame.receivedChunks += 1;
+  frame.pendingChunk = null;
+  renderBake();
+}
+
+async function activateDocument(documentId) {
+  await action.batchPlay([{
+    _obj: 'select',
+    _target: [{ _ref: 'document', _id: documentId }],
+    _options: { dialogOptions: 'dontDisplay' }
+  }], {});
+}
+
+async function applyReceivedBake(frame) {
+  const metadata = frame.metadata;
+  const originalDocumentId = app.activeDocument?.id || null;
+  let stagingLayer = null;
+  let activeDocumentRestored = originalDocumentId === metadata.targetDocumentId;
+  return core.executeAsModal(async () => {
+    const target = findOpenDocument(metadata.targetDocumentId);
+    if (!target) throw bakeFailure('TARGET_CLOSED', 'Bake Target was closed before apply.');
+    const currentTarget = documentSnapshot(target);
+    if (currentTarget.documentName !== state.bake.target?.documentName || currentTarget.width !== metadata.width || currentTarget.height !== metadata.height || currentTarget.documentMode !== 'RGB' || currentTarget.documentDepth !== 8) {
+      throw bakeFailure('TARGET_CHANGED', 'Bake Target identity, dimensions, mode, or depth changed before apply.');
+    }
+    if (originalDocumentId !== target.id) await activateDocument(target.id);
+    const previousLayerIds = Array.from(target.activeLayers, (layer) => layer.id);
+    const ownershipKey = `${target.id}:${metadata.outputId}`;
+    const priorOwnership = state.bake.ownedOutputs.get(ownershipKey) || null;
+    try {
+      stagingLayer = await target.createLayer(constants.LayerKind.NORMAL, { name: `${BAKE_LAYER_PREFIX} STAGING ${metadata.jobId}` });
+      const imageData = await imaging.createImageDataFromBuffer(frame.bytes, {
+        width: metadata.width,
+        height: metadata.height,
+        components: 4,
+        chunky: true,
+        colorProfile: DISPLAY_COLOR_PROFILE,
+        colorSpace: 'RGB'
+      });
+      try {
+        await imaging.putPixels({
+          documentID: target.id,
+          layerID: stagingLayer.id,
+          imageData,
+          replace: true,
+          targetBounds: { left: 0, top: 0 },
+          commandName: `LUUX ${metadata.outputKind} Bake Output`
+        });
+      } finally {
+        imageData.dispose();
+      }
+      const finalLayerName = `${BAKE_LAYER_PREFIX} ${metadata.familyId} ${metadata.outputKind}`;
+      stagingLayer.name = finalLayerName;
+      stagingLayer.visible = true;
+      if (priorOwnership?.layerId && priorOwnership.layerId !== stagingLayer.id) {
+        const priorLayer = collectLayers(target.layers).find((layer) => layer.id === priorOwnership.layerId);
+        if (priorLayer) await priorLayer.delete();
+      }
+      state.bake.ownedOutputs.set(ownershipKey, {
+        documentId: target.id,
+        familyId: metadata.familyId,
+        outputKind: metadata.outputKind,
+        outputId: metadata.outputId,
+        layerId: stagingLayer.id,
+        layerName: finalLayerName
+      });
+      const selectionRestored = restoreActiveLayers(target, previousLayerIds.filter((id) => id !== priorOwnership?.layerId));
+      const result = {
+        jobId: metadata.jobId,
+        familyId: metadata.familyId,
+        outputKind: metadata.outputKind,
+        outputId: metadata.outputId,
+        targetDocumentId: target.id,
+        width: metadata.width,
+        height: metadata.height,
+        receivedBytes: frame.receivedBytes,
+        layerId: stagingLayer.id,
+        layerName: finalLayerName,
+        replacedOwnedLayerId: priorOwnership?.layerId || null,
+        selectionRestored,
+        fullFrameReplace: true
+      };
+      stagingLayer = null;
+      return result;
+    } catch (error) {
+      if (stagingLayer) {
+        try { await stagingLayer.delete(); } catch { /* Preserve the prior confirmed output even if staging cleanup fails. */ }
+      }
+      throw error;
+    } finally {
+      if (originalDocumentId && originalDocumentId !== target.id && findOpenDocument(originalDocumentId)) {
+        await activateDocument(originalDocumentId);
+        activeDocumentRestored = app.activeDocument?.id === originalDocumentId;
+      }
+    }
+  }, { commandName: `LUUX Block 7 ${metadata.outputKind} Bake` }).then((result) => ({ ...result, activeDocumentRestored }));
+}
+
+async function handleBakeEnd(message) {
+  const frame = state.bake.current;
+  if (!frame || message.jobId !== frame.metadata.jobId) return sendBakeError(message, bakeFailure('UNEXPECTED_BAKE_END', 'BAKE_END does not match the active job.'));
+  if (frame.pendingChunk || frame.receivedBytes !== frame.metadata.totalBytes || frame.receivedChunks !== frame.metadata.chunkCount || message.receivedBytes !== frame.receivedBytes || message.receivedChunks !== frame.receivedChunks) {
+    return sendBakeError(message, bakeFailure('INCOMPLETE_BAKE', 'Full-image byte or chunk count validation failed.'));
+  }
+  state.bake.phase = 'RECEIVED_COMPLETE';
+  sendJson({ type: 'BAKE_RECEIVED', jobId: message.jobId, receivedBytes: frame.receivedBytes, receivedChunks: frame.receivedChunks });
+  state.bake.processing = true;
+  state.bake.phase = 'VALIDATED';
+  render();
+  try {
+    validateBakeBegin(frame.metadata);
+    state.bake.phase = 'APPLYING_TO_PHOTOSHOP';
+    sendJson({ type: 'BAKE_APPLYING', jobId: message.jobId });
+    render();
+    const result = await applyReceivedBake(frame);
+    state.bake.lastApplied = result;
+    state.bake.phase = 'APPLIED';
+    state.bake.lastError = '';
+    state.bake.current = null;
+    sendJson({ type: 'BAKE_APPLIED', ...result });
+  } catch (error) {
+    sendBakeError(frame.metadata, error);
+    return;
+  } finally {
+    state.bake.processing = false;
+    state.bake.suppressAutoSyncUntil = performance.now() + 1000;
+    publishBakeTargetStatus();
+    refreshDocumentInfo();
+    render();
+  }
+}
+
 function handleJson(message) {
   switch (message.type) {
     case 'HELLO_ACK':
       state.handshake = true;
       state.connectionState = state.rendererConnected ? 'CONNECTED' : 'WAITING FOR RENDERER';
+      publishBakeTargetStatus();
       break;
     case 'LINK_STATUS':
       state.rendererConnected = Boolean(message.rendererConnected);
       state.connectionState = state.rendererConnected && state.handshake ? 'CONNECTED' : 'WAITING FOR RENDERER';
       break;
+    case 'BAKE_BEGIN':
+      handleBakeBegin(message);
+      return;
+    case 'BAKE_CHUNK':
+      handleBakeChunkMarker(message);
+      return;
+    case 'BAKE_END':
+      void handleBakeEnd(message);
+      return;
+    case 'BAKE_ABORT':
+      state.bake.current = null;
+      state.bake.processing = false;
+      state.bake.phase = 'TRANSFER_ERROR';
+      state.bake.lastError = `${message.code || 'BAKE_ABORT'}: ${message.message || 'Broker aborted the bake.'}`;
+      render();
+      return;
     case 'FRAME_ACK':
       if (state.pendingAck && message.frameId === state.pendingAck.frameId) {
         clearTimeout(state.pendingAck.timer);
@@ -673,8 +983,7 @@ function connect(force) {
   socket.onmessage = (event) => {
     if (state.socket !== socket) return;
     if (typeof event.data !== 'string') {
-      state.lastError = 'UNEXPECTED_BINARY: Photoshop client does not receive frame data.';
-      render();
+      handleBakeBinary(event.data);
       return;
     }
     try { handleJson(JSON.parse(event.data)); }
@@ -693,6 +1002,12 @@ function connect(force) {
     const closeReason = event && event.reason ? ` reason=${event.reason}` : '';
     state.lastError = `CONNECTION_CLOSED: code=${closeCode}${closeReason}; endpoint=${config.endpoint}`;
     rejectPendingAck(new Error('Connection closed while waiting for FRAME_ACK.'));
+    if (state.bake.current) {
+      state.bake.current = null;
+      state.bake.processing = false;
+      state.bake.phase = 'TRANSFER_ERROR';
+      state.bake.lastError = 'PEER_DISCONNECTED: Connection closed during full-image write; prior confirmed output was preserved.';
+    }
     render();
     scheduleReconnect();
   };
@@ -881,6 +1196,26 @@ async function runRequestedSend(reason = 'manual') {
 
 elements.connectButton.onclick = () => connect(true);
 elements.sendButton.onclick = () => requestLatestFrame('manual');
+elements.setBakeTarget.onclick = () => {
+  if (state.bake.processing) return;
+  const doc = app.activeDocument;
+  if (!doc) {
+    state.bake.lastError = 'TARGET_NOT_SET: No active Photoshop document.';
+    render();
+    return;
+  }
+  state.bake.target = documentSnapshot(doc);
+  state.bake.lastError = '';
+  publishBakeTargetStatus();
+  render();
+};
+elements.clearBakeTarget.onclick = () => {
+  if (state.bake.processing) return;
+  state.bake.target = null;
+  state.bake.lastError = '';
+  publishBakeTargetStatus();
+  render();
+};
 elements.autoSync.onchange = () => { void setAutoSyncEnabled(elements.autoSync.checked); };
 elements.probeStart.onclick = () => { void startEventProbe(); };
 elements.probeStop.onclick = () => { void stopEventProbe(); };

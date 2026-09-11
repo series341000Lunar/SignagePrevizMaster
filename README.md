@@ -130,3 +130,22 @@ fallback. The user accepted both variants for purpose-dependent use on 2026-09-1
 closing the Block 6B visual gate.
 See [Block 6B Validation](docs/BLOCK-6B-VALIDATION.md) and
 [Block 6B Handoff](docs/BLOCK-6B-HANDOFF.md).
+
+Block 7 adds manual full-image reverse transport from ProjectionBakeRuntime to
+an explicitly selected Photoshop Bake Target. Canonical remains the
+authoritative 4728×5760 production path; Direct remains the sharper native-size
+alternate. Both reuse protocol-v1 raw straight-RGBA binary chunks. Source and
+Bake Target identities are separate, target mismatch is refused without resize
+or conversion, and success is displayed only after Photoshop Pixel Layer apply
+completes. Re-bake replaces only a session-confirmed Previz-owned layer after a
+staging apply succeeds. The optional bake-time mask is user-toggleable per
+family and defaults OFF so the full authored Surface is used. The supplied flat
+mask is not a camera-projected anamorphic signage silhouette; its authoritative
+role is a post-bake planar compositing reference for combining separately baked
+FRONT and BACK images. The existing ON path remains available only as an
+optional legacy/diagnostic operation, with BACK evaluating exact linear
+`1.0 - mask`. The user confirmed matching placement for BACK Direct
+2100×3840 and FRONT 75F Direct 3000×3840 against 3ds Max World Normal overlays
+on 2026-09-11. See
+[Block 7 Validation](docs/BLOCK-7-VALIDATION.md) and
+[Block 7 Handoff](docs/BLOCK-7-HANDOFF.md).

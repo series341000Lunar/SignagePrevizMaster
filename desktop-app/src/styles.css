@@ -411,6 +411,33 @@ aside {
   color: #ff7c88;
 }
 
+.projection-mask-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 9px;
+  padding: 7px 8px;
+  border: 1px solid #3d4654;
+  border-radius: 4px;
+  background: #121720;
+  color: #aeb6c3;
+  font: 700 9px Consolas, monospace;
+  cursor: pointer;
+}
+
+.projection-mask-toggle input {
+  margin: 0;
+}
+
+.projection-mask-toggle strong {
+  margin-left: auto;
+  color: #efc66b;
+}
+
+.projection-mask-toggle.mask-on strong {
+  color: #62daa1;
+}
+
 .projection-poc-run {
   width: 100%;
   margin-bottom: 10px;
@@ -480,6 +507,39 @@ aside {
   color: #aeb6c3;
   font-size: 9px;
   line-height: 1.4;
+}
+
+.projection-photoshop-output {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #394454;
+}
+
+.projection-photoshop-output h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: .06em;
+}
+
+.projection-output-choice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.projection-output-choice span {
+  display: block;
+  color: #98a6b8;
+  font-size: 10px;
+}
+
+.projection-photoshop-state {
+  margin: 8px 0 0;
+  color: #65e0aa;
+  font-size: 10px;
+  overflow-wrap: anywhere;
 }
 
 .projection-poc-message.pass {

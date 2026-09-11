@@ -7,14 +7,14 @@
       content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file: ws://localhost:34100; object-src 'none'; base-uri 'none'; frame-src 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Signage MockUp Generator — Block 6A</title>
+    <title>Signage MockUp Generator — Block 7</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <header>
       <div>
-        <h1>Signage MockUp Generator — BLOCK 6A</h1>
-        <p>LUNARGRAPHICS · FRONT 75F Native Canonical Bake PoC</p>
+        <h1>Signage MockUp Generator — BLOCK 7</h1>
+        <p>LUNARGRAPHICS · Photoshop Full-Image Reverse Transport</p>
       </div>
       <div id="full-resolution-badge" class="badge pending">WAITING</div>
     </header>
@@ -175,6 +175,11 @@
             <h2 id="projection-poc-title">PROJECTION POC — CURRENT FAMILY</h2>
             <span id="projection-poc-state" class="projection-poc-state">READY</span>
           </div>
+          <label class="projection-mask-toggle" for="projection-mask-enabled" title="Optional legacy/diagnostic bake-time mask. Normal FRONT/BACK baking uses OFF.">
+            <input id="projection-mask-enabled" type="checkbox">
+            <span>OPTIONAL BAKE MASK</span>
+            <strong id="projection-mask-state">OFF · FULL SURFACE</strong>
+          </label>
           <button id="projection-poc-run" class="projection-poc-run" type="button">RUN TEST BAKE</button>
           <div class="projection-poc-previews">
             <figure><figcaption>SOURCE</figcaption><canvas id="projection-source-preview"></canvas></figure>
@@ -188,6 +193,22 @@
             <button type="button" data-projection-export="bake" disabled>SAVE BAKE PNG</button>
             <button type="button" data-projection-export="reproject" disabled>SAVE REPROJECTED PNG</button>
           </div>
+          <section class="projection-photoshop-output" aria-label="Output to Photoshop">
+            <h3>OUTPUT TO PHOTOSHOP</h3>
+            <dl class="projection-poc-metrics">
+              <dt>SOURCE DOCUMENT</dt><dd id="projection-source-document">No Photoshop source frame received</dd>
+              <dt>BAKE TARGET</dt><dd id="projection-bake-target">Not set in Photoshop</dd>
+            </dl>
+            <div class="projection-output-choice">
+              <div><strong>CANONICAL</strong><span>Production / Authoritative · 4728 × 5760</span></div>
+              <button type="button" data-photoshop-output="CANONICAL" disabled>SEND TO PHOTOSHOP</button>
+            </div>
+            <div class="projection-output-choice">
+              <div><strong>DIRECT</strong><span>Native Working / Alternate / Sharper</span></div>
+              <button type="button" data-photoshop-output="DIRECT" disabled>SEND TO PHOTOSHOP</button>
+            </div>
+            <p id="projection-photoshop-state" class="projection-photoshop-state">IDLE</p>
+          </section>
           <dl id="projection-poc-metrics" class="projection-poc-metrics">
             <dt>Camera</dt><dd>CURRENT FAMILY APPROVED</dd>
             <dt>Working</dt><dd>FAMILY NATIVE</dd>
@@ -196,7 +217,7 @@
             <dt>Mask</dt><dd>FAMILY CONTRACT</dd>
             <dt>Preview Display</dt><dd>FIT</dd>
           </dl>
-          <p id="projection-poc-message" class="projection-poc-message">Manual run only. Four full-resolution PNG exports become available after a run; Photoshop transport is not connected to this PoC. Block 6B user visual validation: PASS.</p>
+          <p id="projection-poc-message" class="projection-poc-message">Run a Bake, set a Photoshop Bake Target, then send CANONICAL or DIRECT. Success is shown only after PHOTOSHOP APPLY COMPLETE.</p>
         </section>
         <h2>Runtime diagnostics</h2>
         <dl id="diagnostics"></dl>

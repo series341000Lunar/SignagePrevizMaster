@@ -124,6 +124,23 @@ production validation. The user accepted both Direct and Canonical variants on
 2026-09-11: Canonical shows slightly more difference and less sharpness, while
 Direct is sharper. Both remain available for use by purpose. Block 6B is CLOSED.
 
+Block 7 adds manual full-image reverse transport from ProjectionBakeRuntime to
+an explicitly pinned Photoshop Bake Target. Source and target document state are
+kept separate. Canonical 4728×5760 is authoritative and Direct remains the
+family-native alternate; both use the same ordered raw straight-RGBA8 binary
+transport. Photoshop apply completion, rather than byte receipt, gates success.
+Target mismatch, unsupported RGB/depth, closure, interruption, timeout, and busy
+states are refused without resize, conversion, flatten, or unrelated artwork
+mutation. UXP uses a staging Pixel Layer and replaces only a previous exact
+session-owned output after a complete successful apply. OPTIONAL BAKE MASK is
+toggleable for each family and defaults OFF. The supplied flat mask is not an
+anamorphic 3D signage-shaped bake mask; its production role is a post-bake
+planar compositing reference for combining separate FRONT and BACK results.
+The retained ON path is legacy/diagnostic only and evaluates exact linear
+`1.0 - mask` for BACK. The user confirmed native Direct placement against
+3ds Max World Normal overlays for both families on 2026-09-11. Block 8 layer
+stack authoring remains deferred.
+
 ## Commands
 
 ```powershell
@@ -141,6 +158,7 @@ npm run test:block5a
 npm run test:block5b
 npm run test:block6a
 npm run test:block6b
+npm run test:block7
 npm run test:runtime
 npm run test:link
 npm run dist

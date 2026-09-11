@@ -19,12 +19,14 @@ varying vec2 vCanonicalUv;
 varying vec4 vCameraClip;
 uniform sampler2D sourceTexture;
 uniform sampler2D validityMask;
+uniform float maskInvert;
 void main() {
   if (vCameraClip.w <= 0.0) discard;
   vec3 ndc = vCameraClip.xyz / vCameraClip.w;
   vec2 screenUv = ndc.xy * 0.5 + 0.5;
   if (screenUv.x < 0.0 || screenUv.x > 1.0 || screenUv.y < 0.0 || screenUv.y > 1.0 || ndc.z < -1.0 || ndc.z > 1.0) discard;
-  float maskWeight = texture2D(validityMask, vCanonicalUv).r;
+  float sampledMask = texture2D(validityMask, vCanonicalUv).r;
+  float maskWeight = mix(sampledMask, 1.0 - sampledMask, maskInvert);
   if (maskWeight <= 0.0) discard;
   vec4 source = texture2D(sourceTexture, screenUv);
   gl_FragColor = vec4(source.rgb, source.a * maskWeight);
@@ -46,6 +48,7 @@ varying vec4 vCameraClip;
 uniform sampler2D sourceTexture;
 uniform sampler2D visibilitySurfaceId;
 uniform sampler2D validityMask;
+uniform float maskInvert;
 uniform vec2 visibilityTexelSize;
 uniform float visibilityUvEpsilon;
 void main() {
@@ -59,7 +62,8 @@ void main() {
     if (visibleSurface.a > 0.5) nearestUvDistance = min(nearestUvDistance, distance(vCanonicalUv, visibleSurface.rg));
   }
   if (nearestUvDistance > visibilityUvEpsilon) discard;
-  float maskWeight = texture2D(validityMask, vCanonicalUv).r;
+  float sampledMask = texture2D(validityMask, vCanonicalUv).r;
+  float maskWeight = mix(sampledMask, 1.0 - sampledMask, maskInvert);
   if (maskWeight <= 0.0) discard;
   vec4 source = texture2D(sourceTexture, screenUv);
   gl_FragColor = vec4(source.rgb, source.a * maskWeight);
@@ -320,7 +324,7 @@ export class ProjectionBakeRuntime {
   async ensureResources(profile) {
     if (this.resources?.profileId === profile.id) return this.resources;
     this.dispose(); const source = createNativeSyntheticSource(profile); let mask = null;
-    if (profile.productionMask.status === 'PRODUCTION_REFERENCE_SUPPLIED') {
+    if (profile.productionMask.runtimeUrl) {
       mask = await new THREE.TextureLoader().loadAsync(new URL(profile.productionMask.runtimeUrl, import.meta.url).href);
       const width = mask.image.naturalWidth || mask.image.width; const height = mask.image.naturalHeight || mask.image.height;
       if (width !== profile.productionMask.width || height !== profile.productionMask.height) {
@@ -351,13 +355,18 @@ export class ProjectionBakeRuntime {
     if (!['profile', 'production', 'full-white', 'synthetic'].includes(maskMode)) throw new Error(`Unknown Projection Bake mask mode: ${maskMode}`);
     const resources = await this.ensureResources(profile);
     const effectiveMaskMode = maskMode === 'profile'
-      ? (profile.productionMask.status === 'PRODUCTION_REFERENCE_SUPPLIED' ? 'production' : 'full-white') : maskMode;
+      ? (profile.productionMask.runtimeUrl ? 'production' : 'full-white') : maskMode;
     if (effectiveMaskMode === 'production' && !resources.mask) throw new Error(`${profile.label} production mask is NOT_SUPPLIED.`);
     const validityMask = effectiveMaskMode === 'production' ? resources.mask
       : (effectiveMaskMode === 'synthetic' ? resources.syntheticMask : resources.fullWhiteMask);
     const camera = calibrationCamera(profile.calibrationCamera);
     const visibilityMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, map: resources.visibilityUvTexture, side: THREE.DoubleSide, depthTest: true, depthWrite: true, transparent: false, toneMapped: false });
-    const commonUniforms = { sourceTexture: { value: resources.source.texture }, validityMask: { value: validityMask } };
+    const maskInvert = effectiveMaskMode === 'production' && profile.productionMask.scalarOperation === 'EXACT_LINEAR_ONE_MINUS_SHARED_PRODUCTION_MASK' ? 1 : 0;
+    const maskEnabled = effectiveMaskMode === 'production';
+    const maskStatus = maskEnabled
+      ? profile.productionMask.status
+      : (effectiveMaskMode === 'synthetic' ? 'SYNTHETIC_CONTROL' : 'DISABLED_FULL_WHITE_CONTROL');
+    const commonUniforms = { sourceTexture: { value: resources.source.texture }, validityMask: { value: validityMask }, maskInvert: { value: maskInvert } };
     const directMaterial = new THREE.ShaderMaterial({ uniforms: commonUniforms, vertexShader: directVertexShader, fragmentShader: directFragmentShader, side: THREE.DoubleSide, transparent: false, blending: THREE.NoBlending, depthTest: true, depthWrite: true, toneMapped: false });
     const bakeMaterial = new THREE.ShaderMaterial({
       uniforms: { ...commonUniforms, visibilitySurfaceId: { value: resources.visibilityTarget.texture },
@@ -400,12 +409,14 @@ export class ProjectionBakeRuntime {
         profileId: profile.id, familyId: profile.familyId, familyLabel: profile.label,
         surfaceNames: surfaceMeshes.map((mesh) => mesh.name),
         camera: { fov: camera.fov, aspect: camera.aspect, position: camera.position.toArray(), quaternion: camera.quaternion.toArray() },
-        mask: { requestedMode: maskMode, mode: effectiveMaskMode, status: profile.productionMask.status,
-          fallbackUsed: profile.productionMask.status === 'NOT_SUPPLIED' && effectiveMaskMode === 'full-white', fallback: profile.productionMask.fallback,
+        mask: { requestedMode: maskMode, mode: effectiveMaskMode, enabled: maskEnabled, status: maskStatus,
+          fallbackUsed: !profile.productionMask.runtimeUrl && effectiveMaskMode === 'full-white', fallback: profile.productionMask.fallback,
           fileName: effectiveMaskMode === 'production' ? profile.productionMask.fileName : null,
           width: effectiveMaskMode === 'production' ? profile.productionMask.width : validityMask.image.width,
           height: effectiveMaskMode === 'production' ? profile.productionMask.height : validityMask.image.height,
-          colorSpace: profile.productionMask.colorSpace, flipY: validityMask.flipY, interpretation: profile.productionMask.meaning },
+          colorSpace: profile.productionMask.colorSpace, flipY: validityMask.flipY, interpretation: profile.productionMask.meaning,
+          sourceOfTruth: maskEnabled ? profile.productionMask.sourceOfTruth : 'FULL_WHITE_CONTROL',
+          scalarOperation: maskEnabled ? profile.productionMask.scalarOperation : 'MASK_DISABLED_IDENTITY_ONE', exactLinearInversion: maskInvert === 1 },
         directProjection: { sourceTexture: 'ORIGINAL_WORKING_SOURCE', canonicalTextureReferenced: false, environmentIncluded: false, matteIncluded: false },
         visibility: { policy: profile.validity.operation, environmentDepthIncluded: false,
           method: 'HARDWARE_DEPTH_FRONTMOST_AUTHORED_UV_NEAREST_3X3', uvEpsilon: VISIBILITY_UV_EPSILON,
@@ -431,6 +442,37 @@ export class ProjectionBakeRuntime {
   }
 
   hasOutputs() { return Boolean(this.resources && this.lastCompletedProfileId === this.resources.profileId); }
+
+  readOutputRgba(outputKind) {
+    if (!this.hasOutputs()) throw new Error('Run the Projection Bake before sending an output to Photoshop.');
+    const kind = String(outputKind || '').toUpperCase();
+    const target = kind === 'CANONICAL' ? this.resources.bakeTarget : (kind === 'DIRECT' ? this.resources.directTarget : null);
+    if (!target) throw new Error(`Unknown Photoshop output kind: ${outputKind}`);
+    const pixels = readTarget(this.renderer, target);
+    const rowBytes = target.width * 4;
+    const swap = new Uint8Array(rowBytes);
+    for (let top = 0; top < Math.floor(target.height / 2); top++) {
+      const bottom = target.height - 1 - top;
+      const a = top * rowBytes;
+      const b = bottom * rowBytes;
+      swap.set(pixels.subarray(a, a + rowBytes));
+      pixels.copyWithin(a, b, b + rowBytes);
+      pixels.set(swap, b);
+    }
+    return {
+      bytes: pixels,
+      width: target.width,
+      height: target.height,
+      components: 4,
+      componentSize: 8,
+      pixelFormat: 'RGBA',
+      colorSpace: 'RGB',
+      alpha: 'STRAIGHT',
+      orientation: 'TOP_LEFT',
+      outputKind: kind,
+      familyId: this.resources.profile.familyId
+    };
+  }
 
   async exportPng(kind) {
     if (!this.hasOutputs()) throw new Error('Run the Projection Bake before exporting PNG files.');

@@ -72,7 +72,7 @@ function makeProfile({ id, slug, label, calibration, productionMask, block6AUser
   };
 }
 
-const frontMask = {
+const sharedProductionMask = {
   status: 'PRODUCTION_REFERENCE_SUPPLIED',
   sourcePath: '2DAsset/Mask/Mask_Basic_Feather0P025.png',
   fileName: 'Mask_Basic_Feather0P025.png',
@@ -84,24 +84,17 @@ const frontMask = {
   sourceChannels: 4,
   colorSpace: 'NO_COLOR_SPACE_LINEAR_SCALAR',
   meaning: MASK_MEANING,
+  sourceOfTruth: 'SHARED_PRODUCTION_MASK',
+  scalarOperation: 'IDENTITY_LINEAR_SCALAR',
   replaceableFutureInput: true,
   fallback: null
 };
 
+const frontMask = { ...sharedProductionMask };
 const backMask = {
-  status: 'NOT_SUPPLIED',
-  sourcePath: null,
-  fileName: null,
-  runtimeUrl: null,
-  width: 4728,
-  height: 5760,
-  sha256: null,
-  sourceBitsPerSample: null,
-  sourceChannels: null,
-  colorSpace: 'NO_COLOR_SPACE_LINEAR_SCALAR',
-  meaning: MASK_MEANING,
-  replaceableFutureInput: true,
-  fallback: 'FULL_WHITE_DIAGNOSTIC'
+  ...sharedProductionMask,
+  status: 'SHARED_PRODUCTION_REFERENCE_INVERTED',
+  scalarOperation: 'EXACT_LINEAR_ONE_MINUS_SHARED_PRODUCTION_MASK'
 };
 
 export const PROJECTION_BAKE_PROFILES = deepFreeze({
@@ -123,8 +116,8 @@ export const PROJECTION_BAKE_PROFILES = deepFreeze({
 });
 
 export const PROJECTION_FAMILY_DELIVERY = deepFreeze({
-  [ANAMORPHIC_FAMILY_IDS.FRONT_75F]: 'IMPLEMENTED_BLOCK6B_VISUAL_OPEN',
-  [ANAMORPHIC_FAMILY_IDS.BACK]: 'IMPLEMENTED_BLOCK6B_VISUAL_OPEN',
+  [ANAMORPHIC_FAMILY_IDS.FRONT_75F]: 'IMPLEMENTED_BLOCK7_REVERSE_TRANSPORT',
+  [ANAMORPHIC_FAMILY_IDS.BACK]: 'IMPLEMENTED_BLOCK7_REVERSE_TRANSPORT',
   [ANAMORPHIC_FAMILY_IDS.ILMIN_AQUBE]: 'DEFERRED_EXTERNAL_VALIDATION',
   [ANAMORPHIC_FAMILY_IDS.FRONT_90F]: 'DEFERRED_RECALIBRATION',
   SYNC: 'NOT_SUPPLIED'
@@ -146,8 +139,8 @@ export function validateProjectionBakeProfile(profile = PROJECTION_BAKE_PROFILE)
   if (profile?.canonicalResolution?.width !== 4728 || profile?.canonicalResolution?.height !== 5760) errors.push('canonicalResolution');
   if (!Number.isFinite(profile?.calibrationCamera?.runtimeFov) || !Number.isFinite(profile?.calibrationCamera?.runtimeAspect)) errors.push('camera');
   if (profile?.productionMask?.width !== 4728 || profile?.productionMask?.height !== 5760) errors.push('productionMaskResolution');
-  if (profile?.productionMask?.status === 'PRODUCTION_REFERENCE_SUPPLIED' && !profile.productionMask.runtimeUrl) errors.push('productionMaskRuntimeUrl');
-  if (profile?.productionMask?.status === 'NOT_SUPPLIED' && profile.productionMask.fallback !== 'FULL_WHITE_DIAGNOSTIC') errors.push('diagnosticMaskFallback');
+  if (!profile?.productionMask?.runtimeUrl) errors.push('productionMaskRuntimeUrl');
+  if (!['IDENTITY_LINEAR_SCALAR', 'EXACT_LINEAR_ONE_MINUS_SHARED_PRODUCTION_MASK'].includes(profile?.productionMask?.scalarOperation)) errors.push('productionMaskScalarOperation');
   if (profile?.validity?.environmentDepthIncluded !== false) errors.push('environmentDepthPolicy');
   return Object.freeze({ valid: errors.length === 0, errors: Object.freeze(errors) });
 }

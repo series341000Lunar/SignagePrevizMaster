@@ -170,6 +170,7 @@ async function runSmokeTest(window) {
     writePngDataUrl(block6bArtifacts.directPreview, block6bPreviewData.direct);
     writePngDataUrl(block6bArtifacts.bakePreview, block6bPreviewData.bake);
     writePngDataUrl(block6bArtifacts.reprojectPreview, block6bPreviewData.reproject);
+    const block7MaskOff = await window.webContents.executeJavaScript('window.runBlock7MaskOffSmoke()', true);
     await new Promise((resolve) => setTimeout(resolve, 250));
     const image = await window.webContents.capturePage();
     fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
@@ -226,8 +227,8 @@ async function runSmokeTest(window) {
       block6a.resourcePolicy.stableAcrossRuns === true &&
       block6a.contextLossCount === 0 &&
       block6b.technicalPass === true && block6b.userValidation === 'PASS_CLOSED' &&
-      block6b.back.familyId === 'ANAMORPHIC_BACK' && block6b.back.mask.status === 'NOT_SUPPLIED' &&
-      block6b.back.mask.mode === 'full-white' && block6b.back.mask.fallbackUsed === true &&
+      block6b.back.familyId === 'ANAMORPHIC_BACK' && block6b.back.mask.status === 'SHARED_PRODUCTION_REFERENCE_INVERTED' &&
+      block6b.back.mask.mode === 'production' && block6b.back.mask.exactLinearInversion === true &&
       block6b.back.sourceWidth === 2100 && block6b.back.sourceHeight === 3840 &&
       block6b.frontReturn.sourceVsCanonicalReprojected.mae <= 1 && block6b.frontReturn.sourceVsCanonicalReprojected.rmse <= 5 &&
       block6bExportMetadata.source.width === 3000 && block6bExportMetadata.source.height === 3840 &&
@@ -235,6 +236,8 @@ async function runSmokeTest(window) {
       block6bExportMetadata.bake.width === 4728 && block6bExportMetadata.bake.height === 5760 &&
       block6bExportMetadata.reproject.width === 3000 && block6bExportMetadata.reproject.height === 3840 &&
       Object.values(block6bExportMetadata).every((entry) => entry.mimeType === 'image/png' && entry.bytes > 0) &&
+      block7MaskOff.technicalPass === true && block7MaskOff.defaultOff === true &&
+      block7MaskOff.backCameraFamilyCorrect === true && block7MaskOff.contextLossCount === 0 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -262,6 +265,7 @@ async function runSmokeTest(window) {
       block6b,
       block6bArtifacts,
       block6bExportMetadata,
+      block7MaskOff,
       screenshotPath
     };
     writeJson(reportPath, report);
