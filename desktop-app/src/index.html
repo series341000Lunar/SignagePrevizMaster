@@ -197,14 +197,15 @@
             <h3>OUTPUT TO PHOTOSHOP</h3>
             <dl class="projection-poc-metrics">
               <dt>SOURCE DOCUMENT</dt><dd id="projection-source-document">No Photoshop source frame received</dd>
-              <dt>BAKE TARGET</dt><dd id="projection-bake-target">Not set in Photoshop</dd>
+              <dt>CURRENT FAMILY</dt><dd id="projection-output-family">—</dd>
+              <dt>TARGET REGISTRY</dt><dd id="projection-bake-target">No UXP session registry</dd>
             </dl>
             <div class="projection-output-choice">
-              <div><strong>CANONICAL</strong><span>Production / Authoritative · 4728 × 5760</span></div>
+              <div><strong>CANONICAL</strong><span data-photoshop-destination="CANONICAL">NO BAKE TARGET ASSIGNED</span></div>
               <button type="button" data-photoshop-output="CANONICAL" disabled>SEND TO PHOTOSHOP</button>
             </div>
             <div class="projection-output-choice">
-              <div><strong>DIRECT</strong><span>Native Working / Alternate / Sharper</span></div>
+              <div><strong>DIRECT</strong><span data-photoshop-destination="DIRECT">NO BAKE TARGET ASSIGNED</span></div>
               <button type="button" data-photoshop-output="DIRECT" disabled>SEND TO PHOTOSHOP</button>
             </div>
             <p id="projection-photoshop-state" class="projection-photoshop-state">IDLE</p>
@@ -217,7 +218,7 @@
             <dt>Mask</dt><dd>FAMILY CONTRACT</dd>
             <dt>Preview Display</dt><dd>FIT</dd>
           </dl>
-          <p id="projection-poc-message" class="projection-poc-message">Run a Bake, set a Photoshop Bake Target, then send CANONICAL or DIRECT. Success is shown only after PHOTOSHOP APPLY COMPLETE.</p>
+          <p id="projection-poc-message" class="projection-poc-message">Run a Bake, explicitly register and bind a Photoshop Bake Target, then send one CANONICAL or DIRECT output. Success is shown only after PHOTOSHOP APPLY COMPLETE.</p>
         </section>
         <h2>Runtime diagnostics</h2>
         <dl id="diagnostics"></dl>

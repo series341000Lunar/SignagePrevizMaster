@@ -10,7 +10,7 @@ import { getProjectionBakeProfile } from '../src/projection-bake-profile.js';
 
 const require = createRequire(import.meta.url);
 const config = require('../src/live-link-config.json');
-const { createLiveLinkBroker, validateBakeMetadata } = require('../src/live-link-broker.cjs');
+const { createLiveLinkBroker, validateBakeMetadata, validateBakeTargetRegistrySnapshot } = require('../src/live-link-broker.cjs');
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(appRoot, '..');
 
@@ -21,6 +21,7 @@ function metadata(overrides = {}) {
   const chunkSize = overrides.chunkSize ?? 5;
   return {
     type: 'BAKE_BEGIN', jobId: 1, familyId: 'TEST_FAMILY', outputKind: 'DIRECT', outputId: 'TEST_FAMILY:DIRECT',
+    bindingKey: 'TEST_FAMILY:DIRECT', targetId: 'target-1', targetSessionId: 'test-session',
     targetDocumentId: 91, width, height, components: 4, componentSize: 8, pixelFormat: 'RGBA',
     colorSpace: 'RGB', alpha: 'STRAIGHT', orientation: 'TOP_LEFT', totalBytes, chunkSize,
     chunkCount: Math.ceil(totalBytes / chunkSize), requestedAtEpochMs: Date.now(), ...overrides
@@ -92,7 +93,12 @@ async function completeBake(renderer, photoshop, begin, bytes) {
   assert.equal((await renderer.wait((item) => item.data?.type === 'BAKE_RECEIVED')).data.jobId, begin.jobId);
   photoshop.json({ type: 'BAKE_APPLYING', jobId: begin.jobId });
   assert.equal((await renderer.wait((item) => item.data?.type === 'BAKE_APPLYING')).data.jobId, begin.jobId);
-  photoshop.json({ type: 'BAKE_APPLIED', jobId: begin.jobId, targetDocumentId: begin.targetDocumentId, layerId: 501, layerName: '__LUUX_ANAMORPHIC__ TEST_FAMILY DIRECT' });
+  photoshop.json({
+    type: 'BAKE_APPLIED', jobId: begin.jobId,
+    targetId: begin.targetId, targetSessionId: begin.targetSessionId,
+    targetDocumentId: begin.targetDocumentId, layerId: 501,
+    layerName: '__LUUX_ANAMORPHIC__ TEST_FAMILY DIRECT'
+  });
   assert.equal((await renderer.wait((item) => item.data?.type === 'BAKE_APPLIED')).data.layerId, 501);
 }
 
@@ -103,7 +109,9 @@ assert.equal(front.workingResolution.width * front.workingResolution.height * 4,
 assert.equal(back.workingResolution.width * back.workingResolution.height * 4, 32_256_000);
 assert.equal(validateBakeMetadata(metadata({
   width: 4728, height: 5760, totalBytes: 108_933_120, chunkSize: config.chunkSizeBytes,
-  chunkCount: Math.ceil(108_933_120 / config.chunkSizeBytes), outputKind: 'CANONICAL', outputId: 'ANAMORPHIC_FRONT_75F:CANONICAL', familyId: 'ANAMORPHIC_FRONT_75F'
+  chunkCount: Math.ceil(108_933_120 / config.chunkSizeBytes), outputKind: 'CANONICAL',
+  outputId: 'ANAMORPHIC_FRONT_75F:CANONICAL', bindingKey: 'ANAMORPHIC_FRONT_75F:CANONICAL',
+  familyId: 'ANAMORPHIC_FRONT_75F'
 }), config), 108_933_120);
 assert.throws(() => validateBakeMetadata(metadata({ totalBytes: 17 }), config), /does not match calculated/);
 assert.throws(() => validateBakeMetadata(metadata({ width: 20_000, height: 20_000, totalBytes: 1_600_000_000, chunkCount: 763 }), config), /maxFrameBytes/);
@@ -113,8 +121,24 @@ const broker = createLiveLinkBroker({ config: { ...config, port: 0, ackTimeoutMs
 await once(broker.server, 'listening');
 const endpoint = `ws://127.0.0.1:${broker.server.address().port}`;
 let { renderer, photoshop } = await connectPair(endpoint);
-photoshop.json({ type: 'BAKE_TARGET_STATUS', status: 'READY', documentId: 91, documentName: 'target.psd', width: 2, height: 2, documentMode: 'RGB', documentDepth: 8 });
-assert.equal((await renderer.wait((item) => item.data?.type === 'BAKE_TARGET_STATUS')).data.documentName, 'target.psd');
+const registrySnapshot = {
+  type: 'BAKE_TARGET_REGISTRY',
+  registryAuthority: 'UXP',
+  scope: 'SESSION',
+  sessionId: 'test-session',
+  targets: [{
+    targetId: 'target-1', label: 'TEST DIRECT', status: 'READY',
+    documentId: 91, documentName: 'target.psd', width: 2, height: 2,
+    documentMode: 'RGB', documentDepth: 8, registeredAtEpochMs: Date.now()
+  }],
+  bindings: [{
+    bindingKey: 'TEST_FAMILY:DIRECT', familyId: 'TEST_FAMILY',
+    outputKind: 'DIRECT', targetId: 'target-1'
+  }]
+};
+assert.equal(validateBakeTargetRegistrySnapshot(registrySnapshot), true);
+photoshop.json(registrySnapshot);
+assert.equal((await renderer.wait((item) => item.data?.type === 'BAKE_TARGET_REGISTRY')).data.targets[0].documentName, 'target.psd');
 
 const pixels = Buffer.from(Array.from({ length: 16 }, (_, index) => index));
 await completeBake(renderer, photoshop, metadata(), pixels);
@@ -152,15 +176,19 @@ await completeBake(renderer, photoshop, metadata(), pixels);
 assert(events.some((event) => event.type === 'bake-applied'));
 
 const uxp = await readFile(path.join(projectRoot, 'photoshop-uxp', 'luux-live-link', 'index.js'), 'utf8');
+const targetRegistrySource = await readFile(path.join(projectRoot, 'photoshop-uxp', 'luux-live-link', 'bake-target-registry.js'), 'utf8');
 const rendererSource = await readFile(path.join(appRoot, 'src', 'renderer.js'), 'utf8');
 const runtime = await readFile(path.join(appRoot, 'src', 'projection-bake-runtime.js'), 'utf8');
 const rendererHtml = await readFile(path.join(appRoot, 'src', 'index.html'), 'utf8');
-assert.match(uxp, /TARGET_DIMENSION_MISMATCH/);
-assert.match(uxp, /TARGET_CLOSED/);
-assert.match(uxp, /TARGET_UNSUPPORTED/);
+assert.match(targetRegistrySource, /TARGET_DIMENSION_MISMATCH/);
+assert.match(targetRegistrySource, /TARGET_CLOSED/);
+assert.match(targetRegistrySource, /TARGET_UNSUPPORTED/);
 assert.match(uxp, /doc\.mode === constants\.DocumentMode\.RGB \? 'RGB'/);
-assert.match(uxp, /snapshot\.documentMode === state\.bake\.target\.documentMode/);
-assert.match(uxp, /snapshot\.documentDepth === state\.bake\.target\.documentDepth/);
+assert.match(uxp, /state\.bake\.registry\.validateJobTarget\(message/);
+assert.match(targetRegistrySource, /message\.targetSessionId !== registrySessionId/);
+assert.match(targetRegistrySource, /const targets = new Map\(\)/);
+assert.match(targetRegistrySource, /const bindings = new Map\(\)/);
+assert.match(targetRegistrySource, /bindingKey: key/);
 assert.match(uxp, /ownedOutputs\.get/);
 assert.match(uxp, /STAGING/);
 assert.match(uxp, /await priorLayer\.delete\(\)/);
@@ -189,5 +217,6 @@ console.log(JSON.stringify({
   canonicalBytes: 108_933_120, canonicalChunks: Math.ceil(108_933_120 / config.chunkSizeBytes),
   validRoundTrip: true, duplicateRejected: true, invalidOrderRejected: true, truncatedRejected: true,
   wrongJobRejected: true, timeoutRecovered: true, reconnectRetryPassed: true,
-  targetSafetyStaticCoverage: true, ownershipStaticCoverage: true, sharedBackMaskExactInverse: true, pass: true
+  targetSafetyStaticCoverage: true, targetRegistryRouting: true,
+  ownershipStaticCoverage: true, sharedBackMaskExactInverse: true, pass: true
 }, null, 2));

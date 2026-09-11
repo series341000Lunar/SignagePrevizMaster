@@ -95,7 +95,12 @@ const projectionPocMetrics = document.querySelector('#projection-poc-metrics');
 const projectionPocMessage = document.querySelector('#projection-poc-message');
 const projectionPocSaveButtons = [...document.querySelectorAll('[data-projection-export]')];
 const projectionPhotoshopButtons = [...document.querySelectorAll('[data-photoshop-output]')];
+const projectionPhotoshopDestinations = new Map(
+  [...document.querySelectorAll('[data-photoshop-destination]')]
+    .map((element) => [element.dataset.photoshopDestination, element])
+);
 const projectionSourceDocument = document.querySelector('#projection-source-document');
+const projectionOutputFamily = document.querySelector('#projection-output-family');
 const projectionBakeTarget = document.querySelector('#projection-bake-target');
 const projectionPhotoshopState = document.querySelector('#projection-photoshop-state');
 const projectionPreviewCanvases = {
@@ -237,7 +242,13 @@ const state = {
     state: 'IDLE',
     activeJobId: null,
     pending: null,
-    target: null,
+    targetRegistry: {
+      registryAuthority: null,
+      scope: null,
+      sessionId: null,
+      targets: [],
+      bindings: []
+    },
     lastApplied: null,
     lastError: ''
   },
@@ -935,6 +946,25 @@ function releaseProjectionBakeResources(reason = 'context-change') {
   window.block6BProjectionDiagnostics = window.block6AProjectionDiagnostics;
 }
 
+function reverseBakeBindingKey(familyId, outputKind) {
+  return `${familyId}:${outputKind}`;
+}
+
+function resolveReverseBakeTarget(familyId, outputKind) {
+  const registry = state.reverseBake.targetRegistry;
+  const bindingKey = reverseBakeBindingKey(familyId, outputKind);
+  const binding = registry.bindings.find((entry) => entry.bindingKey === bindingKey) || null;
+  const target = binding
+    ? registry.targets.find((entry) => entry.targetId === binding.targetId) || null
+    : null;
+  return { bindingKey, binding, target };
+}
+
+function expectedProjectionOutputResolution(profile, outputKind) {
+  if (!profile) return null;
+  return outputKind === 'CANONICAL' ? profile.canonicalResolution : profile.workingResolution;
+}
+
 function syncProjectionPocUi() {
   const available = isProjectionPocContext();
   const profile = currentProjectionBakeProfile();
@@ -953,20 +983,32 @@ function syncProjectionPocUi() {
   }
   const reverseBusy = state.reverseBake.activeJobId !== null;
   for (const button of projectionPhotoshopButtons) {
+    const outputKind = button.dataset.photoshopOutput;
+    const resolution = expectedProjectionOutputResolution(profile, outputKind);
+    const destination = profile ? resolveReverseBakeTarget(profile.familyId, outputKind) : { target: null };
+    const target = destination.target;
+    const targetReady = Boolean(target && target.status === 'READY' &&
+      target.width === resolution?.width && target.height === resolution?.height &&
+      target.documentMode === 'RGB' && target.documentDepth === 8);
     button.disabled = !hasOutputs || !state.link.rendererHandshake || !state.link.photoshopConnected ||
-      !state.reverseBake.target || state.reverseBake.target.status !== 'READY' || reverseBusy ||
-      state.projectionBake.running || projectionPngExporting;
+      !targetReady || reverseBusy || state.projectionBake.running || projectionPngExporting;
+    const destinationElement = projectionPhotoshopDestinations.get(outputKind);
+    if (destinationElement) {
+      destinationElement.textContent = target
+        ? `${target.label} · ${target.documentName} · ${target.width} × ${target.height} · ${target.status}`
+        : `NO BAKE TARGET ASSIGNED · ${resolution?.width || '—'} × ${resolution?.height || '—'}`;
+    }
   }
   const source = state.link.lastFrame;
   if (projectionSourceDocument) projectionSourceDocument.textContent = source
     ? `${source.documentName} · ID ${source.documentId} · ${source.width} × ${source.height}`
     : 'No Photoshop source frame received';
-  if (projectionBakeTarget) {
-    const target = state.reverseBake.target;
-    projectionBakeTarget.textContent = target
-      ? `${target.documentName} · ID ${target.documentId} · ${target.width} × ${target.height} · ${target.status}`
-      : 'Not set in Photoshop';
-  }
+  if (projectionOutputFamily) projectionOutputFamily.textContent = profile
+    ? `${profile.label} · ${profile.familyId}`
+    : '—';
+  if (projectionBakeTarget) projectionBakeTarget.textContent = state.reverseBake.targetRegistry.sessionId
+    ? `${state.reverseBake.targetRegistry.targets.length} targets · UXP SESSION`
+    : 'No UXP session registry';
   if (projectionPhotoshopState) projectionPhotoshopState.textContent = state.reverseBake.lastError ||
     (state.reverseBake.lastApplied ? `PHOTOSHOP APPLY COMPLETE · Job ${state.reverseBake.lastApplied.jobId} · Layer ${state.reverseBake.lastApplied.layerId}` : state.reverseBake.state);
   const busy = state.projectionBake.running || projectionPngExporting || reverseBusy;
@@ -996,9 +1038,14 @@ async function waitForLinkBackpressure(limit) {
 async function sendProjectionToPhotoshop(outputKind) {
   if (state.reverseBake.activeJobId !== null) throw new Error('BAKE_BUSY: A full-image Photoshop write is already in progress.');
   if (!state.link.rendererHandshake || !state.link.photoshopConnected) throw new Error('UXP_DISCONNECTED: Photoshop UXP is not connected.');
-  if (!state.reverseBake.target || state.reverseBake.target.status !== 'READY') throw new Error('TARGET_NOT_SET: Set an active Photoshop document as Bake Target first.');
   const output = projectionBakeRuntime.readOutputRgba(outputKind);
-  const target = state.reverseBake.target;
+  const registry = state.reverseBake.targetRegistry;
+  const destination = resolveReverseBakeTarget(output.familyId, output.outputKind);
+  if (!destination.binding || !destination.target) {
+    throw new Error(`TARGET_BINDING_NOT_FOUND: No Bake Target is assigned to ${destination.bindingKey}.`);
+  }
+  const target = destination.target;
+  if (target.status !== 'READY') throw new Error(`TARGET_NOT_READY: ${target.label} is ${target.status}.`);
   if (target.width !== output.width || target.height !== output.height) {
     throw new Error(`TARGET_DIMENSION_MISMATCH: ${output.outputKind} requires ${output.width} × ${output.height}; target is ${target.width} × ${target.height}.`);
   }
@@ -1008,7 +1055,11 @@ async function sendProjectionToPhotoshop(outputKind) {
   const chunkCount = Math.ceil(output.bytes.byteLength / chunkSize);
   const metadata = {
     type: 'BAKE_BEGIN', jobId, familyId: output.familyId, outputKind: output.outputKind,
-    outputId: `${output.familyId}:${output.outputKind}`, targetDocumentId: target.documentId,
+    outputId: `${output.familyId}:${output.outputKind}`,
+    bindingKey: destination.bindingKey,
+    targetId: target.targetId,
+    targetSessionId: registry.sessionId,
+    targetDocumentId: target.documentId,
     width: output.width, height: output.height, components: output.components, componentSize: output.componentSize,
     pixelFormat: output.pixelFormat, colorSpace: output.colorSpace, alpha: output.alpha, orientation: output.orientation,
     totalBytes: output.bytes.byteLength, chunkSize, chunkCount, requestedAtEpochMs: Date.now()
@@ -1017,7 +1068,7 @@ async function sendProjectionToPhotoshop(outputKind) {
   state.reverseBake.state = 'REQUESTED';
   state.reverseBake.lastError = '';
   projectionPocMessage.className = 'projection-poc-message';
-  projectionPocMessage.textContent = `${output.outputKind} ${output.width} × ${output.height} raw RGBA8 → Photoshop target ${target.documentName}.`;
+  projectionPocMessage.textContent = `${output.outputKind} ${output.width} × ${output.height} raw RGBA8 → ${target.label} / ${target.documentName}.`;
   syncProjectionPocUi();
   const completion = waitForPhotoshopBakeApply(jobId);
   try {
@@ -1032,6 +1083,10 @@ async function sendProjectionToPhotoshop(outputKind) {
     await waitForLinkBackpressure(chunkSize);
     sendLinkMessage({ type: 'BAKE_END', jobId, receivedBytes: output.bytes.byteLength, receivedChunks: chunkCount });
     const applied = await completion;
+    if (applied.targetId !== metadata.targetId || applied.targetSessionId !== metadata.targetSessionId ||
+        applied.targetDocumentId !== metadata.targetDocumentId) {
+      throw new Error('TARGET_APPLY_ACK_MISMATCH: Photoshop applied to an unexpected Target.');
+    }
     state.reverseBake.lastApplied = applied;
     state.reverseBake.state = 'APPLIED';
     projectionPocMessage.className = 'projection-poc-message pass';
@@ -2961,6 +3016,44 @@ async function handleFrameEnd(message) {
   }
 }
 
+function acceptBakeTargetRegistry(message) {
+  if (message.registryAuthority !== 'UXP' || message.scope !== 'SESSION' ||
+      typeof message.sessionId !== 'string' || !message.sessionId ||
+      !Array.isArray(message.targets) || !Array.isArray(message.bindings)) {
+    throw new Error('INVALID_BAKE_TARGET_REGISTRY: UXP session registry metadata is invalid.');
+  }
+  const targetIds = new Set();
+  const targetStatuses = new Set(['READY', 'CLOSED', 'IDENTITY_CHANGED', 'DIMENSION_CHANGED', 'MODE_CHANGED', 'DEPTH_CHANGED']);
+  for (const target of message.targets) {
+    if (typeof target.targetId !== 'string' || !target.targetId || targetIds.has(target.targetId) ||
+        !Number.isSafeInteger(target.documentId) || target.documentId <= 0 ||
+        !Number.isSafeInteger(target.width) || target.width <= 0 ||
+        !Number.isSafeInteger(target.height) || target.height <= 0 ||
+        typeof target.label !== 'string' || !target.label ||
+        typeof target.documentName !== 'string' || !target.documentName ||
+        !targetStatuses.has(target.status) || typeof target.documentMode !== 'string' || !target.documentMode ||
+        !(target.documentDepth === 8 || typeof target.documentDepth === 'string')) {
+      throw new Error('INVALID_BAKE_TARGET_REGISTRY: target metadata or targetId is invalid.');
+    }
+    targetIds.add(target.targetId);
+  }
+  const bindingKeys = new Set();
+  for (const binding of message.bindings) {
+    if (binding.bindingKey !== reverseBakeBindingKey(binding.familyId, binding.outputKind) ||
+        bindingKeys.has(binding.bindingKey) || !targetIds.has(binding.targetId)) {
+      throw new Error('INVALID_BAKE_TARGET_REGISTRY: binding map is inconsistent.');
+    }
+    bindingKeys.add(binding.bindingKey);
+  }
+  state.reverseBake.targetRegistry = {
+    registryAuthority: message.registryAuthority,
+    scope: message.scope,
+    sessionId: message.sessionId,
+    targets: message.targets.map((target) => ({ ...target })),
+    bindings: message.bindings.map((binding) => ({ ...binding }))
+  };
+}
+
 function handleLinkJson(message) {
   switch (message.type) {
     case 'HELLO_ACK':
@@ -2968,17 +3061,23 @@ function handleLinkJson(message) {
       break;
     case 'LINK_STATUS':
       state.link.photoshopConnected = Boolean(message.photoshopConnected);
+      if (!state.link.photoshopConnected) {
+        state.reverseBake.targetRegistry = {
+          registryAuthority: null,
+          scope: null,
+          sessionId: null,
+          targets: [],
+          bindings: []
+        };
+      }
       break;
-    case 'BAKE_TARGET_STATUS':
-      state.reverseBake.target = message.status === 'NOT_SET' ? null : {
-        status: message.status,
-        documentId: message.documentId,
-        documentName: message.documentName,
-        width: message.width,
-        height: message.height,
-        documentMode: message.documentMode,
-        documentDepth: message.documentDepth
-      };
+    case 'BAKE_TARGET_REGISTRY':
+      try {
+        acceptBakeTargetRegistry(message);
+        state.reverseBake.lastError = '';
+      } catch (error) {
+        state.reverseBake.lastError = error.message || String(error);
+      }
       syncProjectionPocUi();
       break;
     case 'BAKE_RECEIVED':
@@ -3075,7 +3174,13 @@ function connectLiveLink() {
       state.reverseBake.pending = null;
       pending.reject(new Error('BROKER_DISCONNECTED: Connection closed during Photoshop bake.'));
     }
-    state.reverseBake.target = null;
+    state.reverseBake.targetRegistry = {
+      registryAuthority: null,
+      scope: null,
+      sessionId: null,
+      targets: [],
+      bindings: []
+    };
     updateDiagnostics();
     scheduleReconnect();
   });

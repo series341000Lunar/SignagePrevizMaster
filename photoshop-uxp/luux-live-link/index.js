@@ -1,6 +1,7 @@
 'use strict';
 
 const { action, app, constants, core, imaging } = require('photoshop');
+const { createBakeTargetRegistry } = require('./bake-target-registry.js');
 const config = window.LUUX_LIVE_LINK_CONFIG;
 const DISPLAY_COLOR_PROFILE = 'sRGB IEC61966-2.1';
 const AUTO_SYNC_EVENTS = ['historyStateChanged'];
@@ -8,18 +9,19 @@ const AUTO_SYNC_DEBOUNCE_MS = 350;
 const POINTER_LAYER_NAME = '__LUUX_POINTER__';
 const POINTER_DIAMETER_PX = 25;
 const BAKE_LAYER_PREFIX = '__LUUX_ANAMORPHIC__';
+const BAKE_TARGET_SESSION_ID = `uxp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 const elements = {
   documentName: document.querySelector('#document-name'),
   documentDimensions: document.querySelector('#document-dimensions'),
   documentMode: document.querySelector('#document-mode'),
-  bakeTargetStatus: document.querySelector('#bake-target-status'),
-  bakeTargetName: document.querySelector('#bake-target-name'),
-  bakeTargetId: document.querySelector('#bake-target-id'),
-  bakeTargetDimensions: document.querySelector('#bake-target-dimensions'),
-  bakeTargetMode: document.querySelector('#bake-target-mode'),
-  setBakeTarget: document.querySelector('#set-bake-target'),
-  clearBakeTarget: document.querySelector('#clear-bake-target'),
+  bakeTargetCount: document.querySelector('#bake-target-count'),
+  bakeTargetSession: document.querySelector('#bake-target-session'),
+  bakeTargetLabelInput: document.querySelector('#bake-target-label-input'),
+  bakeTargetFamilySelect: document.querySelector('#bake-target-family-select'),
+  bakeTargetOutputSelect: document.querySelector('#bake-target-output-select'),
+  addBakeTarget: document.querySelector('#add-bake-target'),
+  bakeTargetList: document.querySelector('#bake-target-list'),
   bakeState: document.querySelector('#bake-state'),
   bakeJob: document.querySelector('#bake-job'),
   bakeOutput: document.querySelector('#bake-output'),
@@ -97,7 +99,8 @@ const state = {
   lastFrame: null,
   lastError: '',
   bake: {
-    target: null,
+    registry: createBakeTargetRegistry({ sessionId: BAKE_TARGET_SESSION_ID }),
+    lastPublishedRegistry: '',
     current: null,
     processing: false,
     phase: 'IDLE',
@@ -375,34 +378,131 @@ function documentSnapshot(doc) {
   };
 }
 
-function currentBakeTargetStatus() {
-  if (!state.bake.target) return { type: 'BAKE_TARGET_STATUS', status: 'NOT_SET' };
-  const open = findOpenDocument(state.bake.target.documentId);
-  if (!open) return { type: 'BAKE_TARGET_STATUS', status: 'CLOSED', ...state.bake.target };
-  const snapshot = documentSnapshot(open);
-  const identityMatches = snapshot.documentName === state.bake.target.documentName
-    && snapshot.width === state.bake.target.width
-    && snapshot.height === state.bake.target.height
-    && snapshot.documentMode === state.bake.target.documentMode
-    && snapshot.documentDepth === state.bake.target.documentDepth;
-  return { type: 'BAKE_TARGET_STATUS', status: identityMatches ? 'READY' : 'IDENTITY_CHANGED', ...state.bake.target };
+function findOpenDocumentSnapshot(documentId) {
+  const doc = findOpenDocument(documentId);
+  return doc ? documentSnapshot(doc) : null;
 }
 
-function publishBakeTargetStatus() {
-  const message = currentBakeTargetStatus();
-  if (isSocketOpen() && state.handshake) sendJson(message);
+function currentBakeTargetRegistrySnapshot() {
+  return {
+    type: 'BAKE_TARGET_REGISTRY',
+    ...state.bake.registry.snapshot(findOpenDocumentSnapshot)
+  };
+}
+
+function publishBakeTargetRegistry(force = false) {
+  const message = currentBakeTargetRegistrySnapshot();
+  const digest = JSON.stringify(message);
+  if (isSocketOpen() && state.handshake && (force || digest !== state.bake.lastPublishedRegistry)) {
+    sendJson(message);
+    state.bake.lastPublishedRegistry = digest;
+  }
   return message;
 }
 
+function appendBakeTargetDetail(parent, label, value) {
+  const row = document.createElement('div');
+  row.className = 'diagnostic-row';
+  const labelElement = document.createElement('span');
+  labelElement.className = 'label';
+  labelElement.textContent = label;
+  const valueElement = document.createElement('span');
+  valueElement.className = 'value';
+  valueElement.textContent = value;
+  row.appendChild(labelElement);
+  row.appendChild(valueElement);
+  parent.appendChild(row);
+}
+
+function renderBakeTargets() {
+  const snapshot = currentBakeTargetRegistrySnapshot();
+  elements.bakeTargetCount.textContent = String(snapshot.targets.length);
+  elements.bakeTargetSession.textContent = snapshot.sessionId;
+  elements.addBakeTarget.disabled = state.bake.processing || !app.activeDocument;
+  while (elements.bakeTargetList.firstChild) elements.bakeTargetList.removeChild(elements.bakeTargetList.firstChild);
+  if (!snapshot.targets.length) {
+    const empty = document.createElement('p');
+    empty.className = 'hint';
+    empty.textContent = 'No registered Bake Targets. Active Document is used only after explicit registration.';
+    elements.bakeTargetList.appendChild(empty);
+    return;
+  }
+  for (const target of snapshot.targets) {
+    const card = document.createElement('div');
+    card.className = `bake-target-card status-${target.status.toLowerCase()}`;
+    const bindings = snapshot.bindings.filter((binding) => binding.targetId === target.targetId);
+    appendBakeTargetDetail(card, 'Target ID', target.targetId);
+    appendBakeTargetDetail(card, 'Binding', bindings.length
+      ? bindings.map((binding) => `${binding.familyId} / ${binding.outputKind}`).join(', ')
+      : 'UNBOUND');
+    appendBakeTargetDetail(card, 'Document', target.documentName);
+    appendBakeTargetDetail(card, 'Identity', String(target.documentId));
+    appendBakeTargetDetail(card, 'Dimensions', `${target.width} × ${target.height}`);
+    appendBakeTargetDetail(card, 'Mode / Depth', `${target.documentMode} / ${target.documentDepth}`);
+    appendBakeTargetDetail(card, 'Status', target.status);
+
+    const renameInput = document.createElement('input');
+    renameInput.type = 'text';
+    renameInput.value = target.label;
+    renameInput.className = 'bake-target-rename-input';
+    renameInput.setAttribute('aria-label', `Rename ${target.targetId}`);
+    card.appendChild(renameInput);
+
+    const actions = document.createElement('div');
+    actions.className = 'bake-target-actions';
+    const renameButton = document.createElement('button');
+    renameButton.type = 'button';
+    renameButton.textContent = 'RENAME';
+    renameButton.disabled = state.bake.processing;
+    renameButton.onclick = () => {
+      if (state.bake.processing) return;
+      try {
+        state.bake.registry.renameTarget(target.targetId, renameInput.value);
+        state.bake.lastError = '';
+        publishBakeTargetRegistry(true);
+      } catch (error) {
+        state.bake.lastError = error.message || String(error);
+      }
+      render();
+    };
+    const setActiveButton = document.createElement('button');
+    setActiveButton.type = 'button';
+    setActiveButton.textContent = 'SET ACTIVE DOCUMENT';
+    setActiveButton.disabled = state.bake.processing || !app.activeDocument;
+    setActiveButton.onclick = () => {
+      if (state.bake.processing) return;
+      const doc = app.activeDocument;
+      if (!doc) {
+        state.bake.lastError = 'TARGET_NOT_SET: No active Photoshop document.';
+        render();
+        return;
+      }
+      state.bake.registry.replaceDocument(target.targetId, documentSnapshot(doc));
+      state.bake.lastError = '';
+      publishBakeTargetRegistry(true);
+      render();
+    };
+    const clearButton = document.createElement('button');
+    clearButton.type = 'button';
+    clearButton.textContent = 'CLEAR';
+    clearButton.disabled = state.bake.processing;
+    clearButton.onclick = () => {
+      if (state.bake.processing) return;
+      state.bake.registry.clearTarget(target.targetId);
+      state.bake.lastError = '';
+      publishBakeTargetRegistry(true);
+      render();
+    };
+    actions.appendChild(renameButton);
+    actions.appendChild(setActiveButton);
+    actions.appendChild(clearButton);
+    card.appendChild(actions);
+    elements.bakeTargetList.appendChild(card);
+  }
+}
+
 function renderBake() {
-  const target = currentBakeTargetStatus();
-  elements.bakeTargetStatus.textContent = target.status;
-  elements.bakeTargetName.textContent = target.documentName || '—';
-  elements.bakeTargetId.textContent = target.documentId ? String(target.documentId) : '—';
-  elements.bakeTargetDimensions.textContent = target.width ? `${target.width} × ${target.height}` : '—';
-  elements.bakeTargetMode.textContent = target.documentMode ? `${target.documentMode} / ${target.documentDepth}` : '—';
-  elements.setBakeTarget.disabled = state.bake.processing || !app.activeDocument;
-  elements.clearBakeTarget.disabled = state.bake.processing || !state.bake.target;
+  renderBakeTargets();
   elements.bakeState.textContent = state.bake.phase;
   elements.bakeJob.textContent = state.bake.current?.metadata?.jobId ? String(state.bake.current.metadata.jobId) : (state.bake.lastApplied?.jobId ? String(state.bake.lastApplied.jobId) : '—');
   const metadata = state.bake.current?.metadata || state.bake.lastApplied;
@@ -690,17 +790,16 @@ function validateBakeBegin(message) {
   if (!['CANONICAL', 'DIRECT'].includes(message.outputKind) || typeof message.familyId !== 'string' || !message.familyId || typeof message.outputId !== 'string' || !message.outputId) {
     throw bakeFailure('INVALID_BAKE_METADATA', 'familyId, outputKind, and outputId are required.');
   }
+  if (typeof message.targetId !== 'string' || !message.targetId || typeof message.targetSessionId !== 'string' || !message.targetSessionId) {
+    throw bakeFailure('INVALID_BAKE_METADATA', 'targetId and targetSessionId are required.');
+  }
   if (message.components !== 4 || message.componentSize !== 8 || message.pixelFormat !== 'RGBA' || message.alpha !== 'STRAIGHT' || message.orientation !== 'TOP_LEFT') {
     throw bakeFailure('INVALID_BAKE_FORMAT', 'Block 7 requires top-left straight RGBA8.');
   }
   const expectedBytes = message.width * message.height * 4;
   if (!Number.isSafeInteger(expectedBytes) || message.totalBytes !== expectedBytes || message.totalBytes > config.maxFrameBytes) throw bakeFailure('INVALID_BAKE_BYTES', 'Bake byte count is invalid or exceeds the configured maximum.');
   if (message.chunkSize > config.chunkSizeBytes || message.chunkCount !== Math.ceil(message.totalBytes / message.chunkSize)) throw bakeFailure('INVALID_BAKE_CHUNKS', 'Bake chunk contract is invalid.');
-  const targetStatus = currentBakeTargetStatus();
-  if (targetStatus.status !== 'READY') throw bakeFailure('TARGET_NOT_READY', `Bake Target is ${targetStatus.status}.`);
-  if (targetStatus.documentId !== message.targetDocumentId) throw bakeFailure('TARGET_IDENTITY_MISMATCH', 'Bake Target identity does not match the request.');
-  if (targetStatus.width !== message.width || targetStatus.height !== message.height) throw bakeFailure('TARGET_DIMENSION_MISMATCH', `Target is ${targetStatus.width} × ${targetStatus.height}; output is ${message.width} × ${message.height}.`);
-  if (targetStatus.documentMode !== 'RGB' || targetStatus.documentDepth !== 8) throw bakeFailure('TARGET_UNSUPPORTED', 'Block 7 requires an RGB 8-bit Bake Target.');
+  return state.bake.registry.validateJobTarget(message, findOpenDocumentSnapshot);
 }
 
 function sendBakeError(message, error) {
@@ -711,6 +810,7 @@ function sendBakeError(message, error) {
   if (isSocketOpen()) sendJson({ type: 'BAKE_ERROR', jobId: message?.jobId ?? null, code, message: detail });
   state.bake.current = null;
   state.bake.processing = false;
+  publishBakeTargetRegistry();
   render();
 }
 
@@ -771,10 +871,14 @@ async function applyReceivedBake(frame) {
   let stagingLayer = null;
   let activeDocumentRestored = originalDocumentId === metadata.targetDocumentId;
   return core.executeAsModal(async () => {
-    const target = findOpenDocument(metadata.targetDocumentId);
+    const registeredTarget = state.bake.registry.getTarget(metadata.targetId);
+    if (!registeredTarget || registeredTarget.documentId !== metadata.targetDocumentId) {
+      throw bakeFailure('TARGET_IDENTITY_MISMATCH', 'Registered Target no longer matches the Bake Job.');
+    }
+    const target = findOpenDocument(registeredTarget.documentId);
     if (!target) throw bakeFailure('TARGET_CLOSED', 'Bake Target was closed before apply.');
     const currentTarget = documentSnapshot(target);
-    if (currentTarget.documentName !== state.bake.target?.documentName || currentTarget.width !== metadata.width || currentTarget.height !== metadata.height || currentTarget.documentMode !== 'RGB' || currentTarget.documentDepth !== 8) {
+    if (currentTarget.documentName !== registeredTarget.documentName || currentTarget.width !== metadata.width || currentTarget.height !== metadata.height || currentTarget.documentMode !== 'RGB' || currentTarget.documentDepth !== 8) {
       throw bakeFailure('TARGET_CHANGED', 'Bake Target identity, dimensions, mode, or depth changed before apply.');
     }
     if (originalDocumentId !== target.id) await activateDocument(target.id);
@@ -824,6 +928,9 @@ async function applyReceivedBake(frame) {
         familyId: metadata.familyId,
         outputKind: metadata.outputKind,
         outputId: metadata.outputId,
+        targetId: metadata.targetId,
+        targetSessionId: metadata.targetSessionId,
+        targetLabel: registeredTarget.label,
         targetDocumentId: target.id,
         width: metadata.width,
         height: metadata.height,
@@ -878,7 +985,7 @@ async function handleBakeEnd(message) {
   } finally {
     state.bake.processing = false;
     state.bake.suppressAutoSyncUntil = performance.now() + 1000;
-    publishBakeTargetStatus();
+    publishBakeTargetRegistry();
     refreshDocumentInfo();
     render();
   }
@@ -889,11 +996,12 @@ function handleJson(message) {
     case 'HELLO_ACK':
       state.handshake = true;
       state.connectionState = state.rendererConnected ? 'CONNECTED' : 'WAITING FOR RENDERER';
-      publishBakeTargetStatus();
+      publishBakeTargetRegistry(true);
       break;
     case 'LINK_STATUS':
       state.rendererConnected = Boolean(message.rendererConnected);
       state.connectionState = state.rendererConnected && state.handshake ? 'CONNECTED' : 'WAITING FOR RENDERER';
+      if (state.rendererConnected) publishBakeTargetRegistry(true);
       break;
     case 'BAKE_BEGIN':
       handleBakeBegin(message);
@@ -1196,7 +1304,7 @@ async function runRequestedSend(reason = 'manual') {
 
 elements.connectButton.onclick = () => connect(true);
 elements.sendButton.onclick = () => requestLatestFrame('manual');
-elements.setBakeTarget.onclick = () => {
+elements.addBakeTarget.onclick = () => {
   if (state.bake.processing) return;
   const doc = app.activeDocument;
   if (!doc) {
@@ -1204,16 +1312,22 @@ elements.setBakeTarget.onclick = () => {
     render();
     return;
   }
-  state.bake.target = documentSnapshot(doc);
-  state.bake.lastError = '';
-  publishBakeTargetStatus();
-  render();
-};
-elements.clearBakeTarget.onclick = () => {
-  if (state.bake.processing) return;
-  state.bake.target = null;
-  state.bake.lastError = '';
-  publishBakeTargetStatus();
+  try {
+    const familyId = elements.bakeTargetFamilySelect.value;
+    const outputKind = elements.bakeTargetOutputSelect.value;
+    const defaultLabel = `${familyId.replace(/^ANAMORPHIC_/, '').replace(/_/g, ' ')} ${outputKind}`;
+    state.bake.registry.addTarget({
+      label: elements.bakeTargetLabelInput.value.trim() || defaultLabel,
+      documentSnapshot: documentSnapshot(doc),
+      familyId,
+      outputKind
+    });
+    elements.bakeTargetLabelInput.value = '';
+    state.bake.lastError = '';
+    publishBakeTargetRegistry(true);
+  } catch (error) {
+    state.bake.lastError = error.message || String(error);
+  }
   render();
 };
 elements.autoSync.onchange = () => { void setAutoSyncEnabled(elements.autoSync.checked); };
@@ -1228,3 +1342,7 @@ elements.probeClear.onclick = clearEventProbe;
 refreshDocumentInfo();
 render();
 connect(false);
+setInterval(() => {
+  renderBake();
+  publishBakeTargetRegistry();
+}, 1000);

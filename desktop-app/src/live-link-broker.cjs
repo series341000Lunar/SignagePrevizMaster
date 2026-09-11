@@ -13,6 +13,9 @@ function validateBakeMetadata(message, config) {
   if (typeof message.familyId !== 'string' || !message.familyId || message.familyId.length > 128) throw new Error('familyId must be a non-empty string of at most 128 characters.');
   if (!BAKE_OUTPUT_KINDS.has(message.outputKind)) throw new Error('outputKind must be CANONICAL or DIRECT.');
   if (typeof message.outputId !== 'string' || !message.outputId || message.outputId.length > 256) throw new Error('outputId must be a non-empty string of at most 256 characters.');
+  if (typeof message.targetId !== 'string' || !message.targetId || message.targetId.length > 128) throw new Error('targetId must be a non-empty string of at most 128 characters.');
+  if (typeof message.targetSessionId !== 'string' || !message.targetSessionId || message.targetSessionId.length > 128) throw new Error('targetSessionId must be a non-empty string of at most 128 characters.');
+  if (message.bindingKey !== `${message.familyId}:${message.outputKind}`) throw new Error('bindingKey must exactly match familyId:outputKind.');
   if (message.components !== 4 || message.componentSize !== 8 || message.pixelFormat !== 'RGBA') throw new Error('Block 7 accepts only RGBA8 output.');
   if (message.alpha !== 'STRAIGHT' || message.orientation !== 'TOP_LEFT') throw new Error('Block 7 requires straight alpha and TOP_LEFT orientation.');
   const expectedBytes = message.width * message.height * 4;
@@ -21,6 +24,34 @@ function validateBakeMetadata(message, config) {
   if (message.chunkSize > config.chunkSizeBytes) throw new Error('chunkSize exceeds the configured limit.');
   if (message.chunkCount !== Math.ceil(message.totalBytes / message.chunkSize)) throw new Error('chunkCount does not match totalBytes/chunkSize.');
   return expectedBytes;
+}
+
+function validateBakeTargetRegistrySnapshot(message) {
+  if (message.registryAuthority !== 'UXP' || message.scope !== 'SESSION') throw new Error('Bake Target Registry must be UXP-authoritative and session-scoped.');
+  if (typeof message.sessionId !== 'string' || !message.sessionId || message.sessionId.length > 128) throw new Error('Bake Target Registry sessionId is invalid.');
+  if (!Array.isArray(message.targets) || !Array.isArray(message.bindings)) throw new Error('Bake Target Registry targets and bindings must be arrays.');
+  if (message.targets.length > 256 || message.bindings.length > 512) throw new Error('Bake Target Registry exceeds the bounded session capacity.');
+  const targetIds = new Set();
+  const targetStatuses = new Set(['READY', 'CLOSED', 'IDENTITY_CHANGED', 'DIMENSION_CHANGED', 'MODE_CHANGED', 'DEPTH_CHANGED']);
+  for (const target of message.targets) {
+    if (typeof target.targetId !== 'string' || !target.targetId || target.targetId.length > 128 || targetIds.has(target.targetId)) throw new Error('Bake Target Registry contains an invalid or duplicate targetId.');
+    targetIds.add(target.targetId);
+    for (const field of ['documentId', 'width', 'height']) {
+      if (!Number.isSafeInteger(target[field]) || target[field] <= 0) throw new Error(`Bake Target ${target.targetId} has invalid ${field}.`);
+    }
+    if (typeof target.label !== 'string' || !target.label || typeof target.documentName !== 'string' || !target.documentName) throw new Error(`Bake Target ${target.targetId} identity is incomplete.`);
+    if (!targetStatuses.has(target.status) || typeof target.documentMode !== 'string' || !target.documentMode || !(target.documentDepth === 8 || typeof target.documentDepth === 'string')) {
+      throw new Error(`Bake Target ${target.targetId} status, mode, or depth is invalid.`);
+    }
+  }
+  const bindingKeys = new Set();
+  for (const binding of message.bindings) {
+    const expectedKey = `${binding.familyId}:${binding.outputKind}`;
+    if (!['DIRECT', 'CANONICAL'].includes(binding.outputKind) || binding.bindingKey !== expectedKey || bindingKeys.has(binding.bindingKey)) throw new Error('Bake Target Registry contains an invalid or duplicate binding.');
+    if (!targetIds.has(binding.targetId)) throw new Error('Bake Target Registry binding references an unknown targetId.');
+    bindingKeys.add(binding.bindingKey);
+  }
+  return true;
 }
 
 function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, replaceExistingRoles = false } = {}) {
@@ -280,7 +311,7 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
         }, config.ackTimeoutMs)
       };
       sendJson(activeBake.photoshop, activeBake.metadata);
-      emit('bake-begin', { jobId: message.jobId, familyId: message.familyId, outputKind: message.outputKind, totalBytes: message.totalBytes });
+      emit('bake-begin', { jobId: message.jobId, familyId: message.familyId, outputKind: message.outputKind, targetId: message.targetId, totalBytes: message.totalBytes });
     } catch (error) {
       sendJson(socket, { type: 'BAKE_ERROR', jobId: message.jobId ?? null, code: 'INVALID_BAKE_METADATA', message: error.message });
       emit('bake-rejected', { jobId: message.jobId ?? null, code: 'INVALID_BAKE_METADATA', message: error.message });
@@ -365,20 +396,31 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       return;
     }
     if (message.type === 'BAKE_APPLIED') {
-      if (!activeBake.receiveAcknowledged || message.targetDocumentId !== activeBake.metadata.targetDocumentId || !Number.isSafeInteger(message.layerId) || message.layerId <= 0) return abortActiveBake('INVALID_BAKE_APPLY_ACK', 'Photoshop apply acknowledgement is invalid.');
+      if (!activeBake.receiveAcknowledged ||
+          message.targetId !== activeBake.metadata.targetId ||
+          message.targetSessionId !== activeBake.metadata.targetSessionId ||
+          message.targetDocumentId !== activeBake.metadata.targetDocumentId ||
+          !Number.isSafeInteger(message.layerId) || message.layerId <= 0) {
+        return abortActiveBake('INVALID_BAKE_APPLY_ACK', 'Photoshop apply acknowledgement is invalid.');
+      }
       if (activeBake.timer) clearTimeout(activeBake.timer);
       sendJson(activeBake.renderer, message);
-      emit('bake-applied', { jobId: message.jobId, targetDocumentId: message.targetDocumentId, layerId: message.layerId });
+      emit('bake-applied', { jobId: message.jobId, targetId: message.targetId, targetDocumentId: message.targetDocumentId, layerId: message.layerId });
       activeBake = null;
       return;
     }
     abortActiveBake(message.code || 'APPLY_ERROR', message.message || 'Photoshop failed to apply the bake.', false);
   }
 
-  function handleBakeTargetStatus(socket, message) {
+  function handleBakeTargetRegistry(socket, message) {
     if (socket !== clients.photoshop) return sendError(socket, 'ROLE_VIOLATION', 'Only Photoshop may report bake target status.');
-    sendJson(clients.renderer, message);
-    emit('bake-target-status', { status: message.status || 'UNKNOWN', documentId: message.documentId ?? null });
+    try {
+      validateBakeTargetRegistrySnapshot(message);
+      sendJson(clients.renderer, message);
+      emit('bake-target-registry', { sessionId: message.sessionId, targetCount: message.targets.length, bindingCount: message.bindings.length });
+    } catch (error) {
+      sendError(socket, 'INVALID_BAKE_TARGET_REGISTRY', error.message);
+    }
   }
 
   function handleHello(socket, message) {
@@ -533,7 +575,7 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       case 'BAKE_ERROR':
         handleBakeResponse(socket, message);
         break;
-      case 'BAKE_TARGET_STATUS': handleBakeTargetStatus(socket, message); break;
+      case 'BAKE_TARGET_REGISTRY': handleBakeTargetRegistry(socket, message); break;
       case 'POINTER_SET':
       case 'POINTER_CLEAR':
         handlePointerCommand(socket, message);
@@ -615,4 +657,4 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
   };
 }
 
-module.exports = { createLiveLinkBroker, validateBakeMetadata };
+module.exports = { createLiveLinkBroker, validateBakeMetadata, validateBakeTargetRegistrySnapshot };

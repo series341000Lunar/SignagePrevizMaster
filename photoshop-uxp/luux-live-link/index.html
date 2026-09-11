@@ -22,16 +22,28 @@
     </section>
 
     <section>
-      <h2>Bake Target</h2>
+      <h2>Bake Targets</h2>
       <div class="diagnostics">
-        <div class="diagnostic-row"><span class="label">Status</span><span id="bake-target-status" class="value">NOT SET</span></div>
-        <div class="diagnostic-row"><span class="label">Document</span><span id="bake-target-name" class="value">—</span></div>
-        <div class="diagnostic-row"><span class="label">Identity</span><span id="bake-target-id" class="value">—</span></div>
-        <div class="diagnostic-row"><span class="label">Dimensions</span><span id="bake-target-dimensions" class="value">—</span></div>
-        <div class="diagnostic-row"><span class="label">Mode / Depth</span><span id="bake-target-mode" class="value">—</span></div>
+        <div class="diagnostic-row"><span class="label">Registry Authority</span><span class="value">UXP</span></div>
+        <div class="diagnostic-row"><span class="label">Scope</span><span class="value">SESSION</span></div>
+        <div class="diagnostic-row"><span class="label">Registered</span><span id="bake-target-count" class="value">0</span></div>
+        <div class="diagnostic-row"><span class="label">Session</span><span id="bake-target-session" class="value">—</span></div>
       </div>
-      <button id="set-bake-target" type="button">SET ACTIVE AS BAKE TARGET</button>
-      <button id="clear-bake-target" type="button" disabled>CLEAR BAKE TARGET</button>
+      <p class="hint bake-target-hint">The Active Document is registration input only. It never becomes a Bake destination automatically.</p>
+      <label class="field-label" for="bake-target-label-input">Target label</label>
+      <input id="bake-target-label-input" type="text" placeholder="e.g. FRONT DIRECT">
+      <label class="field-label" for="bake-target-family-select">Family binding</label>
+      <select id="bake-target-family-select">
+        <option value="ANAMORPHIC_FRONT_75F">FRONT 75F</option>
+        <option value="ANAMORPHIC_BACK">BACK</option>
+      </select>
+      <label class="field-label" for="bake-target-output-select">Output binding</label>
+      <select id="bake-target-output-select">
+        <option value="DIRECT">DIRECT</option>
+        <option value="CANONICAL">CANONICAL</option>
+      </select>
+      <button id="add-bake-target" type="button">+ REGISTER ACTIVE TARGET</button>
+      <div id="bake-target-list" class="bake-target-list"></div>
     </section>
 
     <section>
