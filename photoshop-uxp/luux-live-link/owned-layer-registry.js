@@ -25,6 +25,15 @@ function normalizeCompositeMetadata(value) {
   return Object.freeze({ opacity, blendMode, visible: Boolean(value.visible), order });
 }
 
+function compactAuthoringOrderMap(authoringOrders) {
+  if (!Array.isArray(authoringOrders)) throw new Error('authoringOrders must be an array.');
+  const orders = authoringOrders.map((value) => Number(value));
+  if (orders.some((value) => !Number.isSafeInteger(value) || value < 0) || new Set(orders).size !== orders.length) {
+    throw new Error('authoringOrders must contain unique non-negative safe integers.');
+  }
+  return new Map([...orders].sort((a, b) => a - b).map((order, photoshopOrder) => [order, photoshopOrder]));
+}
+
 function createOwnedLayerRegistry({ sessionId }) {
   const registrySessionId = requireText(sessionId, 'sessionId', 128);
   const records = new Map();
@@ -67,4 +76,11 @@ function createOwnedLayerRegistry({ sessionId }) {
   });
 }
 
-module.exports = { SUPPORTED_COMPOSITE_MODES, normalizeCompositeMetadata, ownedLayerBindingKey, ownedLayerKey, createOwnedLayerRegistry };
+module.exports = {
+  SUPPORTED_COMPOSITE_MODES,
+  normalizeCompositeMetadata,
+  compactAuthoringOrderMap,
+  ownedLayerBindingKey,
+  ownedLayerKey,
+  createOwnedLayerRegistry
+};

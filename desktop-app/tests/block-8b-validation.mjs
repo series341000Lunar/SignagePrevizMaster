@@ -43,8 +43,8 @@ for (let index = 0; index < 3; index += 1) {
   assert.deepEqual(stack.selectedLayer.transform, transformTargets[index]);
   const frameA = { x: 0, y: 0, width: 800, height: 1024 };
   const frameB = { x: 0, y: 0, width: 1600, height: 2048 };
-  const rectA = transformToViewportRect(stack.selectedLayer.transform, stack.selectedLayer.source, 3000 / 3840, frameA);
-  const rectB = transformToViewportRect(stack.selectedLayer.transform, stack.selectedLayer.source, 3000 / 3840, frameB);
+  const rectA = transformToViewportRect(stack.selectedLayer.transform, stack.selectedLayer.source, 3000 / 3840, frameA, { width: 3000, height: 3840 });
+  const rectB = transformToViewportRect(stack.selectedLayer.transform, stack.selectedLayer.source, 3000 / 3840, frameB, { width: 3000, height: 3840 });
   assert.equal(rectA.centerX / frameA.width, rectB.centerX / frameB.width);
   assert.equal(rectA.centerY / frameA.height, rectB.centerY / frameB.height);
   assert.equal(rectA.width / frameA.width, rectB.width / frameB.width);

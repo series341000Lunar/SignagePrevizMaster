@@ -9,6 +9,7 @@ Directive SHA-256: `A8259BE01CA0CDEB36D9AFEF75BCB27FAAE57614FCF95D310CA1B78BAEF4
 - Automated technical validation: `PASS`
 - User visual / Photoshop validation: `PASS — 2026-09-12`
 - Block 8C gate: `CLOSED`
+- Post-close sparse Send-order correction: `AUTOMATED PASS / USER PHOTOSHOP RETEST PENDING — 2026-09-13`
 
 Automated evidence and user acceptance remain separate. Block 8C is closed on
 the user's explicit PASS of the real Photoshop UXP multi-layer workflow.
@@ -161,3 +162,20 @@ USER VALIDATION: **PASS — 2026-09-12**
 The user's final assessment was that the workflow operates correctly, with the
 non-ASCII filename limitation accepted only as the Known Issue documented
 above.
+
+## Post-close sparse per-layer Send correction — 2026-09-13
+
+The user later reproduced a distinct ordering failure while simulating a merged
+send by transmitting layers one at a time. Sending the authoring layer at stack
+order `2` before orders `0` and `1` created the first and only owned Photoshop
+layer at physical group order `0`. UXP incorrectly compared those two different
+coordinate spaces and rejected the otherwise valid apply with
+`order requested 2 but Photoshop reports 0`.
+
+The correction keeps full-stack authoring order as transport/ACK metadata, but
+maps only the already-sent owned-layer subset to compact Photoshop indices.
+Thus authored orders `[2]` map to Photoshop `[0]`, `[0, 2]` map to `[0, 1]`,
+and all three authored orders converge to `[0, 1, 2]`. Relative order remains
+authoritative; no placeholder layers are created for unsent layers. Automated
+Block 8C coverage passes. A real Photoshop retry of the previously failing
+order-2-first Send remains pending and is not auto-passed.

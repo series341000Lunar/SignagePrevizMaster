@@ -11,6 +11,7 @@ import {
   updateVectorMaskPoint,
   vectorMaskPath
 } from './vector-mask-model.js';
+import { cloneBitmapProvenance, commonFileSource } from './bitmap-source.js';
 
 const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg']);
 const SUPPORTED_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
@@ -28,27 +29,34 @@ export const DEFAULT_AUTHORING_TRANSFORM = Object.freeze({
 const finite = (value, fallback) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
 
-function normalizeSource(source) {
+export function normalizeBitmapSource(source) {
   if (!source || !(source.width > 0 && source.height > 0) || !isSupportedImageFile(source)) {
     throw new Error('Projection authoring accepts only decoded PNG or JPG/JPEG files with original dimensions.');
   }
+  const common = source.sourceType === 'FILE' || !source.sourceType ? commonFileSource(source) : source;
   const normalized = {
-    id: String(source.id),
-    filename: String(source.filename || source.name),
-    name: String(source.filename || source.name),
-    mimeType: String(source.mimeType || source.type).toLowerCase(),
-    type: String(source.mimeType || source.type).toLowerCase(),
-    width: Number(source.width),
-    height: Number(source.height),
-    hasAlpha: Boolean(source.hasAlpha),
-    byteLength: Number(source.byteLength || 0)
+    id: String(common.id),
+    sourceId: String(common.sourceId || common.id),
+    filename: String(common.filename || common.name),
+    name: String(common.filename || common.name),
+    mimeType: String(common.mimeType || common.type).toLowerCase(),
+    type: String(common.mimeType || common.type).toLowerCase(),
+    width: Number(common.width),
+    height: Number(common.height),
+    hasAlpha: Boolean(common.hasAlpha),
+    byteLength: Number(common.byteLength || 0),
+    sourceType: String(common.sourceType || 'FILE'),
+    alphaContract: String(common.alphaContract || 'EMBEDDED_FILE_ALPHA'),
+    colorContract: String(common.colorContract || 'EMBEDDED_FILE_PROFILE'),
+    provenance: cloneBitmapProvenance(common.provenance)
   };
-  if (source.sourceType) normalized.sourceType = String(source.sourceType);
-  if (source.assetReference) normalized.assetReference = String(source.assetReference);
-  if (source.originalFilename) normalized.originalFilename = String(source.originalFilename);
-  if (source.sha256) normalized.sha256 = String(source.sha256);
+  if (common.assetReference) normalized.assetReference = String(common.assetReference);
+  if (common.originalFilename) normalized.originalFilename = String(common.originalFilename);
+  if (common.sha256) normalized.sha256 = String(common.sha256);
   return Object.freeze(normalized);
 }
+
+const normalizeSource = normalizeBitmapSource;
 
 export function isSupportedImageFile({ name = '', type = '' } = {}) {
   const extension = String(name).split('.').pop()?.toLowerCase() || '';
@@ -82,20 +90,29 @@ export function normalizeAuthoringTransform(value = DEFAULT_AUTHORING_TRANSFORM)
   });
 }
 
-export function computeNormalizedImageSize({ sourceWidth, sourceHeight, frameAspect, scale = 1, fitFraction = 0.75 }) {
-  if (!(sourceWidth > 0 && sourceHeight > 0 && frameAspect > 0)) throw new Error('Source dimensions and frame aspect must be positive.');
+export function computeNormalizedImageSize({ sourceWidth, sourceHeight, frameWidth, frameHeight, frameAspect, scale = 1 }) {
+  if (!(sourceWidth > 0 && sourceHeight > 0)) throw new Error('Source dimensions must be positive.');
+  const normalizedScale = clamp(finite(scale, 1), 0.01, 20);
+  if (frameWidth > 0 && frameHeight > 0) {
+    return Object.freeze({
+      width: sourceWidth / frameWidth * normalizedScale,
+      height: sourceHeight / frameHeight * normalizedScale
+    });
+  }
+  if (!(frameAspect > 0)) throw new Error('Frame dimensions or frame aspect must be positive.');
   const sourceAspect = sourceWidth / sourceHeight;
-  const normalizedScale = clamp(finite(scale, 1), 0.01, 20) * fitFraction;
   return sourceAspect >= frameAspect
     ? Object.freeze({ width: normalizedScale, height: normalizedScale * frameAspect / sourceAspect })
     : Object.freeze({ width: normalizedScale * sourceAspect / frameAspect, height: normalizedScale });
 }
 
-export function screenPointToSourceUv(point, source, frameAspect, transform = DEFAULT_AUTHORING_TRANSFORM) {
+export function screenPointToSourceUv(point, source, frameAspect, transform = DEFAULT_AUTHORING_TRANSFORM, frameResolution = null) {
   const current = normalizeAuthoringTransform(transform);
   const size = computeNormalizedImageSize({
     sourceWidth: source.width,
     sourceHeight: source.height,
+    frameWidth: frameResolution?.width,
+    frameHeight: frameResolution?.height,
     frameAspect,
     scale: current.scale
   });
@@ -111,11 +128,13 @@ export function screenPointToSourceUv(point, source, frameAspect, transform = DE
   return Object.freeze({ u, v, inside: u >= 0 && u <= 1 && v >= 0 && v <= 1 });
 }
 
-export function sourceUvToScreenPoint(uv, source, frameAspect, transform = DEFAULT_AUTHORING_TRANSFORM) {
+export function sourceUvToScreenPoint(uv, source, frameAspect, transform = DEFAULT_AUTHORING_TRANSFORM, frameResolution = null) {
   const current = normalizeAuthoringTransform(transform);
   const size = computeNormalizedImageSize({
     sourceWidth: source.width,
     sourceHeight: source.height,
+    frameWidth: frameResolution?.width,
+    frameHeight: frameResolution?.height,
     frameAspect,
     scale: current.scale
   });
@@ -130,9 +149,16 @@ export function sourceUvToScreenPoint(uv, source, frameAspect, transform = DEFAU
   });
 }
 
-export function transformToViewportRect(transform, source, frameAspect, viewport) {
+export function transformToViewportRect(transform, source, frameAspect, viewport, frameResolution = null) {
   const current = normalizeAuthoringTransform(transform);
-  const size = computeNormalizedImageSize({ sourceWidth: source.width, sourceHeight: source.height, frameAspect, scale: current.scale });
+  const size = computeNormalizedImageSize({
+    sourceWidth: source.width,
+    sourceHeight: source.height,
+    frameWidth: frameResolution?.width,
+    frameHeight: frameResolution?.height,
+    frameAspect,
+    scale: current.scale
+  });
   return Object.freeze({
     centerX: viewport.x + current.x * viewport.width,
     centerY: viewport.y + current.y * viewport.height,
@@ -353,7 +379,7 @@ export class ScreenImageLayerStack {
     layers.forEach((layer, index) => { layer.order = index; });
   }
 
-  addLayer(source, familyId = this.activeFamilyId, runtime = source) {
+  addLayer(source, familyId = this.activeFamilyId, runtime = source, initialState = {}) {
     if (familyId === null || familyId === undefined) throw new Error('A familyId is required before adding a layer.');
     const key = String(familyId);
     this.activateFamily(key);
@@ -361,9 +387,9 @@ export class ScreenImageLayerStack {
       layerId: this.nextLayerId(),
       source: normalizeSource(source),
       runtime,
-      transform: DEFAULT_AUTHORING_TRANSFORM,
+      transform: normalizeAuthoringTransform(initialState.transform || DEFAULT_AUTHORING_TRANSFORM),
       visible: true,
-      opacity: 1,
+      opacity: clamp(finite(initialState.opacity, 1), 0, 1),
       blendMode: AUTHORING_BLEND_MODE,
       vectorMask: createEmptyVectorMask(),
       order: 0,

@@ -6,6 +6,7 @@ const ROLES = new Set(['photoshop', 'renderer']);
 const BAKE_OUTPUT_KINDS = new Set(['CANONICAL', 'DIRECT']);
 const BAKE_BLEND_MODES = new Set(['NORMAL', 'MULTIPLY', 'SCREEN', 'LINEAR_DODGE']);
 const BAKE_OPACITY_TOLERANCE = (0.5 / 255) + 0.000001;
+const SNAPSHOT_CAPTURE_MODES = new Set(['COMPOSITE', 'SINGLE_PIXEL_LAYER']);
 
 function bakeAckFailure(code, field, expected, actual) {
   const error = new Error(`${field} expected ${JSON.stringify(expected)} but received ${JSON.stringify(actual)}.`);
@@ -114,18 +115,71 @@ function validateBakeTargetRegistrySnapshot(message) {
   return true;
 }
 
+function validateSnapshotRequest(message) {
+  for (const field of ['snapshotJobId', 'captureRequestId', 'projectSessionId', 'familyId']) {
+    if (typeof message[field] !== 'string' || !message[field] || message[field].length > 128) throw new Error(`${field} must be a non-empty string of at most 128 characters.`);
+  }
+  if (!SNAPSHOT_CAPTURE_MODES.has(message.captureMode)) throw new Error('captureMode must be COMPOSITE or SINGLE_PIXEL_LAYER.');
+  return true;
+}
+
+function validateSnapshotMetadata(message, config) {
+  validateSnapshotRequest(message);
+  const integerFields = ['documentId', 'documentWidth', 'documentHeight', 'width', 'height', 'components', 'componentSize', 'totalBytes', 'chunkSize', 'chunkCount', 'level'];
+  for (const field of integerFields) {
+    if (!Number.isSafeInteger(message[field]) || message[field] < 0) throw new Error(`${field} must be a non-negative safe integer.`);
+  }
+  if ([message.documentId, message.documentWidth, message.documentHeight, message.width, message.height, message.totalBytes, message.chunkSize, message.chunkCount].some((value) => value <= 0)) {
+    throw new Error('Snapshot identity, dimensions, byte count, and chunk values must be positive.');
+  }
+  if (message.level !== 0) throw new Error('Snapshot must use native Photoshop pyramid level 0.');
+  if (message.componentSize !== 8 || ![3, 4].includes(message.components) || message.pixelFormat !== (message.components === 3 ? 'RGB' : 'RGBA')) {
+    throw new Error('Snapshot must contain chunky RGB8 or RGBA8 pixels.');
+  }
+  const bounds = message.captureBounds;
+  if (!bounds || !['left', 'top', 'right', 'bottom'].every((field) => Number.isSafeInteger(bounds[field])) ||
+      bounds.right - bounds.left !== message.width || bounds.bottom - bounds.top !== message.height) {
+    throw new Error('Snapshot captureBounds must match bitmap dimensions 1:1.');
+  }
+  const expectedBytes = message.width * message.height * message.components;
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes !== message.totalBytes) throw new Error('Snapshot totalBytes does not match dimensions.');
+  if (message.totalBytes > config.maxFrameBytes || message.chunkSize > config.chunkSizeBytes || message.chunkCount !== Math.ceil(message.totalBytes / message.chunkSize)) {
+    throw new Error('Snapshot transfer exceeds limits or has inconsistent chunks.');
+  }
+  const expectedType = message.captureMode === 'COMPOSITE' ? 'PHOTOSHOP_COMPOSITE_SNAPSHOT' : 'PHOTOSHOP_SELECTION_SNAPSHOT';
+  if (message.sourceType !== expectedType) throw new Error('Snapshot sourceType does not match captureMode.');
+  if (typeof message.documentName !== 'string' || !message.documentName || !Number.isFinite(Date.parse(message.captureTimestamp))) {
+    throw new Error('Snapshot documentName or captureTimestamp is invalid.');
+  }
+  if (message.captureMode === 'SINGLE_PIXEL_LAYER') {
+    if (!Array.isArray(message.selectedLayerIds) || !Array.isArray(message.selectedLayerNames) ||
+        message.selectedLayerIds.length !== 1 || message.selectedLayerNames.length !== 1 ||
+        !Number.isSafeInteger(message.selectedLayerIds[0]) || message.selectedLayerIds[0] <= 0 ||
+        typeof message.selectedLayerNames[0] !== 'string' || !message.selectedLayerNames[0]) {
+      throw new Error('Selection Snapshot requires exactly one Pixel Layer identity.');
+    }
+    if (!Number.isFinite(message.selectedLayerOpacity) || message.selectedLayerOpacity < 0 || message.selectedLayerOpacity > 1) {
+      throw new Error('Selection Snapshot requires normalized Photoshop layer opacity from 0 to 1.');
+    }
+  }
+  return expectedBytes;
+}
+
 function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, replaceExistingRoles = false } = {}) {
   if (!config) throw new Error('Live-link config is required.');
 
   const makeServer = serverFactory || ((options) => new WebSocketServer(options));
   const clients = { photoshop: null, renderer: null };
   let activeFrame = null;
+  let activeSnapshot = null;
   let activeBake = null;
   let activePointerRequest = null;
   const seenPointerRequestIds = new Set();
   const seenPointerRequestOrder = [];
   const seenBakeJobIds = new Set();
   const seenBakeJobOrder = [];
+  const seenSnapshotJobIds = new Set();
+  const seenSnapshotJobOrder = [];
   const server = makeServer({
     host: config.host,
     port: config.port,
@@ -177,6 +231,136 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
     sendJson(activeFrame.renderer, { type: 'FRAME_ABORT', code, message, frameId });
     emit('frame-aborted', { code, message, frameId });
     activeFrame = null;
+  }
+
+  function rememberSnapshotJobId(snapshotJobId) {
+    seenSnapshotJobIds.add(snapshotJobId);
+    seenSnapshotJobOrder.push(snapshotJobId);
+    if (seenSnapshotJobOrder.length > 256) seenSnapshotJobIds.delete(seenSnapshotJobOrder.shift());
+  }
+
+  function abortActiveSnapshot(code, message, notifyPhotoshop = true, notifyRenderer = true) {
+    if (!activeSnapshot) return;
+    const { snapshotJobId } = activeSnapshot.request;
+    if (activeSnapshot.timer) clearTimeout(activeSnapshot.timer);
+    const payload = { type: 'SNAPSHOT_ERROR', snapshotJobId, code, message };
+    if (notifyRenderer) sendJson(activeSnapshot.renderer, payload);
+    if (notifyPhotoshop) sendJson(activeSnapshot.photoshop, payload);
+    emit('snapshot-aborted', { snapshotJobId, code, message });
+    activeSnapshot = null;
+  }
+
+  function handleSnapshotRequest(socket, message) {
+    if (socket !== clients.renderer) return sendJson(socket, { type: 'SNAPSHOT_ERROR', snapshotJobId: message.snapshotJobId ?? null, code: 'ROLE_VIOLATION', message: 'Only the renderer may request a Snapshot.' });
+    try {
+      validateSnapshotRequest(message);
+      if (activeSnapshot) throw Object.assign(new Error('Another Snapshot job is active.'), { code: 'SNAPSHOT_BUSY' });
+      if (activeFrame) throw Object.assign(new Error('A Live frame transfer is active.'), { code: 'LARGE_TRANSFER_BUSY' });
+      if (seenSnapshotJobIds.has(message.snapshotJobId)) throw Object.assign(new Error('snapshotJobId was already used in this renderer session.'), { code: 'DUPLICATE_SNAPSHOT_JOB' });
+      if (!isOpen(clients.photoshop)) throw Object.assign(new Error('Photoshop UXP is not connected.'), { code: 'UXP_DISCONNECTED' });
+      rememberSnapshotJobId(message.snapshotJobId);
+      activeSnapshot = {
+        request: { ...message }, metadata: null, expectedBytes: 0, receivedBytes: 0, receivedChunks: 0,
+        pendingChunk: null, renderer: socket, photoshop: clients.photoshop, ended: false,
+        timer: setTimeout(() => {
+          if (activeSnapshot?.request.snapshotJobId === message.snapshotJobId) abortActiveSnapshot('SNAPSHOT_TIMEOUT', `Snapshot did not complete within ${config.ackTimeoutMs} ms.`);
+        }, config.ackTimeoutMs)
+      };
+      sendJson(activeSnapshot.photoshop, activeSnapshot.request);
+      emit('snapshot-request', { snapshotJobId: message.snapshotJobId, captureMode: message.captureMode, familyId: message.familyId });
+    } catch (error) {
+      sendJson(socket, { type: 'SNAPSHOT_ERROR', snapshotJobId: message.snapshotJobId ?? null, code: error.code || 'INVALID_SNAPSHOT_REQUEST', message: error.message });
+    }
+  }
+
+  function handleSnapshotBegin(socket, message) {
+    if (!activeSnapshot || socket !== activeSnapshot.photoshop || message.snapshotJobId !== activeSnapshot.request.snapshotJobId) {
+      return sendJson(socket, { type: 'SNAPSHOT_ERROR', snapshotJobId: message.snapshotJobId ?? null, code: 'UNEXPECTED_SNAPSHOT_BEGIN', message: 'SNAPSHOT_BEGIN does not match an active request.' });
+    }
+    try {
+      const expectedBytes = validateSnapshotMetadata(message, config);
+      for (const field of ['captureRequestId', 'projectSessionId', 'familyId', 'captureMode']) {
+        if (message[field] !== activeSnapshot.request[field]) throw new Error(`${field} does not match the Snapshot request.`);
+      }
+      activeSnapshot.metadata = { ...message, brokerReceivedAtEpochMs: Date.now() };
+      activeSnapshot.expectedBytes = expectedBytes;
+      sendJson(activeSnapshot.renderer, activeSnapshot.metadata);
+      emit('snapshot-begin', { snapshotJobId: message.snapshotJobId, totalBytes: message.totalBytes });
+    } catch (error) {
+      abortActiveSnapshot('INVALID_SNAPSHOT_METADATA', error.message);
+    }
+  }
+
+  function handleSnapshotChunk(socket, message) {
+    if (!activeSnapshot || socket !== activeSnapshot.photoshop || !activeSnapshot.metadata || activeSnapshot.ended || message.snapshotJobId !== activeSnapshot.request.snapshotJobId) {
+      return abortActiveSnapshot('UNEXPECTED_SNAPSHOT_CHUNK', 'SNAPSHOT_CHUNK does not match the active Snapshot.');
+    }
+    const expectedIndex = activeSnapshot.receivedChunks;
+    const expectedLength = Math.min(activeSnapshot.metadata.chunkSize, activeSnapshot.expectedBytes - activeSnapshot.receivedBytes);
+    if (activeSnapshot.pendingChunk || message.chunkIndex !== expectedIndex || message.byteLength !== expectedLength) {
+      return abortActiveSnapshot('INVALID_SNAPSHOT_CHUNK', `Expected chunk ${expectedIndex} with ${expectedLength} bytes.`);
+    }
+    activeSnapshot.pendingChunk = { chunkIndex: message.chunkIndex, byteLength: message.byteLength };
+    sendJson(activeSnapshot.renderer, message);
+  }
+
+  function handleSnapshotBinary(socket, data) {
+    if (!activeSnapshot || socket !== activeSnapshot.photoshop || !activeSnapshot.pendingChunk || activeSnapshot.ended) {
+      return abortActiveSnapshot('UNEXPECTED_SNAPSHOT_BINARY', 'Snapshot binary arrived without a valid SNAPSHOT_CHUNK marker.');
+    }
+    const bytes = data.byteLength;
+    if (bytes !== activeSnapshot.pendingChunk.byteLength || activeSnapshot.receivedBytes + bytes > activeSnapshot.expectedBytes) {
+      return abortActiveSnapshot('INVALID_SNAPSHOT_BINARY', 'Snapshot binary length does not match its marker.');
+    }
+    activeSnapshot.receivedBytes += bytes;
+    activeSnapshot.receivedChunks += 1;
+    activeSnapshot.pendingChunk = null;
+    activeSnapshot.renderer.send(data, { binary: true });
+  }
+
+  function handleSnapshotEnd(socket, message) {
+    if (!activeSnapshot || socket !== activeSnapshot.photoshop || message.snapshotJobId !== activeSnapshot.request.snapshotJobId || !activeSnapshot.metadata || activeSnapshot.ended) {
+      return sendJson(socket, { type: 'SNAPSHOT_ERROR', snapshotJobId: message.snapshotJobId ?? null, code: 'UNEXPECTED_SNAPSHOT_END', message: 'SNAPSHOT_END does not match the active Snapshot.' });
+    }
+    if (activeSnapshot.pendingChunk || activeSnapshot.receivedBytes !== activeSnapshot.expectedBytes ||
+        activeSnapshot.receivedChunks !== activeSnapshot.metadata.chunkCount ||
+        message.receivedBytes !== activeSnapshot.receivedBytes || message.receivedChunks !== activeSnapshot.receivedChunks) {
+      return abortActiveSnapshot('INCOMPLETE_SNAPSHOT', `Received ${activeSnapshot.receivedBytes}/${activeSnapshot.expectedBytes} bytes and ${activeSnapshot.receivedChunks}/${activeSnapshot.metadata.chunkCount} chunks.`);
+    }
+    activeSnapshot.ended = true;
+    sendJson(activeSnapshot.renderer, {
+      type: 'SNAPSHOT_END',
+      snapshotJobId: message.snapshotJobId,
+      receivedBytes: activeSnapshot.receivedBytes,
+      receivedChunks: activeSnapshot.receivedChunks,
+      brokerSnapshotEndAtEpochMs: Date.now()
+    });
+    emit('snapshot-end', { snapshotJobId: message.snapshotJobId, receivedBytes: activeSnapshot.receivedBytes });
+  }
+
+  function handleSnapshotResponse(socket, message) {
+    if (!activeSnapshot || socket !== activeSnapshot.renderer || message.snapshotJobId !== activeSnapshot.request.snapshotJobId) {
+      return sendJson(socket, { type: 'SNAPSHOT_ERROR', snapshotJobId: message.snapshotJobId ?? null, code: 'UNEXPECTED_SNAPSHOT_RESPONSE', message: 'Snapshot response does not match the active job.' });
+    }
+    if (message.type === 'SNAPSHOT_COMPLETE') {
+      if (!activeSnapshot.ended || message.sourceType !== activeSnapshot.metadata.sourceType || message.width !== activeSnapshot.metadata.width || message.height !== activeSnapshot.metadata.height ||
+          typeof message.layerId !== 'string' || !message.layerId || typeof message.assetSha256 !== 'string' || !/^[A-Fa-f0-9]{64}$/.test(message.assetSha256)) {
+        return abortActiveSnapshot('INVALID_SNAPSHOT_COMPLETION', 'Renderer completion did not prove the asset/runtime/layer gate.');
+      }
+      if (!isOpen(activeSnapshot.photoshop)) return abortActiveSnapshot('UXP_DISCONNECTED', 'Photoshop disconnected before Snapshot completion was committed.', false, true);
+      if (activeSnapshot.timer) clearTimeout(activeSnapshot.timer);
+      sendJson(activeSnapshot.photoshop, message);
+      sendJson(activeSnapshot.renderer, { type: 'SNAPSHOT_COMMITTED', snapshotJobId: message.snapshotJobId, layerId: message.layerId, assetSha256: message.assetSha256 });
+      emit('snapshot-complete', { snapshotJobId: message.snapshotJobId, layerId: message.layerId, sourceType: message.sourceType });
+      activeSnapshot = null;
+      return;
+    }
+    abortActiveSnapshot(message.code || 'SNAPSHOT_INSTALL_FAILED', message.message || 'Renderer failed to install the Snapshot.', true, false);
+  }
+
+  function handleSnapshotCancel(socket, message) {
+    if (!activeSnapshot || socket !== activeSnapshot.renderer || message.snapshotJobId !== activeSnapshot.request.snapshotJobId) return;
+    abortActiveSnapshot(message.code || 'SNAPSHOT_CANCELED', message.message || 'Renderer canceled the Snapshot.', true, false);
   }
 
   function abortActivePointer(code, message) {
@@ -522,6 +706,9 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       if (activeBake && (activeBake.photoshop === replaced || activeBake.renderer === replaced)) {
         abortActiveBake('TEST_ROLE_REPLACED', `${message.role} was replaced by the isolated smoke-test client.`, activeBake.photoshop !== replaced);
       }
+      if (activeSnapshot && (activeSnapshot.photoshop === replaced || activeSnapshot.renderer === replaced)) {
+        abortActiveSnapshot('TEST_ROLE_REPLACED', `${message.role} was replaced by the isolated smoke-test client.`, activeSnapshot.photoshop !== replaced, activeSnapshot.renderer !== replaced);
+      }
       clients[message.role] = null;
       replaced.close(1012, 'Replaced by isolated smoke-test client');
       emit('client-replaced-for-test', { role: message.role });
@@ -542,6 +729,7 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
   function handleFrameBegin(socket, message) {
     if (socket !== clients.photoshop) return sendError(socket, 'ROLE_VIOLATION', 'Only Photoshop may begin a frame.', message.frameId);
     if (activeFrame) return sendError(socket, 'FRAME_IN_FLIGHT', 'A frame is already awaiting completion or ACK.', message.frameId);
+    if (activeSnapshot) return sendError(socket, 'LARGE_TRANSFER_BUSY', 'A Snapshot transfer is active.', message.frameId);
     if (!isOpen(clients.renderer)) return sendError(socket, 'RENDERER_DISCONNECTED', 'Electron renderer is not connected.', message.frameId);
     try {
       const expectedBytes = validateFrameMetadata(message);
@@ -642,6 +830,17 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       case 'FRAME_BEGIN': handleFrameBegin(socket, message); break;
       case 'FRAME_END': handleFrameEnd(socket, message); break;
       case 'FRAME_ACK': handleFrameAck(socket, message); break;
+      case 'SNAPSHOT_REQUEST': handleSnapshotRequest(socket, message); break;
+      case 'SNAPSHOT_BEGIN': handleSnapshotBegin(socket, message); break;
+      case 'SNAPSHOT_CHUNK': handleSnapshotChunk(socket, message); break;
+      case 'SNAPSHOT_END': handleSnapshotEnd(socket, message); break;
+      case 'SNAPSHOT_COMPLETE':
+      case 'SNAPSHOT_ERROR':
+        if (socket === clients.renderer) handleSnapshotResponse(socket, message);
+        else if (socket === clients.photoshop && message.type === 'SNAPSHOT_ERROR') abortActiveSnapshot(message.code || 'SNAPSHOT_CAPTURE_FAILED', message.message || 'Photoshop failed to capture the Snapshot.', false, true);
+        else sendJson(socket, { type: 'SNAPSHOT_ERROR', snapshotJobId: message.snapshotJobId ?? null, code: 'ROLE_VIOLATION', message: 'Unexpected Snapshot response role.' });
+        break;
+      case 'SNAPSHOT_CANCEL': handleSnapshotCancel(socket, message); break;
       case 'BAKE_BEGIN': handleBakeBegin(socket, message); break;
       case 'BAKE_CHUNK': handleBakeChunk(socket, message); break;
       case 'BAKE_END': handleBakeEnd(socket, message); break;
@@ -679,6 +878,7 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       try {
         if (isBinary) {
           if (activeBake && socket === activeBake.renderer) handleBakeBinary(socket, data);
+          else if (activeSnapshot && socket === activeSnapshot.photoshop) handleSnapshotBinary(socket, data);
           else handleBinary(socket, data);
           return;
         }
@@ -699,11 +899,16 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       if (activeBake && (activeBake.photoshop === socket || activeBake.renderer === socket)) {
         abortActiveBake('PEER_DISCONNECTED', `${role || 'Unassigned client'} disconnected during a Photoshop bake.`, activeBake.photoshop !== socket);
       }
+      if (activeSnapshot && (activeSnapshot.photoshop === socket || activeSnapshot.renderer === socket)) {
+        abortActiveSnapshot('PEER_DISCONNECTED', `${role || 'Unassigned client'} disconnected during a Snapshot.`, activeSnapshot.photoshop !== socket, activeSnapshot.renderer !== socket);
+      }
       if (role === 'renderer') {
         seenPointerRequestIds.clear();
         seenPointerRequestOrder.length = 0;
         seenBakeJobIds.clear();
         seenBakeJobOrder.length = 0;
+        seenSnapshotJobIds.clear();
+        seenSnapshotJobOrder.length = 0;
       }
       if (role) emit('client-disconnected', { role });
       broadcastStatus();
@@ -721,6 +926,7 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       photoshopConnected: isOpen(clients.photoshop),
       rendererConnected: isOpen(clients.renderer),
       activeFrameId: activeFrame?.metadata.frameId || null,
+      activeSnapshotJobId: activeSnapshot?.request.snapshotJobId || null,
       activePointerRequestId: activePointerRequest?.requestId || null
       , activeBakeJobId: activeBake?.metadata.jobId || null
     }),
@@ -733,4 +939,11 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
   };
 }
 
-module.exports = { createLiveLinkBroker, validateBakeMetadata, validateBakeTargetRegistrySnapshot, validateBakeApplyAck };
+module.exports = {
+  createLiveLinkBroker,
+  validateBakeMetadata,
+  validateBakeTargetRegistrySnapshot,
+  validateBakeApplyAck,
+  validateSnapshotRequest,
+  validateSnapshotMetadata
+};

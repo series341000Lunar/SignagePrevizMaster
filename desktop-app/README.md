@@ -1,4 +1,4 @@
-# Desktop App — Block 6B Shared Direct Projection / Canonical Bake
+# Desktop App — Block 9A Photoshop Snapshot Authoring
 
 Block 0 proves that a 4728 x 5760-class source can remain full resolution from
 disk decode through a Three.js GPU texture in both development and a Windows
@@ -171,6 +171,10 @@ npm run test:block5b
 npm run test:block6a
 npm run test:block6b
 npm run test:block7
+npm run test:block8d
+npm run test:block8e
+npm run test:block8f
+npm run test:block9a
 npm run test:runtime
 npm run test:link
 npm run dist
@@ -199,13 +203,38 @@ FIT changes only the camera zoom. It never changes the decoded image or texture
 dimensions. Pixel Inspection switches magnification from linear filtering to
 nearest-neighbour filtering without modifying the source texture.
 
+## Block 9A source pipeline
+
+Authoring placement uses native working-canvas pixels as its scale basis.
+`Scale 1.00` maps a `3000×3840` source 1:1 into the FRONT 75F working canvas
+and a `2100×3840` source 1:1 into the BACK working canvas. The Scale field is
+shown directly below `LAYOUT EDIT`; select a visible layer and enter Layout Edit
+to enable the transform controls.
+
+    Explicit Photoshop Snapshot request
+    -> native RGB8/RGBA8 imaging.getPixels capture
+    -> ordered Snapshot binary transfer
+    -> exact lossless project-owned PNG
+    -> existing authoring Layer runtime
+    -> schema 3 Save/Open, including offline Open
+    -> existing Vector Mask / Bake Current / Full Merge paths
+
+FILE input remains available without Photoshop. Composite Snapshot is
+implemented. One-Pixel-Layer Selection Snapshot has a scoped BACK V3 user visual
+PASS and a separately confirmed 62% opacity property PASS, but remains
+probe-gated for formal transparent-RGB and ACK edge cases. A
+Selection Snapshot initializes its layer center from Photoshop capture bounds
+in the active 1:1 working canvas and preserves the selected Pixel Layer opacity
+through the return to Photoshop. Snapshot is explicit and immutable; Photoshop
+history changes never auto-refresh it.
+
 ## Security and offline baseline
 
 - `nodeIntegration: false`
 - `contextIsolation: true`
 - `sandbox: true`
 - `webSecurity: true`
-- no preload bridge
+- narrow project-only preload bridge
 - local bundled JavaScript and test assets only
 - HTTP(S) requests are blocked and recorded by the main process
 - navigation and new windows are denied

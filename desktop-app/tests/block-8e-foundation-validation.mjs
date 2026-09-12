@@ -183,8 +183,8 @@ assert.equal(stack.deleteVectorMaskPoint(frontLayer.layerId, addPath.pathId, fou
 const source = { width: 400, height: 200 };
 const transform = { x: 0.63, y: 0.37, scale: 1.8, rotationDegrees: 137 };
 const sourceUv = { u: 0.23, v: 0.81 };
-const screen = sourceUvToScreenPoint(sourceUv, source, 3000 / 3840, transform);
-const roundTripUv = screenPointToSourceUv(screen, source, 3000 / 3840, transform);
+const screen = sourceUvToScreenPoint(sourceUv, source, 3000 / 3840, transform, { width: 3000, height: 3840 });
+const roundTripUv = screenPointToSourceUv(screen, source, 3000 / 3840, transform, { width: 3000, height: 3840 });
 assert.ok(near(roundTripUv.u, sourceUv.u) && near(roundTripUv.v, sourceUv.v), 'transformed Source UV round-trip is exact');
 assert.equal(VECTOR_MASK_COORDINATE_SPACE, 'SOURCE_NORMALIZED_TOP_LEFT');
 assert.match(rendererSource, /function beginVectorMaskMarquee/);
@@ -214,7 +214,7 @@ const identityBefore = {
 };
 const payload = await createProjectSavePayload(stack, { assetNameToken: 'block8e' });
 assert.deepEqual(frontRuntime.originalBytes, bytes, 'vector authoring never rewrites original source bytes');
-assert.equal(payload.manifest.schemaVersion, 2);
+assert.equal(payload.manifest.schemaVersion, PROJECT_SCHEMA_VERSION);
 validateProjectManifest(payload.manifest);
 const preparedV2 = await prepareProjectLoad(payload.manifest, payload.assets, {
   activeFamilyId: frontId,
@@ -236,7 +236,13 @@ assert.ok(!identityBefore.pointIds.includes(loadedNewPoint.pointId));
 
 const v1 = structuredClone(payload.manifest);
 v1.schemaVersion = 1;
-for (const family of Object.values(v1.families)) for (const layer of family.layers) delete layer.vectorMask;
+for (const family of Object.values(v1.families)) for (const layer of family.layers) {
+  delete layer.vectorMask;
+  delete layer.source.sourceId;
+  delete layer.source.alphaContract;
+  delete layer.source.colorContract;
+  delete layer.source.provenance;
+}
 validateProjectManifest(v1);
 const preparedV1 = await prepareProjectLoad(v1, payload.assets, {
   activeFamilyId: frontId,

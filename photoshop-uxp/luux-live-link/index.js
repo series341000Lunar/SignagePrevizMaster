@@ -2,7 +2,7 @@
 
 const { action, app, constants, core, imaging } = require('photoshop');
 const { createBakeTargetRegistry } = require('./bake-target-registry.js');
-const { createOwnedLayerRegistry, normalizeCompositeMetadata } = require('./owned-layer-registry.js');
+const { compactAuthoringOrderMap, createOwnedLayerRegistry, normalizeCompositeMetadata } = require('./owned-layer-registry.js');
 const config = window.LUUX_LIVE_LINK_CONFIG;
 const DISPLAY_COLOR_PROFILE = 'sRGB IEC61966-2.1';
 const AUTO_SYNC_EVENTS = ['historyStateChanged'];
@@ -105,6 +105,12 @@ const state = {
   pendingAck: null,
   lastFrame: null,
   lastError: '',
+  snapshot: {
+    processing: false,
+    currentJobId: null,
+    pendingAck: null,
+    lastResult: null
+  },
   bake: {
     registry: createBakeTargetRegistry({ sessionId: BAKE_TARGET_SESSION_ID }),
     ownedLayers: createOwnedLayerRegistry({ sessionId: BAKE_TARGET_SESSION_ID }),
@@ -347,7 +353,7 @@ function markDirty(reason) {
 }
 
 function resumeDirtyFrameIfReady() {
-  if (!state.dirty || !isReady() || state.phase !== 'IDLE') return;
+  if (!state.dirty || !isReady() || state.phase !== 'IDLE' || state.snapshot.processing) return;
   void runRequestedSend(state.dirtyReason || 'reconnect');
 }
 
@@ -526,7 +532,7 @@ function render() {
   elements.connectionState.className = `state ${connected ? 'connected' : 'disconnected'}`;
   elements.connectionState.textContent = `● ${connected ? 'CONNECTED' : state.connectionState}`;
   elements.connectButton.textContent = connected ? 'RECONNECT' : 'CONNECT';
-  elements.sendButton.disabled = !connected;
+  elements.sendButton.disabled = !connected || state.snapshot.processing;
   elements.phase.textContent = state.phase;
   elements.frameId.textContent = state.lastFrame ? String(state.lastFrame.frameId) : '—';
   elements.captureSize.textContent = state.lastFrame ? `${state.lastFrame.width} × ${state.lastFrame.height}` : '—';
@@ -577,6 +583,26 @@ function waitForAck(frameId) {
       }
     }, config.ackTimeoutMs);
     state.pendingAck = { frameId, resolve, reject, timer, waitingSince: performance.now() };
+  });
+}
+
+function rejectPendingSnapshotAck(error) {
+  if (!state.snapshot.pendingAck) return;
+  clearTimeout(state.snapshot.pendingAck.timer);
+  const pending = state.snapshot.pendingAck;
+  state.snapshot.pendingAck = null;
+  pending.reject(error);
+}
+
+function waitForSnapshotAck(snapshotJobId) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (state.snapshot.pendingAck?.snapshotJobId === snapshotJobId) {
+        state.snapshot.pendingAck = null;
+        reject(new Error(`SNAPSHOT_COMPLETE timeout for ${snapshotJobId}.`));
+      }
+    }, config.ackTimeoutMs);
+    state.snapshot.pendingAck = { snapshotJobId, resolve, reject, timer };
   });
 }
 
@@ -847,14 +873,16 @@ function readPhotoshopComposite(layer, order = null) {
   };
 }
 
-function assertPhotoshopComposite(actual, requested, { includeOrder = false } = {}) {
+function assertPhotoshopComposite(actual, requested, { includeOrder = false, expectedPhotoshopOrder = requested.order } = {}) {
   const opacityTolerance = (0.5 / 255) + 0.000001;
   if (!Number.isFinite(actual.opacity) || Math.abs(actual.opacity - requested.opacity) > opacityTolerance) {
     throw bakeFailure('PHOTOSHOP_OPACITY_APPLY_MISMATCH', `opacity requested ${requested.opacity} but Photoshop reports ${actual.opacity}.`);
   }
   if (actual.blendMode !== requested.blendMode) throw bakeFailure('PHOTOSHOP_BLEND_MODE_APPLY_MISMATCH', `blendMode requested ${requested.blendMode} but Photoshop reports ${actual.blendMode}.`);
   if (actual.visible !== requested.visible) throw bakeFailure('PHOTOSHOP_VISIBILITY_APPLY_MISMATCH', `visible requested ${requested.visible} but Photoshop reports ${actual.visible}.`);
-  if (includeOrder && actual.order !== requested.order) throw bakeFailure('PHOTOSHOP_ORDER_APPLY_MISMATCH', `order requested ${requested.order} but Photoshop reports ${actual.order}.`);
+  if (includeOrder && actual.order !== expectedPhotoshopOrder) {
+    throw bakeFailure('PHOTOSHOP_ORDER_APPLY_MISMATCH', `Photoshop subset order requested ${expectedPhotoshopOrder} for authoring order ${requested.order}, but Photoshop reports ${actual.order}.`);
+  }
 }
 
 function applyCompositeMetadata(layer, metadata, traceContext) {
@@ -922,10 +950,12 @@ async function syncOwnedBindingMetadata(target, metadata, group) {
   const ownedPhotoshopLayerIds = new Set(resolved.map((entry) => entry.record.photoshopLayerId));
   const physicalOwnedLayers = Array.from(group.layers || []).filter((layer) => ownedPhotoshopLayerIds.has(layer.id));
   const physicalOrderById = new Map(physicalOwnedLayers.map((layer, index) => [layer.id, index]));
+  const photoshopOrderByAuthoringOrder = compactAuthoringOrderMap(resolved.map((entry) => entry.composite.order));
   const appliedLayers = resolved.map((entry) => {
     const layer = findLayerById(target, entry.record.photoshopLayerId);
     const actual = readPhotoshopComposite(layer, physicalOrderById.get(layer.id));
-    assertPhotoshopComposite(actual, entry.composite, { includeOrder: true });
+    const expectedPhotoshopOrder = photoshopOrderByAuthoringOrder.get(entry.composite.order);
+    assertPhotoshopComposite(actual, entry.composite, { includeOrder: true, expectedPhotoshopOrder });
     return {
       authoringLayerId: entry.record.authoringLayerId,
       photoshopLayerId: layer.id,
@@ -933,7 +963,8 @@ async function syncOwnedBindingMetadata(target, metadata, group) {
       opacity: actual.opacity,
       blendMode: actual.blendMode,
       visible: actual.visible,
-      order: actual.order
+      order: entry.composite.order,
+      photoshopOrder: actual.order
     };
   });
   console.info('[LUUX][Block8C][UXPMetadataVerified]', JSON.stringify({
@@ -1184,6 +1215,199 @@ async function handleBakeEnd(message) {
   }
 }
 
+function snapshotError(code, message) {
+  const error = new Error(`${code}: ${message}`);
+  error.code = code;
+  return error;
+}
+
+function integerPixel(value, label) {
+  const number = Number(value && typeof value === 'object' && 'value' in value ? value.value : value);
+  if (!Number.isSafeInteger(number)) throw snapshotError('SNAPSHOT_BOUNDS_INVALID', `${label} must be an integer pixel value.`);
+  return number;
+}
+
+function snapshotBounds(value) {
+  const bounds = {
+    left: integerPixel(value?.left, 'left'),
+    top: integerPixel(value?.top, 'top'),
+    right: integerPixel(value?.right, 'right'),
+    bottom: integerPixel(value?.bottom, 'bottom')
+  };
+  if (bounds.right <= bounds.left || bounds.bottom <= bounds.top) throw snapshotError('SNAPSHOT_EMPTY', 'Snapshot capture bounds have no pixel area.');
+  return bounds;
+}
+
+async function captureSnapshot(request) {
+  const captureStartedAtEpochMs = Date.now();
+  const captureStartedAt = performance.now();
+  return core.executeAsModal(async () => {
+    const doc = app.activeDocument;
+    if (!doc) throw snapshotError('SNAPSHOT_NO_DOCUMENT', 'No active Photoshop document.');
+    validateDocument(doc);
+    const documentId = doc.id;
+    const documentName = doc.name;
+    const documentWidth = doc.width;
+    const documentHeight = doc.height;
+    const historyStateIdBefore = doc.activeHistoryState?.id ?? null;
+    let selectedLayers = [];
+    let selectedLayerOpacity = null;
+    let sourceBounds = { left: 0, top: 0, right: documentWidth, bottom: documentHeight };
+    const options = {
+      documentID: documentId,
+      sourceBounds,
+      colorSpace: 'RGB',
+      colorProfile: DISPLAY_COLOR_PROFILE,
+      componentSize: 8
+    };
+    if (request.captureMode === 'SINGLE_PIXEL_LAYER') {
+      selectedLayers = Array.from(doc.activeLayers || []);
+      if (selectedLayers.length !== 1) throw snapshotError('SNAPSHOT_SELECTION_UNSUPPORTED', 'Select exactly one Pixel Layer.');
+      const layer = selectedLayers[0];
+      if (layer.kind !== constants.LayerKind.NORMAL) {
+        throw snapshotError('SNAPSHOT_SELECTION_UNSUPPORTED', `Block 9A Selection Snapshot accepts one Pixel Layer only; selected kind is ${enumLabel(layer.kind)}.`);
+      }
+      selectedLayerOpacity = Number(layer.opacity) / 100;
+      if (!Number.isFinite(selectedLayerOpacity) || selectedLayerOpacity < 0 || selectedLayerOpacity > 1) {
+        throw snapshotError('SNAPSHOT_SELECTION_OPACITY_INVALID', 'Selected Pixel Layer opacity could not be normalized from 0 to 1.');
+      }
+      sourceBounds = snapshotBounds(layer.boundsNoEffects);
+      options.layerID = layer.id;
+      options.sourceBounds = sourceBounds;
+    } else if (request.captureMode !== 'COMPOSITE') {
+      throw snapshotError('SNAPSHOT_MODE_UNSUPPORTED', `Unsupported capture mode: ${request.captureMode}`);
+    }
+
+    const selectedLayerIds = selectedLayers.map((layer) => layer.id);
+    const selectedLayerNames = selectedLayers.map((layer) => layer.name);
+    const result = await imaging.getPixels(options);
+    const photoshopImageData = result.imageData;
+    try {
+      const bytes = await photoshopImageData.getData({ chunky: true });
+      const width = photoshopImageData.width;
+      const height = photoshopImageData.height;
+      const components = photoshopImageData.components;
+      const componentSize = photoshopImageData.componentSize;
+      const captureBounds = snapshotBounds(result.sourceBounds || sourceBounds);
+      if (result.level !== 0) throw snapshotError('SNAPSHOT_RESAMPLED_UNSUPPORTED', `Photoshop returned pyramid level ${result.level}; native level 0 is required.`);
+      if (captureBounds.right - captureBounds.left !== width || captureBounds.bottom - captureBounds.top !== height) {
+        throw snapshotError('SNAPSHOT_NATIVE_PIXEL_MISMATCH', 'Capture bounds do not match returned bitmap dimensions 1:1.');
+      }
+      if (componentSize !== 8 || !(bytes instanceof Uint8Array) || ![3, 4].includes(components) ||
+          photoshopImageData.pixelFormat !== (components === 3 ? 'RGB' : 'RGBA')) {
+        throw snapshotError('SNAPSHOT_PIXEL_FORMAT_UNSUPPORTED', 'Block 9A requires chunky RGB8 or RGBA8 pixels.');
+      }
+      if (bytes.byteLength !== width * height * components) throw snapshotError('SNAPSHOT_BYTE_COUNT_INVALID', 'Snapshot byte count does not match dimensions.');
+      if (app.activeDocument?.id !== documentId) throw snapshotError('SNAPSHOT_STALE_DOCUMENT', 'Active Photoshop document changed during capture.');
+      if (request.captureMode === 'SINGLE_PIXEL_LAYER') {
+        const activeLayers = Array.from(doc.activeLayers || []);
+        const activeIds = activeLayers.map((layer) => layer.id);
+        if (activeIds.length !== 1 || activeIds[0] !== selectedLayerIds[0]) throw snapshotError('SNAPSHOT_STALE_SELECTION', 'Active Pixel Layer changed during capture.');
+        const activeOpacity = Number(activeLayers[0].opacity) / 100;
+        if (!Number.isFinite(activeOpacity) || Math.abs(activeOpacity - selectedLayerOpacity) > 0.000001) {
+          throw snapshotError('SNAPSHOT_STALE_SELECTION', 'Selected Pixel Layer opacity changed during capture.');
+        }
+      }
+      if ((doc.activeHistoryState?.id ?? null) !== historyStateIdBefore) throw snapshotError('SNAPSHOT_SOURCE_MUTATED', 'Photoshop history changed during Snapshot capture.');
+      return {
+        bytes,
+        metadata: {
+          type: 'SNAPSHOT_BEGIN',
+          snapshotJobId: request.snapshotJobId,
+          captureRequestId: request.captureRequestId,
+          projectSessionId: request.projectSessionId,
+          familyId: request.familyId,
+          captureMode: request.captureMode,
+          sourceType: request.captureMode === 'COMPOSITE' ? 'PHOTOSHOP_COMPOSITE_SNAPSHOT' : 'PHOTOSHOP_SELECTION_SNAPSHOT',
+          documentId,
+          documentName,
+          documentWidth,
+          documentHeight,
+          selectedLayerIds,
+          selectedLayerNames,
+          selectedLayerOpacity,
+          captureBounds,
+          captureTimestamp: new Date().toISOString(),
+          documentMode: enumLabel(doc.mode),
+          documentDepth: 8,
+          documentColorProfile: doc.colorProfileName,
+          requestedColorProfile: DISPLAY_COLOR_PROFILE,
+          width,
+          height,
+          components,
+          componentSize,
+          pixelFormat: photoshopImageData.pixelFormat,
+          colorSpace: photoshopImageData.colorSpace,
+          colorProfile: photoshopImageData.colorProfile,
+          colorContract: 'SRGB_IEC61966_2_1_RGB8',
+          hasAlpha: photoshopImageData.hasAlpha,
+          alphaContract: photoshopImageData.hasAlpha ? 'PHOTOSHOP_IMAGING_RGBA8_PROBE_PENDING' : 'OPAQUE_RGB8',
+          isChunky: true,
+          level: result.level,
+          totalBytes: bytes.byteLength,
+          chunkSize: config.chunkSizeBytes,
+          chunkCount: Math.ceil(bytes.byteLength / config.chunkSizeBytes),
+          captureMs: performance.now() - captureStartedAt,
+          captureStartedAtEpochMs,
+          captureEndedAtEpochMs: Date.now(),
+          nonDestructiveEvidence: 'HISTORY_STATE_ID_UNCHANGED'
+        }
+      };
+    } finally {
+      photoshopImageData.dispose();
+    }
+  }, { commandName: `LUUX Block 9A — ${request.captureMode === 'COMPOSITE' ? 'Composite' : 'Pixel Layer'} Snapshot` });
+}
+
+async function sendSnapshotCapture(capture) {
+  const { bytes, metadata } = capture;
+  sendJson(metadata);
+  let chunkIndex = 0;
+  for (let offset = 0; offset < bytes.byteLength; offset += config.chunkSizeBytes) {
+    await waitForBufferedAmount(config.backpressureHighWaterMarkBytes);
+    const chunk = bytes.subarray(offset, Math.min(offset + config.chunkSizeBytes, bytes.byteLength));
+    sendJson({ type: 'SNAPSHOT_CHUNK', snapshotJobId: metadata.snapshotJobId, chunkIndex, byteLength: chunk.byteLength });
+    state.socket.send(chunk);
+    chunkIndex += 1;
+  }
+  await waitForBufferedAmount(config.chunkSizeBytes);
+  sendJson({
+    type: 'SNAPSHOT_END',
+    snapshotJobId: metadata.snapshotJobId,
+    receivedBytes: bytes.byteLength,
+    receivedChunks: chunkIndex
+  });
+  return waitForSnapshotAck(metadata.snapshotJobId);
+}
+
+async function processSnapshotRequest(request) {
+  if (state.snapshot.processing || state.phase !== 'IDLE' || state.bake.processing) {
+    sendJson({ type: 'SNAPSHOT_ERROR', snapshotJobId: request.snapshotJobId, code: 'LARGE_TRANSFER_BUSY', message: 'Photoshop is already processing a Live, Snapshot, or Bake transfer.' });
+    return;
+  }
+  state.snapshot.processing = true;
+  state.snapshot.currentJobId = request.snapshotJobId;
+  state.lastError = '';
+  render();
+  try {
+    const capture = await captureSnapshot(request);
+    const result = await sendSnapshotCapture(capture);
+    state.snapshot.lastResult = result;
+  } catch (error) {
+    state.lastError = error.message || String(error);
+    if (isSocketOpen()) {
+      try { sendJson({ type: 'SNAPSHOT_ERROR', snapshotJobId: request.snapshotJobId, code: error.code || 'SNAPSHOT_CAPTURE_FAILED', message: state.lastError }); } catch {}
+    }
+    rejectPendingSnapshotAck(error);
+  } finally {
+    state.snapshot.processing = false;
+    state.snapshot.currentJobId = null;
+    refreshDocumentInfo();
+    render();
+    resumeDirtyFrameIfReady();
+  }
+}
+
 function handleJson(message) {
   switch (message.type) {
     case 'HELLO_ACK':
@@ -1219,6 +1443,26 @@ function handleJson(message) {
         state.pendingAck = null;
         pending.resolve({ ...message, ackMs: performance.now() - pending.waitingSince });
       }
+      break;
+    case 'SNAPSHOT_REQUEST':
+      void processSnapshotRequest(message);
+      return;
+    case 'SNAPSHOT_COMPLETE':
+      if (state.snapshot.pendingAck?.snapshotJobId === message.snapshotJobId) {
+        clearTimeout(state.snapshot.pendingAck.timer);
+        const pending = state.snapshot.pendingAck;
+        state.snapshot.pendingAck = null;
+        pending.resolve(message);
+      }
+      break;
+    case 'SNAPSHOT_ERROR': {
+      const error = snapshotError(message.code || 'SNAPSHOT_ERROR', message.message || 'Snapshot failed.');
+      state.lastError = error.message;
+      rejectPendingSnapshotAck(error);
+      break;
+    }
+    case 'SNAPSHOT_CANCEL':
+      rejectPendingSnapshotAck(snapshotError(message.code || 'SNAPSHOT_CANCELED', message.message || 'Snapshot canceled.'));
       break;
     case 'POINTER_SET':
     case 'POINTER_CLEAR':
@@ -1303,6 +1547,7 @@ function connect(force) {
     const closeReason = event && event.reason ? ` reason=${event.reason}` : '';
     state.lastError = `CONNECTION_CLOSED: code=${closeCode}${closeReason}; endpoint=${config.endpoint}`;
     rejectPendingAck(new Error('Connection closed while waiting for FRAME_ACK.'));
+    rejectPendingSnapshotAck(new Error('Connection closed while waiting for SNAPSHOT_COMPLETE.'));
     if (state.bake.current) {
       state.bake.current = null;
       state.bake.processing = false;
@@ -1439,7 +1684,7 @@ function requestLatestFrame(reason) {
     render();
     return;
   }
-  if (state.phase !== 'IDLE') {
+  if (state.phase !== 'IDLE' || state.snapshot.processing) {
     markDirty(reason);
     render();
     return;
@@ -1448,7 +1693,7 @@ function requestLatestFrame(reason) {
 }
 
 async function runRequestedSend(reason = 'manual') {
-  if (state.phase !== 'IDLE') {
+  if (state.phase !== 'IDLE' || state.snapshot.processing) {
     markDirty(reason);
     render();
     return;

@@ -5,6 +5,8 @@ Baseline HEAD: `4a502dfbf81e5684e54ef9b1404dead791bb27fd`
 
 Status: **CLOSED / USER PHOTOSHOP VALIDATED**
 
+Post-close correction: **SPARSE PER-LAYER SEND ORDER AUTOMATED PASS / USER RETEST PENDING — 2026-09-13**
+
 ## BLOCK 8C STATUS
 
 Branch: `main`
@@ -45,6 +47,11 @@ Re-Bake / Re-Send: replaces pixels on that exact owned layer only
 
 Order sync: top-row/frontmost order among already-owned layers in the same
 target/family/output binding
+
+Sparse Send order: full authoring order is retained in transport/ACK metadata;
+Photoshop physical order is the compact relative rank among already-owned
+layers. Sending authoring order `2` first therefore validly creates Photoshop
+order `0` without placeholder layers.
 
 Visibility sync: Photoshop Layer metadata on explicit Send
 
@@ -158,3 +165,9 @@ Detailed evidence and the user workflow are in
 
 Block 8C is `CLOSED` after explicit user PASS of the real Photoshop multi-layer
 workflow on 2026-09-12.
+
+On 2026-09-13, the user separately granted BACK V3 visual PASS after sending
+individual layers to Photoshop and recompositing them. This supports the
+ordinary per-layer round trip but does not include the exact order-2-first ACK
+trace, so the specific post-close retest above remains open. See
+[BACK V3 Round-trip PASS & Sync Roadmap](BACK-V3-ROUNDTRIP-PASS-AND-PHOTOSHOP-SYNC-ROADMAP.md).

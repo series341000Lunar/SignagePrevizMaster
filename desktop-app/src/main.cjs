@@ -429,7 +429,7 @@ async function runSmokeTest(window) {
       block8c.photoshopLastAppliedUnchanged === true && block8c.contextLossCount === 0 &&
       block8c.projectionRuntimeCount === 1 &&
       block8d.technicalPass === true && block8d.userValidation === 'PENDING' &&
-      block8d.schemaVersion === 2 && block8d.folderProject === true &&
+      block8d.schemaVersion === 3 && block8d.folderProject === true &&
       block8d.frontLayerCount === 3 && block8d.backLayerCount === 2 &&
       block8d.roundTripExact === true && block8d.stableLayerIds === true &&
       block8d.safeSequenceAfterLoad === true && block8d.loadedNeedsBake === true &&

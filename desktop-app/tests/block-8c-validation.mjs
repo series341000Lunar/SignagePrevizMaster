@@ -8,7 +8,7 @@ import { AUTHORING_BLEND_MODES, ScreenImageLayerStack } from '../src/screen-imag
 
 const require = createRequire(import.meta.url);
 const { validateBakeApplyAck, validateBakeMetadata } = require('../src/live-link-broker.cjs');
-const { createOwnedLayerRegistry, ownedLayerKey } = require('../../photoshop-uxp/luux-live-link/owned-layer-registry.js');
+const { compactAuthoringOrderMap, createOwnedLayerRegistry, ownedLayerKey } = require('../../photoshop-uxp/luux-live-link/owned-layer-registry.js');
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(appRoot, '..');
 const rendererSource = await readFile(path.join(appRoot, 'src', 'renderer.js'), 'utf8');
@@ -76,6 +76,10 @@ owned.register({ ...base, authoringLayerId: b.layerId, photoshopLayerId: before.
 assert.equal(owned.listBinding('target-1', 'FRONT', 'DIRECT').length, 3);
 assert.equal(owned.get('target-1', 'FRONT', 'DIRECT', b.layerId).photoshopLayerId, before.photoshopLayerId, 're-bake updates exact owned layer');
 assert.notEqual(ownedLayerKey('target-1', 'FRONT', 'DIRECT', a.layerId), ownedLayerKey('target-1', 'BACK', 'DIRECT', a.layerId));
+assert.deepEqual([...compactAuthoringOrderMap([2])], [[2, 0]], 'one transmitted layer maps its sparse authoring order to Photoshop order 0');
+assert.deepEqual([...compactAuthoringOrderMap([2, 0])], [[0, 0], [2, 1]], 'partial transmission preserves relative authoring order with compact Photoshop indices');
+assert.deepEqual([...compactAuthoringOrderMap([2, 1, 0])], [[0, 0], [1, 1], [2, 2]], 'complete transmission converges to identical authoring and Photoshop order');
+assert.throws(() => compactAuthoringOrderMap([1, 1]), /unique non-negative/);
 
 const brokerConfig = { maxFrameBytes: 1024, chunkSizeBytes: 1024 };
 stack.setLayerOpacity(a.layerId, 0.45);
@@ -134,9 +138,12 @@ const appliedAck = {
   blendMode: selectedExpected.blendMode,
   visible: selectedExpected.visible,
   order: selectedExpected.order,
-  appliedLayers: [{ ...selectedExpected, photoshopLayerId: 501 }]
+  photoshopOrder: 0,
+  appliedLayers: [{ ...selectedExpected, photoshopLayerId: 501, photoshopOrder: 0 }]
 };
 assert.equal(validateBakeApplyAck(appliedAck, brokerMetadata, true), true);
+assert.equal(appliedAck.order, 2, 'ACK retains the full authoring-stack order for a single sparse layer');
+assert.equal(appliedAck.photoshopOrder, 0, 'ACK may report the compact physical order separately');
 const quantizedOpacityAck = {
   ...appliedAck,
   opacity: 115 / 255,
@@ -170,6 +177,9 @@ assert.match(rendererSource, /validateRendererBakeApplyAck\(metadata, applied\)/
 assert.match(rendererSource, /exportPng\(kind, \{ opacity: exportOpacity \}\)/);
 assert.match(uxpSource, /\(0\.5 \/ 255\) \+ 0\.000001/);
 assert.match(uxpSource, /\.sort\(\(a, b\) => a\.composite\.order - b\.composite\.order\)/);
+assert.match(uxpSource, /compactAuthoringOrderMap\(resolved\.map\(\(entry\) => entry\.composite\.order\)\)/);
+assert.match(uxpSource, /order:\s*entry\.composite\.order/);
+assert.match(uxpSource, /photoshopOrder:\s*actual\.order/);
 assert.doesNotMatch(uxpSource, /getByName\(|find\(.*\.name === metadata\.authoringLayerName/);
 for (const id of ['authoring-opacity', 'authoring-blend-mode', 'authoring-quick-rail', 'quick-bake-current', 'quick-send-direct']) assert.match(htmlSource, new RegExp(`id="${id}"`));
 assert.doesNotMatch(htmlSource, /data-photoshop-output="FULL_MERGED"/, 'later Full Merge must not alter Block 8C per-layer Photoshop send');
@@ -182,6 +192,7 @@ console.log(JSON.stringify({
   pixelMetadataSplit: true,
   perLayerOwnership: true,
   threeLayersAccumulate: true,
+  sparsePerLayerSendOrder: true,
   exactRebakeIsolation: true,
   dragAndButtonSharedReorder: true,
   crossFamilyDrag: 'BLOCKED_BY_ACTIVE_STACK',

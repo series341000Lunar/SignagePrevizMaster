@@ -219,6 +219,8 @@ function drawAuthoringFrame(source, profile, transform) {
   const normalizedSize = computeNormalizedImageSize({
     sourceWidth: source.original.width,
     sourceHeight: source.original.height,
+    frameWidth: width,
+    frameHeight: height,
     frameAspect: profile.workingResolution.aspect,
     scale: current.scale
   });
@@ -604,6 +606,8 @@ export class ProjectionBakeRuntime {
       ? computeNormalizedImageSize({
         sourceWidth: authoringSource.width,
         sourceHeight: authoringSource.height,
+        frameWidth: profile.workingResolution.width,
+        frameHeight: profile.workingResolution.height,
         frameAspect: profile.workingResolution.aspect,
         scale: transform.scale
       })

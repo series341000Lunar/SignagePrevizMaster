@@ -1,4 +1,4 @@
-# LUUX Live Link — Block 7
+# LUUX Live Link — Block 9A
 
 This manifest-v5 Photoshop UXP panel keeps the established full-resolution
 Photoshop-to-Previz manual and Auto Sync paths, plus the Block 2 Pointer path.
@@ -23,11 +23,36 @@ be replaced. Similar names are never treated as ownership proof. Full-frame
 `replace: true` prevents stale pixels. A failed receive or apply preserves the
 previous confirmed output.
 
-Block 8's authored Layer Stack is not created early. Block 7 uses one owned
-output layer per `documentId + familyId + outputKind`, with Canonical and Direct
-kept independent. Auto Sync notifications generated during apply are suppressed
-temporarily and normal Auto Sync resumes afterward. If target activation is
-required, the previously active Source Document is restored.
+Block 9A adds an independent explicit Snapshot path. Composite captures the
+active RGB8 document; Selection accepts exactly one active
+constants.LayerKind.NORMAL Pixel Layer. UXP calls imaging.getPixels() without
+targetSize, requires native pyramid level 0, and rejects non-native bounds,
+unsupported component layouts, non-RGB documents, and non-8-bit documents. It
+never resizes, converts, flattens, saves, or mutates artwork.
+
+Selection Snapshot also transports the selected Pixel Layer opacity normalized
+to 0..1 and rechecks it after pixel capture. The renderer uses capture bounds
+to restore initial document position in the active 1:1 working canvas; returned
+output metadata reapplies the same authoring-layer opacity in Photoshop.
+
+Snapshot traffic uses separate SNAPSHOT messages and shares only the inbound
+large-transfer exclusion with Live. Snapshot completion is acknowledged after
+the renderer has created a lossless project PNG, verified it, decoded it, and
+installed the ordinary authoring Layer. Snapshot does not participate in Auto
+Sync. One-Pixel-Layer alpha semantics remain probe-gated until verified in real
+Photoshop; masked layers, Groups, Smart Objects, and arbitrary selections are
+not formally supported in Block 9A.
+
+Block 7 Bake ownership remains one output layer per documentId + familyId +
+outputKind, with Canonical and Direct independent. Auto Sync notifications
+generated during apply are suppressed temporarily and normal Auto Sync resumes
+afterward. If target activation is required, the previously active Source
+Document is restored.
+
+Per-layer Send retains each layer's full authoring-stack order in protocol
+metadata. Photoshop physical indices are compact relative ranks among only the
+already-sent owned layers, so a bottom authoring layer may validly be Photoshop
+index 0 when it is sent first. No placeholder layers are created.
 
 The allow-list remains `ws://localhost/`; the runtime endpoint is
 `ws://localhost:34100` and the Electron broker binds only to `127.0.0.1`.

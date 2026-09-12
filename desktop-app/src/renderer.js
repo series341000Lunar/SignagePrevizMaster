@@ -46,6 +46,7 @@ import { FullMergeAccumulatorRuntime, mergeRgbaLayers } from './full-merge-runti
 import {
   createProjectSavePayload,
   prepareProjectLoad,
+  PROJECT_SCHEMA_VERSION,
   sha256Hex,
   validateProjectManifest
 } from './project-persistence.js';
@@ -74,6 +75,12 @@ import {
   OUTSIDE_SIGNAGE_PRESETS,
   computeAuthoringPreviewAlpha
 } from './authoring-view-settings.js';
+import {
+  assertNativeSnapshotGeometry,
+  cloneBitmapProvenance,
+  selectionSnapshotInitialLayerState
+} from './bitmap-source.js';
+import { encodeRgba8Png, rgba8FromChunky } from './png-codec.js';
 
 const canvas = document.querySelector('#three-canvas');
 const viewer = document.querySelector('#viewer');
@@ -149,6 +156,8 @@ const authoringCameraLock = document.querySelector('#authoring-camera-lock');
 const authoringCameraLockLabel = authoringCameraLock.querySelector('span');
 const layoutEditButton = document.querySelector('#layout-edit-button');
 const authoringImageButton = document.querySelector('#authoring-image-button');
+const authoringPhotoshopCompositeButton = document.querySelector('#authoring-photoshop-composite');
+const authoringPhotoshopSelectionButton = document.querySelector('#authoring-photoshop-selection');
 const authoringImageInput = document.querySelector('#authoring-image-input');
 const authoringReplaceButton = document.querySelector('#authoring-replace-button');
 const authoringReplaceInput = document.querySelector('#authoring-replace-input');
@@ -387,6 +396,14 @@ const state = {
       hasCurrentProject: false,
       projectName: null,
       status: 'Authoring source of truth is not saved.',
+      error: ''
+    },
+    snapshot: {
+      projectSessionId: crypto.randomUUID(),
+      sequence: 0,
+      current: null,
+      completedJobIds: new Set(),
+      status: 'IDLE',
       error: ''
     },
     railExpanded: false,
@@ -1232,7 +1249,8 @@ function drawAuthoringCoveragePreview(frame) {
       layer.transform,
       { width: layer.source.width, height: layer.source.height },
       profile.workingResolution.aspect,
-      { x: 0, y: 0, width: frame.width, height: frame.height }
+      { x: 0, y: 0, width: frame.width, height: frame.height },
+      profile.workingResolution
     );
     layerContext.clearRect(0, 0, width, height);
     layerContext.save();
@@ -1337,7 +1355,8 @@ function sourcePointToMaskOverlay(pointValue, frame, profile) {
     { u: pointValue.x, v: pointValue.y },
     authoringSession.selectedLayer.source,
     profile.workingResolution.aspect,
-    authoringSession.selectedLayer.transform
+    authoringSession.selectedLayer.transform,
+    profile.workingResolution
   );
   return { x: normalized.x * frame.width, y: normalized.y * frame.height };
 }
@@ -1453,7 +1472,8 @@ function syncAuthoringOverlay() {
       selectedLayer.transform,
       { width: selectedLayer.source.width, height: selectedLayer.source.height },
       profile.workingResolution.aspect,
-      { x: 0, y: 0, width: frame.width, height: frame.height }
+      { x: 0, y: 0, width: frame.width, height: frame.height },
+      profile.workingResolution
     );
     authoringImageLayer.style.left = `${rect.centerX}px`;
     authoringImageLayer.style.top = `${rect.centerY}px`;
@@ -1685,12 +1705,13 @@ function syncAuthoringProjectUi(available) {
   const project = state.authoring.project;
   const bridgeAvailable = Boolean(window.luuxProject);
   const blocked = project.busy || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  const saveBlocked = blocked || Boolean(state.authoring.snapshot.current);
   authoringProjectName.textContent = project.projectName || 'UNSAVED';
   authoringProjectStatus.textContent = project.error || project.status;
   authoringProjectControl.classList.toggle('busy', project.busy);
   authoringProjectControl.classList.toggle('failed', Boolean(project.error));
-  authoringProjectSaveAs.disabled = !available || !bridgeAvailable || blocked;
-  authoringProjectSave.disabled = !available || !bridgeAvailable || blocked;
+  authoringProjectSaveAs.disabled = !available || !bridgeAvailable || saveBlocked;
+  authoringProjectSave.disabled = !available || !bridgeAvailable || saveBlocked;
   authoringProjectOpen.disabled = !available || !bridgeAvailable || blocked;
 }
 
@@ -1814,13 +1835,14 @@ function syncAuthoringUi() {
   const selectedLayer = authoringSession.selectedLayer;
   const layoutEditing = authoringCameraInterlock.layoutEditing;
   const maskEditing = authoringCameraInterlock.maskEditing;
+  const snapshotActive = Boolean(state.authoring.snapshot.current);
   projectionAuthoring.hidden = !available;
   authoringFamily.textContent = currentAnamorphicFamily()?.label || '—';
   authoringState.textContent = authoringSession.status;
   authoringState.className = `projection-poc-state${authoringSession.dirty ? ' running' : ''}`;
   authoringSourceName.textContent = source?.filename || 'No image selected';
   authoringSourceMeta.textContent = source
-    ? `${source.width} × ${source.height} · ${source.mimeType === 'image/png' ? 'PNG' : 'JPEG'} · Alpha ${source.hasAlpha ? 'YES' : 'NO'}`
+    ? `${source.width} × ${source.height} · ${source.mimeType === 'image/png' ? 'PNG' : 'JPEG'} · ${source.sourceType || 'FILE'} · Alpha ${source.hasAlpha ? 'YES' : 'NO'}`
     : 'PNG / JPG · original bitmap';
   authoringOpacity.value = String(selectedLayer?.opacity ?? 1);
   authoringOpacityValue.value = `${Math.round((selectedLayer?.opacity ?? 1) * 100)}%`;
@@ -1841,12 +1863,16 @@ function syncAuthoringUi() {
   }
   authoringTransformFields.disabled = !available || !selectedLayer?.visible || !layoutEditing || maskEditing;
   authoringResetTransform.disabled = !available || !selectedLayer?.visible || !layoutEditing || maskEditing;
-  authoringImageButton.disabled = !available || maskEditing || state.projectionBake.running || state.reverseBake.activeJobId !== null;
-  authoringReplaceButton.disabled = !available || !source || maskEditing || state.projectionBake.running || state.reverseBake.activeJobId !== null;
-  authoringDeleteLayer.disabled = !available || !source || maskEditing || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  authoringImageButton.disabled = !available || maskEditing || snapshotActive || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  const snapshotBlocked = !available || !state.link.photoshopConnected || maskEditing || state.projectionBake.running ||
+    state.fullMerge.running || state.reverseBake.activeJobId !== null || Boolean(state.authoring.snapshot.current) || state.authoring.project.busy;
+  authoringPhotoshopCompositeButton.disabled = snapshotBlocked;
+  authoringPhotoshopSelectionButton.disabled = snapshotBlocked;
+  authoringReplaceButton.disabled = !available || !source || maskEditing || snapshotActive || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  authoringDeleteLayer.disabled = !available || !source || maskEditing || snapshotActive || state.projectionBake.running || state.reverseBake.activeJobId !== null;
   const selectedIndex = authoringSession.layers.findIndex((layer) => layer.layerId === authoringSession.selectedLayerId);
-  authoringMoveUp.disabled = !available || selectedIndex <= 0 || state.projectionBake.running || state.reverseBake.activeJobId !== null;
-  authoringMoveDown.disabled = !available || selectedIndex < 0 || selectedIndex >= authoringSession.layers.length - 1 || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  authoringMoveUp.disabled = !available || selectedIndex <= 0 || snapshotActive || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  authoringMoveDown.disabled = !available || selectedIndex < 0 || selectedIndex >= authoringSession.layers.length - 1 || snapshotActive || state.projectionBake.running || state.reverseBake.activeJobId !== null;
   layoutEditButton.disabled = !available || !selectedLayer?.visible || state.projectionBake.running || state.reverseBake.activeJobId !== null;
   layoutEditButton.classList.toggle('active', layoutEditing);
   layoutEditButton.setAttribute('aria-pressed', String(layoutEditing));
@@ -2283,10 +2309,11 @@ async function decodeProjectRuntimeAsset({ source, bytes, layerId, familyId }) {
   let disposed = false;
   return {
     id: `project:${familyId}:${layerId}:${source.assetReference}`,
+    sourceId: source.sourceId || `project:${source.assetReference || layerId}`,
     filename: source.originalFilename,
     name: source.originalFilename,
     originalFilename: source.originalFilename,
-    sourceType: 'FILE',
+    sourceType: source.sourceType || 'FILE',
     assetReference: source.assetReference,
     mimeType: source.mimeType,
     type: source.mimeType,
@@ -2295,6 +2322,9 @@ async function decodeProjectRuntimeAsset({ source, bytes, layerId, familyId }) {
     hasAlpha: detectEmbeddedAlpha(originalBytes, source.mimeType),
     byteLength: originalBytes.byteLength,
     sha256: source.sha256 || null,
+    alphaContract: source.alphaContract || 'EMBEDDED_FILE_ALPHA',
+    colorContract: source.colorContract || 'EMBEDDED_FILE_PROFILE',
+    provenance: cloneBitmapProvenance(source.provenance),
     originalBytes,
     image,
     objectUrl,
@@ -2327,6 +2357,8 @@ function clearProjectScopedPhotoshopState() {
 async function openAuthoringProject(manifestFile = null) {
   if (!window.luuxProject) throw new Error('PROJECT_BRIDGE_UNAVAILABLE: Project persistence bridge is unavailable.');
   if (state.authoring.project.busy) return false;
+  cancelActiveSnapshot('PROJECT_SWITCH', 'Project Open invalidated the active Snapshot request.');
+  state.authoring.snapshot.projectSessionId = crypto.randomUUID();
   setProjectOperationState({
     busy: true,
     status: manifestFile ? 'Opening dropped project.json...' : 'Selecting project.json...',
@@ -4725,6 +4757,256 @@ function sendLinkMessage(message) {
   return true;
 }
 
+function nextSnapshotJobId() {
+  state.authoring.snapshot.sequence += 1;
+  return `snapshot-${Date.now().toString(36)}-${state.authoring.snapshot.sequence.toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function snapshotFailure(code, message) {
+  const error = new Error(`${code}: ${message}`);
+  error.code = code;
+  return error;
+}
+
+function rollbackSnapshotLayer(current) {
+  if (!current?.installedLayerId) return;
+  const activeFamily = authoringSession.activeFamilyId;
+  authoringSession.activateFamily(current.request.familyId);
+  const removed = authoringSession.deleteLayer(current.installedLayerId);
+  if (removed?.runtime) disposeAuthoringRuntime(removed.runtime);
+  if (activeFamily !== null && activeFamily !== undefined) authoringSession.activateFamily(activeFamily);
+  current.installedLayerId = null;
+}
+
+function clearSnapshotJob({ rollback = false, error = '' } = {}) {
+  const current = state.authoring.snapshot.current;
+  if (rollback) rollbackSnapshotLayer(current);
+  if (current) {
+    current.bytes = null;
+    current.pendingChunk = null;
+  }
+  state.authoring.snapshot.current = null;
+  state.authoring.snapshot.status = error ? 'FAILED' : 'IDLE';
+  state.authoring.snapshot.error = error;
+  syncAuthoringUi();
+}
+
+function cancelActiveSnapshot(code = 'SNAPSHOT_CANCELED', message = 'Snapshot canceled by renderer context change.') {
+  const current = state.authoring.snapshot.current;
+  if (!current) return false;
+  sendLinkMessage({ type: 'SNAPSHOT_CANCEL', snapshotJobId: current.request.snapshotJobId, code, message });
+  clearSnapshotJob({ rollback: true, error: `${code}: ${message}` });
+  return true;
+}
+
+function requestPhotoshopSnapshot(captureMode) {
+  if (!isProjectionAuthoringContext()) throw snapshotFailure('SNAPSHOT_CONTEXT_UNAVAILABLE', 'Select an available Anamorphic Projection View.');
+  if (!state.link.photoshopConnected) throw snapshotFailure('UXP_DISCONNECTED', 'Photoshop UXP is not connected.');
+  if (state.authoring.snapshot.current) throw snapshotFailure('SNAPSHOT_BUSY', 'Another Snapshot job is active.');
+  const familyId = currentProjectionBakeProfile().familyId;
+  const snapshotJobId = nextSnapshotJobId();
+  const request = {
+    type: 'SNAPSHOT_REQUEST',
+    snapshotJobId,
+    captureRequestId: crypto.randomUUID(),
+    projectSessionId: state.authoring.snapshot.projectSessionId,
+    familyId,
+    captureMode
+  };
+  state.authoring.snapshot.current = {
+    request,
+    metadata: null,
+    bytes: null,
+    receivedBytes: 0,
+    receivedChunks: 0,
+    pendingChunk: null,
+    installedLayerId: null
+  };
+  state.authoring.snapshot.status = 'REQUESTED';
+  state.authoring.snapshot.error = '';
+  authoringMessage.className = 'projection-poc-message';
+  authoringMessage.textContent = `Photoshop ${captureMode === 'COMPOSITE' ? 'Composite' : 'Single Pixel Layer'} Snapshot requested.`;
+  if (!sendLinkMessage(request)) {
+    clearSnapshotJob({ error: 'UXP_DISCONNECTED: Snapshot request could not be sent.' });
+    throw snapshotFailure('UXP_DISCONNECTED', 'Snapshot request could not be sent.');
+  }
+  syncAuthoringUi();
+  return snapshotJobId;
+}
+
+function handleSnapshotBegin(metadata) {
+  const current = state.authoring.snapshot.current;
+  if (!current || metadata.snapshotJobId !== current.request.snapshotJobId) throw snapshotFailure('UNEXPECTED_SNAPSHOT_BEGIN', 'Snapshot begin does not match the active request.');
+  for (const field of ['captureRequestId', 'projectSessionId', 'familyId', 'captureMode']) {
+    if (metadata[field] !== current.request[field]) throw snapshotFailure('SNAPSHOT_CONTEXT_MISMATCH', `${field} does not match the active request.`);
+  }
+  assertNativeSnapshotGeometry(metadata);
+  if (metadata.componentSize !== 8 || ![3, 4].includes(metadata.components) || metadata.pixelFormat !== (metadata.components === 3 ? 'RGB' : 'RGBA')) {
+    throw snapshotFailure('SNAPSHOT_PIXEL_FORMAT_UNSUPPORTED', 'Snapshot must contain chunky RGB8 or RGBA8 pixels.');
+  }
+  const expectedBytes = metadata.width * metadata.height * metadata.components;
+  if (!Number.isSafeInteger(expectedBytes) || metadata.totalBytes !== expectedBytes || metadata.totalBytes > liveLinkConfig.maxFrameBytes ||
+      metadata.chunkSize <= 0 || metadata.chunkSize > liveLinkConfig.chunkSizeBytes || metadata.chunkCount !== Math.ceil(metadata.totalBytes / metadata.chunkSize)) {
+    throw snapshotFailure('INVALID_SNAPSHOT_METADATA', 'Snapshot byte count or chunk metadata is invalid.');
+  }
+  const expectedSourceType = metadata.captureMode === 'COMPOSITE' ? 'PHOTOSHOP_COMPOSITE_SNAPSHOT' : 'PHOTOSHOP_SELECTION_SNAPSHOT';
+  if (metadata.sourceType !== expectedSourceType || metadata.colorContract !== 'SRGB_IEC61966_2_1_RGB8' ||
+      !['OPAQUE_RGB8', 'PHOTOSHOP_IMAGING_RGBA8_PROBE_PENDING'].includes(metadata.alphaContract)) {
+    throw snapshotFailure('SNAPSHOT_SOURCE_CONTRACT_INVALID', 'Snapshot source, color, or alpha contract is invalid.');
+  }
+  if (metadata.captureMode === 'SINGLE_PIXEL_LAYER' &&
+      (!Number.isFinite(metadata.selectedLayerOpacity) || metadata.selectedLayerOpacity < 0 || metadata.selectedLayerOpacity > 1)) {
+    throw snapshotFailure('SNAPSHOT_SELECTION_OPACITY_INVALID', 'Selection Snapshot requires normalized Photoshop layer opacity from 0 to 1.');
+  }
+  current.metadata = metadata;
+  current.bytes = new Uint8Array(metadata.totalBytes);
+  state.authoring.snapshot.status = 'RECEIVING';
+  syncAuthoringUi();
+}
+
+function handleSnapshotChunk(message) {
+  const current = state.authoring.snapshot.current;
+  if (!current?.metadata || message.snapshotJobId !== current.request.snapshotJobId || current.pendingChunk) {
+    throw snapshotFailure('UNEXPECTED_SNAPSHOT_CHUNK', 'Snapshot chunk marker is unexpected.');
+  }
+  const expectedLength = Math.min(current.metadata.chunkSize, current.metadata.totalBytes - current.receivedBytes);
+  if (message.chunkIndex !== current.receivedChunks || message.byteLength !== expectedLength) {
+    throw snapshotFailure('INVALID_SNAPSHOT_CHUNK', `Expected chunk ${current.receivedChunks} with ${expectedLength} bytes.`);
+  }
+  current.pendingChunk = { chunkIndex: message.chunkIndex, byteLength: message.byteLength };
+}
+
+function handleSnapshotBinary(arrayBuffer) {
+  const current = state.authoring.snapshot.current;
+  if (!current?.pendingChunk || !current.bytes) throw snapshotFailure('UNEXPECTED_SNAPSHOT_BINARY', 'Snapshot binary arrived without a chunk marker.');
+  const chunk = new Uint8Array(arrayBuffer);
+  if (chunk.byteLength !== current.pendingChunk.byteLength || current.receivedBytes + chunk.byteLength > current.bytes.byteLength) {
+    throw snapshotFailure('INVALID_SNAPSHOT_BINARY', 'Snapshot binary length does not match its chunk marker.');
+  }
+  current.bytes.set(chunk, current.receivedBytes);
+  current.receivedBytes += chunk.byteLength;
+  current.receivedChunks += 1;
+  current.pendingChunk = null;
+}
+
+async function installSnapshotLayer(current) {
+  const metadata = current.metadata;
+  if (state.authoring.snapshot.current !== current || metadata.projectSessionId !== state.authoring.snapshot.projectSessionId ||
+      current.request.familyId !== currentProjectionBakeProfile()?.familyId) {
+    throw snapshotFailure('SNAPSHOT_LATE_COMPLETION', 'Snapshot belongs to an older project/session or family context.');
+  }
+  const rgba = rgba8FromChunky(current.bytes, metadata.width, metadata.height, metadata.components);
+  const pngBytes = await encodeRgba8Png(rgba, metadata.width, metadata.height);
+  current.bytes = null;
+  const assetSha256 = await sha256Hex(pngBytes);
+  const timestampToken = metadata.captureTimestamp.replace(/[:.]/g, '-');
+  const filename = `Photoshop_${metadata.captureMode === 'COMPOSITE' ? 'Composite' : 'Selection'}_${timestampToken}.png`;
+  const provenance = {
+    type: metadata.sourceType,
+    documentName: metadata.documentName,
+    captureDocumentId: metadata.documentId,
+    documentWidth: metadata.documentWidth,
+    documentHeight: metadata.documentHeight,
+    captureBounds: { ...metadata.captureBounds },
+    captureTimestamp: metadata.captureTimestamp,
+    captureMode: metadata.captureMode
+  };
+  if (metadata.sourceType === 'PHOTOSHOP_SELECTION_SNAPSHOT') {
+    provenance.selectedLayerIds = [...metadata.selectedLayerIds];
+    provenance.selectedLayerNames = [...metadata.selectedLayerNames];
+  }
+  const source = {
+    id: `snapshot:${metadata.snapshotJobId}`,
+    sourceId: `snapshot:${metadata.snapshotJobId}`,
+    filename,
+    name: filename,
+    originalFilename: filename,
+    sourceType: metadata.sourceType,
+    mimeType: 'image/png',
+    type: 'image/png',
+    width: metadata.width,
+    height: metadata.height,
+    hasAlpha: true,
+    byteLength: pngBytes.byteLength,
+    sha256: assetSha256,
+    alphaContract: metadata.alphaContract,
+    colorContract: metadata.colorContract,
+    provenance
+  };
+  let runtime = null;
+  try {
+    runtime = await decodeProjectRuntimeAsset({ source, bytes: pngBytes, layerId: metadata.snapshotJobId, familyId: metadata.familyId });
+    if (state.authoring.snapshot.current !== current || metadata.projectSessionId !== state.authoring.snapshot.projectSessionId ||
+        current.request.familyId !== currentProjectionBakeProfile()?.familyId) {
+      throw snapshotFailure('SNAPSHOT_LATE_COMPLETION', 'Snapshot context changed during asset installation.');
+    }
+    const initialState = metadata.sourceType === 'PHOTOSHOP_SELECTION_SNAPSHOT'
+      ? selectionSnapshotInitialLayerState(metadata, currentProjectionBakeProfile().workingResolution)
+      : undefined;
+    const layer = authoringSession.addLayer(runtime, metadata.familyId, runtime, initialState);
+    current.installedLayerId = layer.layerId;
+    current.assetSha256 = assetSha256;
+    state.authoring.snapshot.status = 'WAITING_COMMIT';
+    syncSelectedAuthoringRuntime();
+    invalidateAuthoringOutputs('photoshop-snapshot-layer-added');
+    render();
+    updateDiagnostics();
+    if (!sendLinkMessage({
+      type: 'SNAPSHOT_COMPLETE',
+      snapshotJobId: metadata.snapshotJobId,
+      layerId: layer.layerId,
+      sourceType: metadata.sourceType,
+      width: metadata.width,
+      height: metadata.height,
+      assetSha256
+    })) throw snapshotFailure('BROKER_DISCONNECTED', 'Snapshot completion could not be committed.');
+  } catch (error) {
+    if (runtime && !current.installedLayerId) disposeAuthoringRuntime(runtime);
+    throw error;
+  }
+}
+
+function handleSnapshotEnd(message) {
+  const current = state.authoring.snapshot.current;
+  if (!current?.metadata || message.snapshotJobId !== current.request.snapshotJobId || current.pendingChunk ||
+      current.receivedBytes !== current.metadata.totalBytes || current.receivedChunks !== current.metadata.chunkCount ||
+      message.receivedBytes !== current.receivedBytes || message.receivedChunks !== current.receivedChunks) {
+    throw snapshotFailure('INCOMPLETE_SNAPSHOT', 'Snapshot end does not match the complete transfer.');
+  }
+  state.authoring.snapshot.status = 'INSTALLING';
+  void installSnapshotLayer(current).catch((error) => {
+    sendLinkMessage({ type: 'SNAPSHOT_ERROR', snapshotJobId: current.request.snapshotJobId, code: error.code || 'SNAPSHOT_INSTALL_FAILED', message: error.message || String(error) });
+    authoringMessage.className = 'projection-poc-message fail';
+    authoringMessage.textContent = error.message || String(error);
+    clearSnapshotJob({ rollback: true, error: error.message || String(error) });
+  });
+}
+
+function handleSnapshotCommitted(message) {
+  const current = state.authoring.snapshot.current;
+  if (!current || message.snapshotJobId !== current.request.snapshotJobId || message.layerId !== current.installedLayerId || message.assetSha256 !== current.assetSha256) {
+    throw snapshotFailure('UNEXPECTED_SNAPSHOT_COMMIT', 'Snapshot commit does not match the installed Layer and Asset.');
+  }
+  state.authoring.snapshot.completedJobIds.add(message.snapshotJobId);
+  if (state.authoring.snapshot.completedJobIds.size > 256) state.authoring.snapshot.completedJobIds.delete(state.authoring.snapshot.completedJobIds.values().next().value);
+  const layer = authoringSession.layers.find((candidate) => candidate.layerId === current.installedLayerId);
+  state.authoring.snapshot.current = null;
+  state.authoring.snapshot.status = 'COMPLETE';
+  state.authoring.snapshot.error = '';
+  authoringMessage.className = 'projection-poc-message pass';
+  authoringMessage.textContent = `${layer?.source.filename || 'Photoshop Snapshot'} added as an immutable project-owned PNG Bitmap Source.`;
+  syncAuthoringUi();
+}
+
+function handleSnapshotError(message) {
+  const current = state.authoring.snapshot.current;
+  if (!current || (message.snapshotJobId && message.snapshotJobId !== current.request.snapshotJobId)) return;
+  const error = `${message.code || 'SNAPSHOT_ERROR'}: ${message.message || 'Snapshot failed.'}`;
+  authoringMessage.className = 'projection-poc-message fail';
+  authoringMessage.textContent = error;
+  clearSnapshotJob({ rollback: true, error });
+}
+
 function rejectIncomingFrame(code, message, frameId = null) {
   state.link.framesDropped += 1;
   state.link.lastError = `${code}: ${message}`;
@@ -4850,6 +5132,7 @@ function handleLinkJson(message) {
     case 'LINK_STATUS':
       state.link.photoshopConnected = Boolean(message.photoshopConnected);
       if (!state.link.photoshopConnected) {
+        handleSnapshotError({ snapshotJobId: state.authoring.snapshot.current?.request.snapshotJobId, code: 'UXP_DISCONNECTED', message: 'Photoshop disconnected during Snapshot.' });
         state.reverseBake.targetRegistry = {
           registryAuthority: null,
           scope: null,
@@ -4859,6 +5142,34 @@ function handleLinkJson(message) {
         };
       }
       break;
+    case 'SNAPSHOT_BEGIN':
+      try { handleSnapshotBegin(message); }
+      catch (error) {
+        sendLinkMessage({ type: 'SNAPSHOT_ERROR', snapshotJobId: message.snapshotJobId, code: error.code || 'INVALID_SNAPSHOT_METADATA', message: error.message || String(error) });
+        handleSnapshotError({ ...message, code: error.code || 'INVALID_SNAPSHOT_METADATA', message: error.message || String(error) });
+      }
+      return;
+    case 'SNAPSHOT_CHUNK':
+      try { handleSnapshotChunk(message); }
+      catch (error) {
+        sendLinkMessage({ type: 'SNAPSHOT_ERROR', snapshotJobId: message.snapshotJobId, code: error.code || 'INVALID_SNAPSHOT_CHUNK', message: error.message || String(error) });
+        handleSnapshotError({ ...message, code: error.code || 'INVALID_SNAPSHOT_CHUNK', message: error.message || String(error) });
+      }
+      return;
+    case 'SNAPSHOT_END':
+      try { handleSnapshotEnd(message); }
+      catch (error) {
+        sendLinkMessage({ type: 'SNAPSHOT_ERROR', snapshotJobId: message.snapshotJobId, code: error.code || 'INCOMPLETE_SNAPSHOT', message: error.message || String(error) });
+        handleSnapshotError({ ...message, code: error.code || 'INCOMPLETE_SNAPSHOT', message: error.message || String(error) });
+      }
+      return;
+    case 'SNAPSHOT_COMMITTED':
+      try { handleSnapshotCommitted(message); }
+      catch (error) { handleSnapshotError({ ...message, code: error.code || 'UNEXPECTED_SNAPSHOT_COMMIT', message: error.message || String(error) }); }
+      return;
+    case 'SNAPSHOT_ERROR':
+      handleSnapshotError(message);
+      return;
     case 'BAKE_TARGET_REGISTRY':
       try {
         acceptBakeTargetRegistry(message);
@@ -4948,11 +5259,19 @@ function connectLiveLink() {
       }
       return;
     }
-    handleBinaryChunk(event.data);
+    if (state.authoring.snapshot.current?.metadata) {
+      try { handleSnapshotBinary(event.data); }
+      catch (error) {
+        const snapshotJobId = state.authoring.snapshot.current?.request.snapshotJobId;
+        sendLinkMessage({ type: 'SNAPSHOT_ERROR', snapshotJobId, code: error.code || 'INVALID_SNAPSHOT_BINARY', message: error.message || String(error) });
+        handleSnapshotError({ snapshotJobId, code: error.code || 'INVALID_SNAPSHOT_BINARY', message: error.message || String(error) });
+      }
+    } else handleBinaryChunk(event.data);
   });
   socket.addEventListener('close', () => {
     state.link.rendererHandshake = false;
     state.link.photoshopConnected = false;
+    handleSnapshotError({ snapshotJobId: state.authoring.snapshot.current?.request.snapshotJobId, code: 'BROKER_DISCONNECTED', message: 'Broker disconnected during Snapshot.' });
     pointerQueue.reset();
     state.pointer.state = 'UNAVAILABLE';
     if (state.link.currentFrame) rejectIncomingFrame('BROKER_DISCONNECTED', 'Broker disconnected during a frame.', state.link.currentFrame.metadata.frameId);
@@ -5007,7 +5326,8 @@ function vectorMaskEventUv(event, clampToSource = true) {
     { x: normalized.x, y: normalized.y },
     layer.source,
     profile.workingResolution.aspect,
-    layer.transform
+    layer.transform,
+    profile.workingResolution
   );
   return {
     x: clampToSource ? Math.min(1, Math.max(0, uv.u)) : uv.u,
@@ -5438,6 +5758,12 @@ vectorMaskSegmentLinear.addEventListener('click', () => setSelectedVectorMaskSeg
 vectorMaskSegmentBezier.addEventListener('click', () => setSelectedVectorMaskSegmentType('CUBIC_BEZIER'));
 vectorMaskDeletePoint.addEventListener('click', deleteSelectedVectorMaskPoint);
 authoringImageButton.addEventListener('click', () => authoringImageInput.click());
+authoringPhotoshopCompositeButton.addEventListener('click', () => {
+  try { requestPhotoshopSnapshot('COMPOSITE'); } catch (error) { handleSnapshotError({ code: error.code, message: error.message }); }
+});
+authoringPhotoshopSelectionButton.addEventListener('click', () => {
+  try { requestPhotoshopSnapshot('SINGLE_PIXEL_LAYER'); } catch (error) { handleSnapshotError({ code: error.code, message: error.message }); }
+});
 authoringImageInput.addEventListener('change', () => {
   const file = authoringImageInput.files?.[0] || null;
   authoringImageInput.value = '';
@@ -5495,7 +5821,7 @@ for (const button of outsideSignagePresetButtons) {
   button.addEventListener('click', () => commitOutsideSignageOpacity(OUTSIDE_SIGNAGE_PRESETS[button.dataset.outsideSignagePreset]));
   button.addEventListener('pointerdown', (event) => event.stopPropagation());
 }
-for (const element of [projectionAuthoring, authoringProjectControl, authoringImageButton, authoringReplaceButton, authoringMoveUp, authoringMoveDown, authoringDeleteLayer, authoringLayerList, vectorMaskControl, authoringTransformFields, authoringResetTransform]) {
+for (const element of [projectionAuthoring, authoringProjectControl, authoringImageButton, authoringPhotoshopCompositeButton, authoringPhotoshopSelectionButton, authoringReplaceButton, authoringMoveUp, authoringMoveDown, authoringDeleteLayer, authoringLayerList, vectorMaskControl, authoringTransformFields, authoringResetTransform]) {
   element.addEventListener('pointerdown', (event) => event.stopPropagation());
   element.addEventListener('wheel', (event) => event.stopPropagation(), { passive: true });
 }
@@ -7081,7 +7407,7 @@ window.runBlock8DProjectSmoke = async () => {
       quickRailUnchanged: railBefore === state.authoring.railExpanded,
       contextLossCount: state.contextLossCount - contextLossBefore
     };
-    report.technicalPass = report.schemaVersion === 2 && report.folderProject && report.projectUiAvailable &&
+    report.technicalPass = report.schemaVersion === PROJECT_SCHEMA_VERSION && report.folderProject && report.projectUiAvailable &&
       report.frontLayerCount === 3 && report.backLayerCount === 2 && report.roundTripExact && report.stableLayerIds &&
       report.safeSequenceAfterLoad && report.loadedNeedsBake && report.loadedPhotoshopUnsynced &&
       report.sourceBytesPreserved && report.relativeAssetPaths && report.calibrationReferenceOnly &&

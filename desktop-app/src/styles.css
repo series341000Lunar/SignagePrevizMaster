@@ -468,6 +468,17 @@ aside {
   margin: 8px 0;
 }
 
+.authoring-source-actions {
+  display: grid;
+  gap: 6px;
+  min-width: 188px;
+}
+
+.authoring-source-actions button {
+  min-height: 30px;
+  white-space: normal;
+}
+
 .authoring-camera-row > span {
   color: #aeb6c3;
   font: 700 9px Consolas, monospace;
@@ -938,6 +949,17 @@ aside {
 .authoring-transform-fields input {
   min-width: 0;
   width: 100%;
+}
+
+.authoring-transform-fields .authoring-scale-field {
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.authoring-scale-field small {
+  color: #62daa1;
+  font: 700 8px Consolas, monospace;
+  white-space: nowrap;
 }
 
 #authoring-reset-transform {

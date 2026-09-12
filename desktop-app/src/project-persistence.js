@@ -10,13 +10,21 @@ import {
   cloneVectorMask,
   createEmptyVectorMask
 } from './vector-mask-model.js';
+import {
+  BITMAP_ALPHA_CONTRACTS,
+  BITMAP_COLOR_CONTRACTS,
+  BITMAP_SOURCE_TYPES,
+  cloneBitmapProvenance,
+  createFileProvenance,
+  isSnapshotSourceType,
+  normalizeCaptureBounds
+} from './bitmap-source.js';
 
-export const PROJECT_SCHEMA_VERSION = 2;
-export const PROJECT_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2]);
+export const PROJECT_SCHEMA_VERSION = 3;
+export const PROJECT_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2, 3]);
 export const PROJECT_TYPE = 'LUUX_SIGNAGE_PREVIZ';
 export const PROJECT_MAPPING_MODE = 'SCREEN_PROJECTED';
 
-const SOURCE_TYPES = Object.freeze(['FILE']);
 const ASSET_REFERENCE_PATTERN = /^assets\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 export class ProjectPersistenceError extends Error {
@@ -84,18 +92,78 @@ export async function sha256Hex(value) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
 }
 
-function validateSource(source, label) {
+function validateCaptureBounds(value, label, width, height) {
+  object(value, 'PROJECT_SNAPSHOT_PROVENANCE_INVALID', label);
+  exactKeys(value, ['left', 'top', 'right', 'bottom'], 'PROJECT_SNAPSHOT_PROVENANCE_INVALID', label);
+  let bounds;
+  try { bounds = normalizeCaptureBounds(value); }
+  catch (error) { fail('PROJECT_SNAPSHOT_PROVENANCE_INVALID', `${label} is invalid.`, { cause: error.message }); }
+  if (bounds.right - bounds.left !== width || bounds.bottom - bounds.top !== height) {
+    fail('PROJECT_SNAPSHOT_NATIVE_PIXEL_MISMATCH', `${label} dimensions must match bitmap dimensions 1:1.`);
+  }
+}
+
+function validateProvenance(source, label) {
+  const provenance = object(source.provenance, 'PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance`);
+  if (source.sourceType === 'FILE') {
+    exactKeys(provenance, ['type', 'originalFilename'], 'PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance`);
+    if (provenance.type !== 'FILE' || provenance.originalFilename !== source.originalFilename) {
+      fail('PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance must identify the FILE original filename.`);
+    }
+    return;
+  }
+  const commonKeys = [
+    'type', 'documentName', 'captureDocumentId', 'documentWidth', 'documentHeight',
+    'captureBounds', 'captureTimestamp', 'captureMode'
+  ];
+  const selectionKeys = ['selectedLayerIds', 'selectedLayerNames'];
+  exactKeys(provenance, isSnapshotSourceType(source.sourceType) && source.sourceType === 'PHOTOSHOP_SELECTION_SNAPSHOT'
+    ? [...commonKeys, ...selectionKeys]
+    : commonKeys, 'PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance`);
+  if (provenance.type !== source.sourceType) fail('PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance.type must match sourceType.`);
+  nonEmptyString(provenance.documentName, 'PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance.documentName`);
+  positiveInteger(provenance.captureDocumentId, 'PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance.captureDocumentId`);
+  positiveInteger(provenance.documentWidth, 'PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance.documentWidth`);
+  positiveInteger(provenance.documentHeight, 'PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance.documentHeight`);
+  validateCaptureBounds(provenance.captureBounds, `${label}.provenance.captureBounds`, source.width, source.height);
+  if (!Number.isFinite(Date.parse(provenance.captureTimestamp))) fail('PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance.captureTimestamp must be ISO date text.`);
+  const expectedMode = source.sourceType === 'PHOTOSHOP_COMPOSITE_SNAPSHOT' ? 'COMPOSITE' : 'SINGLE_PIXEL_LAYER';
+  if (provenance.captureMode !== expectedMode) fail('PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance.captureMode must be ${expectedMode}.`);
+  if (source.sourceType === 'PHOTOSHOP_SELECTION_SNAPSHOT') {
+    if (!Array.isArray(provenance.selectedLayerIds) || !Array.isArray(provenance.selectedLayerNames) ||
+        provenance.selectedLayerIds.length !== 1 || provenance.selectedLayerNames.length !== 1 ||
+        !Number.isSafeInteger(provenance.selectedLayerIds[0]) || provenance.selectedLayerIds[0] <= 0 ||
+        typeof provenance.selectedLayerNames[0] !== 'string' || !provenance.selectedLayerNames[0]) {
+      fail('PROJECT_SOURCE_PROVENANCE_INVALID', `${label}.provenance must contain exactly one Pixel Layer identity.`);
+    }
+  }
+}
+
+function validateSource(source, label, schemaVersion) {
   object(source, 'PROJECT_MANIFEST_INVALID', label);
-  exactKeys(source, [
-    'sourceType', 'assetReference', 'originalFilename', 'width', 'height',
-    'mimeType', 'byteLength', 'sha256', 'hasAlpha'
-  ], 'PROJECT_MANIFEST_INVALID', label);
-  if (!SOURCE_TYPES.includes(source.sourceType)) fail('PROJECT_SOURCE_TYPE_INVALID', `${label}.sourceType must be FILE.`);
+  if (schemaVersion <= 2) {
+    exactKeys(source, [
+      'sourceType', 'assetReference', 'originalFilename', 'width', 'height',
+      'mimeType', 'byteLength', 'sha256', 'hasAlpha'
+    ], 'PROJECT_MANIFEST_INVALID', label, schemaVersion);
+    if (source.sourceType !== 'FILE') fail('PROJECT_SOURCE_TYPE_INVALID', `${label}.sourceType must be FILE.`);
+  } else {
+    exactKeys(source, [
+      'sourceId', 'sourceType', 'assetReference', 'originalFilename', 'width', 'height',
+      'mimeType', 'byteLength', 'sha256', 'hasAlpha', 'alphaContract', 'colorContract', 'provenance'
+    ], 'PROJECT_MANIFEST_INVALID', label, schemaVersion);
+    nonEmptyString(source.sourceId, 'PROJECT_SOURCE_ID_INVALID', `${label}.sourceId`);
+    if (!BITMAP_SOURCE_TYPES.includes(source.sourceType)) fail('PROJECT_SOURCE_TYPE_INVALID', `${label}.sourceType is unsupported.`);
+    if (!BITMAP_ALPHA_CONTRACTS.includes(source.alphaContract)) fail('PROJECT_SOURCE_CONTRACT_INVALID', `${label}.alphaContract is unsupported.`);
+    if (!BITMAP_COLOR_CONTRACTS.includes(source.colorContract)) fail('PROJECT_SOURCE_CONTRACT_INVALID', `${label}.colorContract is unsupported.`);
+  }
   validateAssetReference(source.assetReference);
   nonEmptyString(source.originalFilename, 'PROJECT_MANIFEST_INVALID', `${label}.originalFilename`);
   positiveInteger(source.width, 'PROJECT_MANIFEST_INVALID', `${label}.width`);
   positiveInteger(source.height, 'PROJECT_MANIFEST_INVALID', `${label}.height`);
-  if (!['image/png', 'image/jpeg'].includes(source.mimeType)) fail('PROJECT_SOURCE_TYPE_INVALID', `${label}.mimeType is unsupported.`);
+  if (!['image/png', 'image/jpeg'].includes(source.mimeType) || (isSnapshotSourceType(source.sourceType) && source.mimeType !== 'image/png')) {
+    fail('PROJECT_SOURCE_TYPE_INVALID', `${label}.mimeType is unsupported for ${source.sourceType}.`);
+  }
   if (!Number.isSafeInteger(source.byteLength) || source.byteLength <= 0) fail('PROJECT_MANIFEST_INVALID', `${label}.byteLength must be positive.`);
   if (source.sha256 !== undefined && !/^[A-Fa-f0-9]{64}$/.test(source.sha256)) {
     fail('PROJECT_MANIFEST_INVALID', `${label}.sha256 must be a SHA-256 hex digest.`);
@@ -103,6 +171,19 @@ function validateSource(source, label) {
   if (source.hasAlpha !== undefined && typeof source.hasAlpha !== 'boolean') {
     fail('PROJECT_MANIFEST_INVALID', `${label}.hasAlpha must be boolean when present.`);
   }
+  if (schemaVersion >= 3) validateProvenance(source, label);
+}
+
+function commonPersistentSource(source, schemaVersion) {
+  if (schemaVersion >= 3) return { ...source, provenance: cloneBitmapProvenance(source.provenance) };
+  return {
+    ...source,
+    sourceId: `legacy:${source.assetReference}`,
+    sourceType: 'FILE',
+    alphaContract: 'EMBEDDED_FILE_ALPHA',
+    colorContract: 'EMBEDDED_FILE_PROFILE',
+    provenance: createFileProvenance(source.originalFilename)
+  };
 }
 
 function validateProfileReference(reference, familyId, profiles) {
@@ -212,7 +293,7 @@ export function validateProjectManifest(manifest, { profiles = PROJECTION_BAKE_P
       orders.add(layer.order);
       if (layer.order !== index) fail('PROJECT_LAYER_ORDER_INVALID', `${label}.order must be contiguous and match manifest array order.`);
       if (typeof layer.visible !== 'boolean') fail('PROJECT_MANIFEST_INVALID', `${label}.visible must be boolean.`);
-      validateSource(layer.source, `${label}.source`);
+      validateSource(layer.source, `${label}.source`, manifest.schemaVersion);
       if (layer.mappingMode !== PROJECT_MAPPING_MODE) fail('PROJECT_MAPPING_MODE_INVALID', `${label}.mappingMode must be ${PROJECT_MAPPING_MODE}.`);
       object(layer.transform, 'PROJECT_TRANSFORM_INVALID', `${label}.transform`);
       exactKeys(layer.transform, ['x', 'y', 'scale', 'rotationDegrees'], 'PROJECT_TRANSFORM_INVALID', `${label}.transform`);
@@ -280,21 +361,30 @@ export async function createProjectSavePayload(stack, {
       const assetReference = `assets/asset-${token}-${String(assetIndex).padStart(4, '0')}.${extension}`;
       const sha256 = await sha256Hex(bytes);
       assets.push({ assetReference, bytes, sha256 });
+      const sourceType = BITMAP_SOURCE_TYPES.includes(layer.source.sourceType) ? layer.source.sourceType : 'FILE';
+      const originalFilename = layer.source.originalFilename || layer.source.filename;
+      const provenance = sourceType === 'FILE'
+        ? createFileProvenance(originalFilename)
+        : cloneBitmapProvenance(layer.source.provenance);
       family.layers.push({
         familyId,
         layerId: layer.layerId,
         order: layer.order,
         visible: layer.visible,
         source: {
-          sourceType: 'FILE',
+          sourceId: String(layer.source.sourceId || layer.source.id),
+          sourceType,
           assetReference,
-          originalFilename: layer.source.originalFilename || layer.source.filename,
+          originalFilename,
           width: layer.source.width,
           height: layer.source.height,
           mimeType: layer.source.mimeType,
           byteLength: bytes.byteLength,
           sha256,
-          hasAlpha: layer.source.hasAlpha
+          hasAlpha: layer.source.hasAlpha,
+          alphaContract: layer.source.alphaContract || (sourceType === 'FILE' ? 'EMBEDDED_FILE_ALPHA' : (layer.source.hasAlpha ? 'PHOTOSHOP_IMAGING_RGBA8_PROBE_PENDING' : 'OPAQUE_RGB8')),
+          colorContract: layer.source.colorContract || (sourceType === 'FILE' ? 'EMBEDDED_FILE_PROFILE' : 'SRGB_IEC61966_2_1_RGB8'),
+          provenance
         },
         mappingMode: PROJECT_MAPPING_MODE,
         transform: { ...layer.transform },
@@ -359,10 +449,11 @@ export async function prepareProjectLoad(manifest, assetRecords, {
       const family = manifest.families[familyId];
       const layers = [];
       for (const layer of family.layers) {
+        const commonSource = commonPersistentSource(layer.source, manifest.schemaVersion);
         const bytes = assets.get(layer.source.assetReference);
         let runtime;
         try {
-          runtime = await decodeAsset({ source: layer.source, bytes, layerId: layer.layerId, familyId });
+          runtime = await decodeAsset({ source: commonSource, bytes, layerId: layer.layerId, familyId });
         } catch (error) {
           fail('PROJECT_ASSET_DECODE_FAILED', `Could not decode ${layer.source.assetReference}: ${error.message || error}`, {
             assetReference: layer.source.assetReference
@@ -385,10 +476,11 @@ export async function prepareProjectLoad(manifest, assetRecords, {
           visible: layer.visible,
           source: {
             id: `project:${layer.source.assetReference}`,
-            filename: layer.source.originalFilename,
-            name: layer.source.originalFilename,
-            originalFilename: layer.source.originalFilename,
-            sourceType: 'FILE',
+            sourceId: commonSource.sourceId,
+            filename: commonSource.originalFilename,
+            name: commonSource.originalFilename,
+            originalFilename: commonSource.originalFilename,
+            sourceType: commonSource.sourceType,
             assetReference: layer.source.assetReference,
             mimeType: layer.source.mimeType,
             type: layer.source.mimeType,
@@ -396,7 +488,10 @@ export async function prepareProjectLoad(manifest, assetRecords, {
             height: layer.source.height,
             byteLength: layer.source.byteLength,
             sha256: layer.source.sha256 || null,
-            hasAlpha: Boolean(layer.source.hasAlpha)
+            hasAlpha: Boolean(layer.source.hasAlpha),
+            alphaContract: commonSource.alphaContract,
+            colorContract: commonSource.colorContract,
+            provenance: cloneBitmapProvenance(commonSource.provenance)
           },
           runtime,
           mappingMode: PROJECT_MAPPING_MODE,

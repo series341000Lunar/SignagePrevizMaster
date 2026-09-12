@@ -61,14 +61,51 @@ assert.equal(session.resetTransform(), true);
 assert.deepEqual(session.transform, DEFAULT_AUTHORING_TRANSFORM);
 
 const frameAspect = 3000 / 3840;
-const normalizedSize = computeNormalizedImageSize({ sourceWidth: 3000, sourceHeight: 3840, frameAspect, scale: 1 });
-assert.equal(normalizedSize.width, 0.75);
-assert.equal(normalizedSize.height, 0.75);
-const centerUv = screenPointToSourceUv({ x: 0.5, y: 0.5 }, source, frameAspect, DEFAULT_AUTHORING_TRANSFORM);
+const frontResolution = { width: 3000, height: 3840 };
+const backResolution = { width: 2100, height: 3840 };
+const normalizedSize = computeNormalizedImageSize({
+  sourceWidth: 3000,
+  sourceHeight: 3840,
+  frameWidth: frontResolution.width,
+  frameHeight: frontResolution.height,
+  frameAspect,
+  scale: 1
+});
+assert.deepEqual(normalizedSize, { width: 1, height: 1 });
+assert.deepEqual(computeNormalizedImageSize({
+  sourceWidth: 2100,
+  sourceHeight: 3840,
+  frameWidth: backResolution.width,
+  frameHeight: backResolution.height,
+  frameAspect: 2100 / 3840,
+  scale: 1
+}), { width: 1, height: 1 });
+assert.deepEqual(transformToViewportRect(
+  DEFAULT_AUTHORING_TRANSFORM,
+  { width: 2100, height: 3840 },
+  2100 / 3840,
+  { x: 0, y: 0, width: 700, height: 1280 },
+  backResolution
+), {
+  centerX: 350,
+  centerY: 640,
+  width: 700,
+  height: 1280,
+  rotationDegrees: 0
+});
+assert.deepEqual(computeNormalizedImageSize({
+  sourceWidth: 1500,
+  sourceHeight: 1920,
+  frameWidth: frontResolution.width,
+  frameHeight: frontResolution.height,
+  frameAspect,
+  scale: 1
+}), { width: 0.5, height: 0.5 });
+const centerUv = screenPointToSourceUv({ x: 0.5, y: 0.5 }, source, frameAspect, DEFAULT_AUTHORING_TRANSFORM, frontResolution);
 assert.deepEqual(centerUv, { u: 0.5, v: 0.5, inside: true });
-assert.equal(screenPointToSourceUv({ x: 1, y: 1 }, source, frameAspect, DEFAULT_AUTHORING_TRANSFORM).inside, false);
-const small = transformToViewportRect({ x: 0.6, y: 0.4, scale: 1.2, rotationDegrees: 15 }, source, frameAspect, { x: 0, y: 0, width: 800, height: 1024 });
-const large = transformToViewportRect({ x: 0.6, y: 0.4, scale: 1.2, rotationDegrees: 15 }, source, frameAspect, { x: 0, y: 0, width: 1600, height: 2048 });
+assert.equal(screenPointToSourceUv({ x: 1.01, y: 1.01 }, source, frameAspect, DEFAULT_AUTHORING_TRANSFORM, frontResolution).inside, false);
+const small = transformToViewportRect({ x: 0.6, y: 0.4, scale: 1.2, rotationDegrees: 15 }, source, frameAspect, { x: 0, y: 0, width: 800, height: 1024 }, frontResolution);
+const large = transformToViewportRect({ x: 0.6, y: 0.4, scale: 1.2, rotationDegrees: 15 }, source, frameAspect, { x: 0, y: 0, width: 1600, height: 2048 }, frontResolution);
 assert.equal(small.centerX / 800, large.centerX / 1600);
 assert.equal(small.centerY / 1024, large.centerY / 2048);
 assert.equal(small.width / 800, large.width / 1600);
@@ -115,6 +152,12 @@ assert.match(rendererSource, /window\.runBlock8AAuthoringBakeSmoke/);
 assert.match(htmlSource, /id="authoring-image-input"[^>]*accept="image\/png,image\/jpeg,.png,.jpg,.jpeg"/);
 assert.match(htmlSource, /id="authoring-camera-lock"[\s\S]*<svg/);
 assert.match(htmlSource, /id="layout-edit-button"/);
+assert.match(htmlSource, /1\.00 = PIXEL 1:1/);
+assert.ok(
+  htmlSource.indexOf('id="layout-edit-button"') < htmlSource.indexOf('id="authoring-transform-fields"') &&
+  htmlSource.indexOf('id="authoring-transform-fields"') < htmlSource.indexOf('id="authoring-image-button"'),
+  'Scale is visible directly below LAYOUT EDIT and before source controls'
+);
 
 console.log(JSON.stringify({
   block: '8A',
@@ -125,6 +168,11 @@ console.log(JSON.stringify({
   originalDimensionsPreserved: true,
   coordinateSpace: AUTHORING_COORDINATE_SPACE,
   operations: ['MOVE', 'UNIFORM_SCALE', 'ROTATION', 'RESET'],
+  defaultPixelScale: {
+    scale: 1,
+    front75: '3000x3840 -> 3000x3840',
+    back: '2100x3840 -> 2100x3840'
+  },
   cameraInterlock: 'PASS',
   viewportInvariant: true,
   productionSampling: 'ORIGINAL_FILE_BITMAP_DIRECT_TEXTURE_SAMPLE'

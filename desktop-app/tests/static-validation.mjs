@@ -70,7 +70,7 @@ assert(/id="authoring-coverage-mask"/.test(htmlSource) && /id="authoring-coverag
 assert(/window\.runOutsideSignagePreviewSmoke/.test(rendererSource), 'Outside Signage Preview runtime smoke must be exposed.');
 assert(/runOutsideSignagePreviewSmoke/.test(mainSource), 'Outside Signage Preview runtime smoke must be included in the desktop report.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.8.6-block8f', 'Package version must identify Block 8F Full Merge and floating mask panel integration.');
+assert(packageJson.version === '0.9.0-block9a', 'Package version must identify Block 9A Photoshop Snapshot authoring integration.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
@@ -79,10 +79,11 @@ assert(packageJson.build.files.includes('src/live-link-config.json'), 'Packaged 
 assert(packageJson.build.files.includes('src/project-preload.cjs') &&
   packageJson.build.files.includes('src/project-storage.cjs') &&
   packageJson.build.files.includes('src/project-persistence.js') &&
+  packageJson.build.files.includes('src/bitmap-source.js') &&
   packageJson.build.files.includes('src/vector-mask-model.js'),
   'Packaged app must include the narrow Block 8D project persistence boundary.');
-assert(/PROJECT_SCHEMA_VERSION = 2/.test(projectPersistenceSource) &&
-  /PROJECT_SUPPORTED_SCHEMA_VERSIONS = Object\.freeze\(\[1, 2\]\)/.test(projectPersistenceSource) &&
+assert(/PROJECT_SCHEMA_VERSION = 3/.test(projectPersistenceSource) &&
+  /PROJECT_SUPPORTED_SCHEMA_VERSIONS = Object\.freeze\(\[1, 2, 3\]\)/.test(projectPersistenceSource) &&
   /PROJECT_SCHEMA_UNSUPPORTED/.test(projectPersistenceSource) &&
   /PROJECT_ASSET_PATH_INVALID/.test(projectPersistenceSource) &&
   /prepareProjectLoad/.test(projectPersistenceSource),

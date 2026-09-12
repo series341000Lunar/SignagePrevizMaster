@@ -163,3 +163,16 @@ is used as a 3D-visibility substitute. The user accepted minor residual edge
 visibility for later planar-bake compensation and closed the correction as
 PASS. See [Bake Visibility Correction](docs/BLOCK-7-BAKE-VISIBILITY-CORRECTION.md)
 and [Dedicated Matte Handoff](docs/POST-BLOCK-7-DEDICATED-MATTE-HANDOFF.md).
+
+Block 9A adds explicit Photoshop Composite and single-Pixel-Layer Snapshot
+sources to the existing Block 8 authoring stack. Captures become independent
+lossless PNG project assets, persist under schema 3, reopen offline, and reuse
+the existing Layout, Vector Mask, BAKE CURRENT, and BAKE FULL MERGED paths.
+Automated validation passes. BACK V3 per-layer Photoshop round-trip has a
+scoped user visual PASS, and the 62% Layer opacity property has a separate user
+PASS; formal alpha/ACK edge probes remain open, so Block 9A is not closed. See
+[Block 9A Validation](docs/BLOCK-9A-VALIDATION.md),
+[Block 9A Handoff](docs/BLOCK-9A-HANDOFF.md), and the
+[Block 9 master design](docs/POST-BLOCK-8F-SNAPSHOT-AUDIT-AND-BLOCK9-DESIGN-V1.md).
+The scoped PASS and pending synchronization features are recorded in
+[BACK V3 Round-trip PASS & Sync Roadmap](docs/BACK-V3-ROUNDTRIP-PASS-AND-PHOTOSHOP-SYNC-ROADMAP.md).
