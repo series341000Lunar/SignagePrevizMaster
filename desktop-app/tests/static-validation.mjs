@@ -13,6 +13,9 @@ const rendererSource = await readFile(path.join(appRoot, 'src', 'renderer.js'), 
 const projectionBakeRuntimeSource = await readFile(path.join(appRoot, 'src', 'projection-bake-runtime.js'), 'utf8');
 const screenImageAuthoringSource = await readFile(path.join(appRoot, 'src', 'screen-image-authoring.js'), 'utf8');
 const authoringViewSettingsSource = await readFile(path.join(appRoot, 'src', 'authoring-view-settings.js'), 'utf8');
+const projectPersistenceSource = await readFile(path.join(appRoot, 'src', 'project-persistence.js'), 'utf8');
+const projectStorageSource = await readFile(path.join(appRoot, 'src', 'project-storage.cjs'), 'utf8');
+const projectPreloadSource = await readFile(path.join(appRoot, 'src', 'project-preload.cjs'), 'utf8');
 const coordinateSource = await readFile(path.join(appRoot, 'src', 'canonical-coordinate.js'), 'utf8');
 const pointerQueueSource = await readFile(path.join(appRoot, 'src', 'pointer-command-queue.js'), 'utf8');
 const siteProfileSource = await readFile(path.join(appRoot, 'src', 'site-scene-profile.js'), 'utf8');
@@ -61,12 +64,34 @@ assert(/id="authoring-coverage-mask"/.test(htmlSource) && /id="authoring-coverag
 assert(/window\.runOutsideSignagePreviewSmoke/.test(rendererSource), 'Outside Signage Preview runtime smoke must be exposed.');
 assert(/runOutsideSignagePreviewSmoke/.test(mainSource), 'Outside Signage Preview runtime smoke must be included in the desktop report.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.8.3-block8c', 'Package version must identify the Block 8C layer composite foundation.');
+assert(packageJson.version === '0.8.4-block8d', 'Package version must identify the Block 8D project persistence foundation.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
 assert(packageJson.build.files.includes('src/live-link-broker.cjs'), 'Packaged app must include the broker.');
 assert(packageJson.build.files.includes('src/live-link-config.json'), 'Packaged app must include live-link config.');
+assert(packageJson.build.files.includes('src/project-preload.cjs') &&
+  packageJson.build.files.includes('src/project-storage.cjs') &&
+  packageJson.build.files.includes('src/project-persistence.js'),
+  'Packaged app must include the narrow Block 8D project persistence boundary.');
+assert(/PROJECT_SCHEMA_VERSION = 1/.test(projectPersistenceSource) &&
+  /PROJECT_SCHEMA_UNSUPPORTED/.test(projectPersistenceSource) &&
+  /PROJECT_ASSET_PATH_INVALID/.test(projectPersistenceSource) &&
+  /prepareProjectLoad/.test(projectPersistenceSource),
+  'Block 8D must validate schema, paths, and transactional Load preparation.');
+assert(/\.project\.json\.tmp-/.test(projectStorageSource) &&
+  /before-manifest-commit/.test(projectStorageSource) &&
+  /PROJECT_ASSET_MISSING/.test(projectStorageSource),
+  'Block 8D storage must stage atomic Save and refuse missing assets.');
+assert(/contextBridge\.exposeInMainWorld\('luuxProject'/.test(projectPreloadSource) &&
+  !/readAnyPath|writeAnyPath|node:fs/.test(projectPreloadSource),
+  'Renderer must receive only project-specific IPC operations, never generic filesystem access.');
+assert(/preload:\s*path\.join\(__dirname, 'project-preload\.cjs'\)/.test(mainSource),
+  'The secure BrowserWindow must install the project-specific preload bridge.');
+assert(/window\.runBlock8DProjectSmoke/.test(rendererSource) && /block8d\.technicalPass === true/.test(mainSource),
+  'Block 8D runtime smoke must be part of integrated Electron acceptance.');
+assert(/id="authoring-project-save-as"/.test(htmlSource) && /id="authoring-project-save"/.test(htmlSource) &&
+  /id="authoring-project-open"/.test(htmlSource), 'Block 8D must expose minimal Save As, Save, and Open controls.');
 assert(/PROJECTION_FRAME_NORMALIZED_TOP_LEFT/.test(screenImageAuthoringSource) &&
   /class ScreenImageAuthoringSession/.test(screenImageAuthoringSource),
   'Block 8A must store one authoring layer in projection-frame normalized coordinates.');

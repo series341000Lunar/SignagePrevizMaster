@@ -18,7 +18,7 @@ function normalizeSource(source) {
   if (!source || !(source.width > 0 && source.height > 0) || !isSupportedImageFile(source)) {
     throw new Error('Projection authoring accepts only decoded PNG or JPG/JPEG files with original dimensions.');
   }
-  return Object.freeze({
+  const normalized = {
     id: String(source.id),
     filename: String(source.filename || source.name),
     name: String(source.filename || source.name),
@@ -28,7 +28,12 @@ function normalizeSource(source) {
     height: Number(source.height),
     hasAlpha: Boolean(source.hasAlpha),
     byteLength: Number(source.byteLength || 0)
-  });
+  };
+  if (source.sourceType) normalized.sourceType = String(source.sourceType);
+  if (source.assetReference) normalized.assetReference = String(source.assetReference);
+  if (source.originalFilename) normalized.originalFilename = String(source.originalFilename);
+  if (source.sha256) normalized.sha256 = String(source.sha256);
+  return Object.freeze(normalized);
 }
 
 export function isSupportedImageFile({ name = '', type = '' } = {}) {
@@ -227,8 +232,13 @@ export class ScreenImageLayerStack {
   bindFamily(familyId) { return this.activateFamily(familyId); }
 
   nextLayerId() {
-    this.sequence += 1;
-    return `${this.idPrefix}-${this.sequence.toString(36).padStart(4, '0')}`;
+    const existing = new Set([...this.stacks.values()].flat().map((layer) => layer.layerId));
+    let candidate;
+    do {
+      this.sequence += 1;
+      candidate = `${this.idPrefix}-${this.sequence.toString(36).padStart(4, '0')}`;
+    } while (existing.has(candidate));
+    return candidate;
   }
 
   invalidatePixel(layer = this.selectedLayer) {
@@ -418,10 +428,11 @@ export class ScreenImageLayerStack {
     this.selectedByFamily.clear();
     this.activeFamilyId = snapshot.activeFamilyId;
     this.revision = snapshot.revision;
-    this.sequence = snapshot.sequence;
+    this.sequence = Number.isSafeInteger(snapshot.sequence) && snapshot.sequence >= 0 ? snapshot.sequence : 0;
     this.selectedByFamily = new Map(snapshot.selectedByFamily);
     this.stacks = new Map(snapshot.stacks.map(([familyId, layers]) => [familyId, layers.map((layer) => ({
       ...layer,
+      source: normalizeSource(layer.source),
       opacity: clamp(finite(layer.opacity, 1), 0, 1),
       blendMode: AUTHORING_BLEND_MODES.includes(layer.blendMode) ? layer.blendMode : AUTHORING_BLEND_MODE,
       pixelRevision: Number.isSafeInteger(layer.pixelRevision) ? layer.pixelRevision : 1,
@@ -431,6 +442,16 @@ export class ScreenImageLayerStack {
       transform: normalizeAuthoringTransform(layer.transform)
     }))]));
     for (const layers of this.stacks.values()) this.syncOrder(layers);
+    const prefix = `${this.idPrefix}-`;
+    for (const layers of this.stacks.values()) {
+      for (const layer of layers) {
+        if (!layer.layerId.startsWith(prefix)) continue;
+        const suffix = layer.layerId.slice(prefix.length);
+        if (!/^[0-9a-z]+$/i.test(suffix)) continue;
+        const sequence = Number.parseInt(suffix, 36);
+        if (Number.isSafeInteger(sequence)) this.sequence = Math.max(this.sequence, sequence);
+      }
+    }
   }
 
   get layers() { return this.activeFamilyId === null ? [] : this.ensureFamily(this.activeFamilyId); }

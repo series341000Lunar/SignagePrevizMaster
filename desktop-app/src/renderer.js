@@ -43,6 +43,12 @@ import {
 } from './projection-bake-profile.js';
 import { ProjectionBakeRuntime } from './projection-bake-runtime.js';
 import {
+  createProjectSavePayload,
+  prepareProjectLoad,
+  sha256Hex,
+  validateProjectManifest
+} from './project-persistence.js';
+import {
   AUTHORING_COORDINATE_SPACE,
   AuthoringPointerSession,
   detectEmbeddedAlpha,
@@ -53,6 +59,7 @@ import {
 } from './screen-image-authoring.js';
 import {
   AuthoringViewSettings,
+  DEFAULT_OUTSIDE_SIGNAGE_OPACITY,
   OUTSIDE_SIGNAGE_PRESETS,
   computeAuthoringPreviewAlpha
 } from './authoring-view-settings.js';
@@ -121,6 +128,12 @@ const projectionPhotoshopState = document.querySelector('#projection-photoshop-s
 const projectionAuthoring = document.querySelector('#projection-authoring');
 const authoringState = document.querySelector('#authoring-state');
 const authoringFamily = document.querySelector('#authoring-family');
+const authoringProjectControl = document.querySelector('.authoring-project-control');
+const authoringProjectName = document.querySelector('#authoring-project-name');
+const authoringProjectStatus = document.querySelector('#authoring-project-status');
+const authoringProjectSaveAs = document.querySelector('#authoring-project-save-as');
+const authoringProjectSave = document.querySelector('#authoring-project-save');
+const authoringProjectOpen = document.querySelector('#authoring-project-open');
 const authoringCameraLock = document.querySelector('#authoring-camera-lock');
 const authoringCameraLockLabel = authoringCameraLock.querySelector('span');
 const layoutEditButton = document.querySelector('#layout-edit-button');
@@ -272,7 +285,8 @@ controls3d.update();
 controlsSite.target.set(0, 4, -1.5);
 controlsSite.update();
 const disposeAuthoringRuntime = (runtime) => {
-  if (runtime?.objectUrl) URL.revokeObjectURL(runtime.objectUrl);
+  if (typeof runtime?.dispose === 'function') runtime.dispose();
+  else if (runtime?.objectUrl) URL.revokeObjectURL(runtime.objectUrl);
 };
 const authoringSession = new ScreenImageLayerStack({
   disposeRuntime: disposeAuthoringRuntime,
@@ -323,6 +337,13 @@ const state = {
     userValidation: 'PASS_CLOSED',
     block8BUserValidation: 'PASS_CLOSED',
     outsidePreviewUserValidation: 'PASS_CLOSED',
+    project: {
+      busy: false,
+      hasCurrentProject: false,
+      projectName: null,
+      status: 'Authoring source of truth is not saved.',
+      error: ''
+    },
     railExpanded: false,
     reorderDrag: null,
     coverageCache: {
@@ -1349,6 +1370,19 @@ function syncAuthoringQuickRail(available) {
     : 'NO DIRECT TARGET';
 }
 
+function syncAuthoringProjectUi(available) {
+  const project = state.authoring.project;
+  const bridgeAvailable = Boolean(window.luuxProject);
+  const blocked = project.busy || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  authoringProjectName.textContent = project.projectName || 'UNSAVED';
+  authoringProjectStatus.textContent = project.error || project.status;
+  authoringProjectControl.classList.toggle('busy', project.busy);
+  authoringProjectControl.classList.toggle('failed', Boolean(project.error));
+  authoringProjectSaveAs.disabled = !available || !bridgeAvailable || blocked;
+  authoringProjectSave.disabled = !available || !bridgeAvailable || blocked;
+  authoringProjectOpen.disabled = !available || !bridgeAvailable || blocked;
+}
+
 function syncAuthoringUi() {
   const available = isProjectionAuthoringContext();
   const source = authoringSession.source;
@@ -1403,6 +1437,7 @@ function syncAuthoringUi() {
   syncAuthoringLayerList(available);
   syncAuthoringOverlay();
   syncAuthoringQuickRail(available);
+  syncAuthoringProjectUi(available);
 }
 
 function toggleAuthoringCameraLock() {
@@ -1567,12 +1602,15 @@ async function loadAuthoringFile(file, operation = 'add') {
       id: `${file.lastModified}-${file.size}-${file.name}`,
       filename: file.name,
       name: file.name,
+      originalFilename: file.name,
+      sourceType: 'FILE',
       mimeType,
       type: mimeType,
       width: image.naturalWidth,
       height: image.naturalHeight,
       hasAlpha: detectEmbeddedAlpha(bytes, mimeType),
       byteLength: file.size,
+      originalBytes: bytes,
       image,
       objectUrl
     };
@@ -1595,6 +1633,163 @@ async function loadAuthoringFile(file, operation = 'add') {
     authoringMessage.className = 'projection-poc-message fail';
     authoringMessage.textContent = error.message;
     syncAuthoringUi();
+    throw error;
+  }
+}
+
+function projectOperationError(result, fallbackCode = 'PROJECT_OPERATION_FAILED') {
+  const code = result?.error?.code || fallbackCode;
+  const message = result?.error?.message || 'Project operation failed.';
+  const error = new Error(message.startsWith(`${code}:`) ? message : `${code}: ${message}`);
+  error.code = code;
+  return error;
+}
+
+function setProjectOperationState({ busy = false, status = null, error = '' } = {}) {
+  state.authoring.project.busy = busy;
+  if (status !== null) state.authoring.project.status = status;
+  state.authoring.project.error = error;
+  syncAuthoringUi();
+}
+
+async function saveAuthoringProject(saveAs = false) {
+  if (!window.luuxProject) throw new Error('PROJECT_BRIDGE_UNAVAILABLE: Project persistence bridge is unavailable.');
+  if (state.authoring.project.busy) return false;
+  setProjectOperationState({ busy: true, status: saveAs ? 'Preparing Save As...' : 'Preparing Save...', error: '' });
+  try {
+    const payload = await createProjectSavePayload(authoringSession);
+    let result = saveAs ? await window.luuxProject.saveAs(payload) : await window.luuxProject.save(payload);
+    if (!saveAs && !result.ok && result.error?.code === 'PROJECT_SAVE_AS_REQUIRED') {
+      result = await window.luuxProject.saveAs(payload);
+    }
+    if (!result.ok) throw projectOperationError(result);
+    if (result.canceled) {
+      setProjectOperationState({ busy: false, status: 'Project save canceled.', error: '' });
+      return false;
+    }
+    state.authoring.project.hasCurrentProject = true;
+    state.authoring.project.projectName = result.projectName;
+    setProjectOperationState({
+      busy: false,
+      status: `Saved project.json and ${result.assetCount} byte-identical source asset${result.assetCount === 1 ? '' : 's'}.`,
+      error: ''
+    });
+    return true;
+  } catch (error) {
+    setProjectOperationState({ busy: false, error: error.message || String(error) });
+    throw error;
+  }
+}
+
+async function decodeProjectRuntimeAsset({ source, bytes, layerId, familyId }) {
+  const originalBytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const blob = new Blob([originalBytes], { type: source.mimeType });
+  const objectUrl = URL.createObjectURL(blob);
+  const image = new Image();
+  image.decoding = 'async';
+  image.src = objectUrl;
+  try {
+    await image.decode();
+  } catch (error) {
+    URL.revokeObjectURL(objectUrl);
+    throw error;
+  }
+  let disposed = false;
+  return {
+    id: `project:${familyId}:${layerId}:${source.assetReference}`,
+    filename: source.originalFilename,
+    name: source.originalFilename,
+    originalFilename: source.originalFilename,
+    sourceType: 'FILE',
+    assetReference: source.assetReference,
+    mimeType: source.mimeType,
+    type: source.mimeType,
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+    hasAlpha: detectEmbeddedAlpha(originalBytes, source.mimeType),
+    byteLength: originalBytes.byteLength,
+    sha256: source.sha256 || null,
+    originalBytes,
+    image,
+    objectUrl,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      URL.revokeObjectURL(objectUrl);
+    }
+  };
+}
+
+function disposeAuthoringSnapshot(snapshot) {
+  for (const [, layers] of snapshot?.stacks || []) {
+    for (const layer of layers) disposeAuthoringRuntime(layer.runtime);
+  }
+}
+
+function clearProjectScopedPhotoshopState() {
+  state.reverseBake.targetRegistry = {
+    registryAuthority: null,
+    scope: null,
+    sessionId: null,
+    targets: [],
+    bindings: []
+  };
+  state.reverseBake.lastApplied = null;
+  state.reverseBake.lastError = '';
+}
+
+async function openAuthoringProject() {
+  if (!window.luuxProject) throw new Error('PROJECT_BRIDGE_UNAVAILABLE: Project persistence bridge is unavailable.');
+  if (state.authoring.project.busy) return false;
+  setProjectOperationState({ busy: true, status: 'Selecting project folder...', error: '' });
+  let result = null;
+  let prepared = null;
+  let transferred = false;
+  try {
+    result = await window.luuxProject.open();
+    if (!result.ok) throw projectOperationError(result);
+    if (result.canceled) {
+      setProjectOperationState({ busy: false, status: 'Project open canceled.', error: '' });
+      return false;
+    }
+    validateProjectManifest(result.manifest);
+    const currentFamilyId = currentProjectionBakeProfile()?.familyId || ANAMORPHIC_FAMILY_IDS.FRONT_75F;
+    prepared = await prepareProjectLoad(result.manifest, result.assets, {
+      activeFamilyId: currentFamilyId,
+      decodeAsset: decodeProjectRuntimeAsset,
+      disposeRuntime: disposeAuthoringRuntime
+    });
+    const verificationStack = new ScreenImageLayerStack({ disposeRuntime: disposeAuthoringRuntime, idPrefix: 'projection-layer' });
+    verificationStack.restore(prepared.snapshot);
+    const acceptance = await window.luuxProject.acceptOpen(result.token);
+    if (!acceptance.ok) throw projectOperationError(acceptance, 'PROJECT_OPEN_TOKEN_INVALID');
+
+    if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
+    cancelAuthoringPointerInteraction();
+    const previousSnapshot = authoringSession.snapshot();
+    authoringSession.restore(prepared.snapshot);
+    transferred = true;
+    disposeAuthoringSnapshot(previousSnapshot);
+    authoringViewSettings.setOutsideSignageOpacity(DEFAULT_OUTSIDE_SIGNAGE_OPACITY);
+    state.authoring.railExpanded = false;
+    clearProjectScopedPhotoshopState();
+    syncSelectedAuthoringRuntime();
+    invalidateAuthoringOutputs('project-load');
+    state.authoring.project.hasCurrentProject = true;
+    state.authoring.project.projectName = result.projectName;
+    state.authoring.project.busy = false;
+    state.authoring.project.error = '';
+    state.authoring.project.status = `Opened ${result.projectName}. Layers restored as NEEDS BAKE / PHOTOSHOP UNSYNCED.`;
+    authoringMessage.className = 'projection-poc-message pass';
+    authoringMessage.textContent = 'Project loaded transactionally. Re-bake before registering the current Photoshop target and sending.';
+    syncAuthoringUi();
+    render();
+    updateDiagnostics();
+    return true;
+  } catch (error) {
+    if (prepared && !transferred) for (const runtime of prepared.runtimes) disposeAuthoringRuntime(runtime);
+    if (result?.token) await window.luuxProject.cancelOpen(result.token);
+    setProjectOperationState({ busy: false, error: error.message || String(error) });
     throw error;
   }
 }
@@ -4167,6 +4362,15 @@ siteSceneSelect.addEventListener('change', () => {
 legacyCameraLockButton.addEventListener('click', toggleLegacyCameraLock);
 anamorphicCameraResetButton.addEventListener('click', applyAnamorphicCalibrationCamera);
 anamorphicFovInput.addEventListener('change', () => applyAnamorphicFovValue(anamorphicFovInput.value));
+authoringProjectSaveAs.addEventListener('click', () => {
+  void saveAuthoringProject(true).catch((error) => console.error(error));
+});
+authoringProjectSave.addEventListener('click', () => {
+  void saveAuthoringProject(false).catch((error) => console.error(error));
+});
+authoringProjectOpen.addEventListener('click', () => {
+  void openAuthoringProject().catch((error) => console.error(error));
+});
 authoringCameraLock.addEventListener('click', toggleAuthoringCameraLock);
 layoutEditButton.addEventListener('click', toggleLayoutEdit);
 authoringImageButton.addEventListener('click', () => authoringImageInput.click());
@@ -4220,7 +4424,7 @@ for (const button of outsideSignagePresetButtons) {
   button.addEventListener('click', () => commitOutsideSignageOpacity(OUTSIDE_SIGNAGE_PRESETS[button.dataset.outsideSignagePreset]));
   button.addEventListener('pointerdown', (event) => event.stopPropagation());
 }
-for (const element of [projectionAuthoring, authoringImageButton, authoringReplaceButton, authoringMoveUp, authoringMoveDown, authoringDeleteLayer, authoringLayerList, authoringTransformFields, authoringResetTransform]) {
+for (const element of [projectionAuthoring, authoringProjectControl, authoringImageButton, authoringReplaceButton, authoringMoveUp, authoringMoveDown, authoringDeleteLayer, authoringLayerList, authoringTransformFields, authoringResetTransform]) {
   element.addEventListener('pointerdown', (event) => event.stopPropagation());
   element.addEventListener('wheel', (event) => event.stopPropagation(), { passive: true });
 }
@@ -5664,6 +5868,137 @@ window.runBlock8CCompositeSmoke = async () => {
     updateDiagnostics();
   }
 };
+window.runBlock8DProjectSmoke = async () => {
+  const cameraBefore = snapshotSiteCameraRuntime();
+  const authoringBefore = authoringSession.snapshot();
+  const targetRegistryBefore = JSON.stringify(state.reverseBake.targetRegistry);
+  const railBefore = state.authoring.railExpanded;
+  const layoutBefore = authoringCameraInterlock.layoutEditing;
+  const contextLossBefore = state.contextLossCount;
+  const pngAsset = state.manifest.assets.find((asset) => asset.id === 'small-png')
+    || state.manifest.assets.find((asset) => asset.mime === 'image/png');
+  const jpgAsset = state.manifest.assets.find((asset) => asset.mime === 'image/jpeg');
+  if (!pngAsset || !jpgAsset) throw new Error('Block 8D runtime smoke requires PNG and JPEG source assets.');
+  const readAsset = async (asset) => new Uint8Array(await fetch(new URL(`./assets/${asset.fileName}`, import.meta.url)).then((response) => {
+    if (!response.ok) throw new Error(`Block 8D fixture read failed: ${asset.fileName}`);
+    return response.arrayBuffer();
+  }));
+  const [pngBytes, jpgBytes] = await Promise.all([readAsset(pngAsset), readAsset(jpgAsset)]);
+  const tempStack = new ScreenImageLayerStack({ idPrefix: 'projection-layer' });
+  const source = (asset, bytes, name) => ({
+    id: `block8d-${name}`,
+    filename: name,
+    name,
+    originalFilename: name,
+    sourceType: 'FILE',
+    mimeType: asset.mime,
+    type: asset.mime,
+    width: asset.sourceWidth,
+    height: asset.sourceHeight,
+    byteLength: bytes.byteLength,
+    hasAlpha: asset.mime === 'image/png'
+  });
+  const add = (familyId, asset, bytes, name, values) => {
+    const runtime = { ...source(asset, bytes, name), originalBytes: bytes };
+    const entry = tempStack.addLayer(runtime, familyId, runtime);
+    tempStack.selectLayer(entry.layerId);
+    tempStack.setTransform(values.transform);
+    tempStack.setLayerOpacity(entry.layerId, values.opacity);
+    tempStack.setLayerBlendMode(entry.layerId, values.blendMode);
+    tempStack.setLayerVisibility(entry.layerId, values.visible);
+    tempStack.markBaked();
+    tempStack.markMetadataSynced([entry.layerId]);
+    return entry;
+  };
+  add(ANAMORPHIC_FAMILY_IDS.FRONT_75F, pngAsset, pngBytes, 'Front_A.png', {
+    transform: { x: 0.2, y: 0.3, scale: 0.8, rotationDegrees: 15 }, opacity: 0.25, blendMode: 'NORMAL', visible: true
+  });
+  add(ANAMORPHIC_FAMILY_IDS.FRONT_75F, jpgAsset, jpgBytes, 'Front_B.jpg', {
+    transform: { x: 0.5, y: 0.6, scale: 1.2, rotationDegrees: 95 }, opacity: 0.5, blendMode: 'MULTIPLY', visible: false
+  });
+  add(ANAMORPHIC_FAMILY_IDS.FRONT_75F, pngAsset, pngBytes, 'Front_C.png', {
+    transform: { x: 0.8, y: 0.4, scale: 1.7, rotationDegrees: 275 }, opacity: 0.8, blendMode: 'SCREEN', visible: true
+  });
+  add(ANAMORPHIC_FAMILY_IDS.BACK, jpgAsset, jpgBytes, 'Back_A.jpg', {
+    transform: { x: 0.35, y: 0.75, scale: 0.65, rotationDegrees: 40 }, opacity: 0.4, blendMode: 'LINEAR_DODGE', visible: true
+  });
+  add(ANAMORPHIC_FAMILY_IDS.BACK, pngAsset, pngBytes, 'Back_B.png', {
+    transform: { x: 0.7, y: 0.25, scale: 1.9, rotationDegrees: 320 }, opacity: 1, blendMode: 'NORMAL', visible: false
+  });
+  const payload = await createProjectSavePayload(tempStack, { assetNameToken: 'runtime8d' });
+  validateProjectManifest(payload.manifest);
+  const prepared = await prepareProjectLoad(payload.manifest, payload.assets, {
+    activeFamilyId: ANAMORPHIC_FAMILY_IDS.FRONT_75F,
+    decodeAsset: decodeProjectRuntimeAsset,
+    disposeRuntime: disposeAuthoringRuntime
+  });
+  try {
+    const restored = new ScreenImageLayerStack({ idPrefix: 'projection-layer' });
+    restored.restore(prepared.snapshot);
+    const comparable = (candidate) => [...candidate.stacks.entries()].flatMap(([familyId, layers]) => layers.map((layer) => ({
+      familyId,
+      layerId: layer.layerId,
+      order: layer.order,
+      visible: layer.visible,
+      filename: layer.source.originalFilename || layer.source.filename,
+      transform: { ...layer.transform },
+      opacity: layer.opacity,
+      blendMode: layer.blendMode
+    })));
+    const before = comparable(tempStack);
+    const after = comparable(restored);
+    const manifestText = JSON.stringify(payload.manifest);
+    const existingIds = new Set(after.map((entry) => entry.layerId));
+    restored.activateFamily(ANAMORPHIC_FAMILY_IDS.FRONT_75F);
+    const nextRuntime = { ...source(pngAsset, pngBytes, 'After_Load.png'), originalBytes: pngBytes };
+    const nextLayer = restored.addLayer(nextRuntime, ANAMORPHIC_FAMILY_IDS.FRONT_75F, nextRuntime);
+    const report = {
+      block: '8D',
+      implementation: 'MINIMAL_FOLDER_PROJECT_SAVE_LOAD',
+      automatedStatus: 'TECHNICAL PASS',
+      userValidation: 'PENDING',
+      schemaVersion: payload.manifest.schemaVersion,
+      folderProject: true,
+      projectUiAvailable: Boolean(window.luuxProject && authoringProjectSaveAs && authoringProjectSave && authoringProjectOpen),
+      frontLayerCount: payload.manifest.families[ANAMORPHIC_FAMILY_IDS.FRONT_75F].layers.length,
+      backLayerCount: payload.manifest.families[ANAMORPHIC_FAMILY_IDS.BACK].layers.length,
+      roundTripExact: JSON.stringify(before) === JSON.stringify(after),
+      stableLayerIds: before.every((entry, index) => entry.layerId === after[index]?.layerId),
+      safeSequenceAfterLoad: !existingIds.has(nextLayer.layerId),
+      loadedNeedsBake: after.length > 0 && [...prepared.snapshot.stacks].flatMap(([, layers]) => layers)
+        .every((layer) => layer.bakedPixelRevision === null && layer.bakedRevision === null),
+      loadedPhotoshopUnsynced: [...prepared.snapshot.stacks].flatMap(([, layers]) => layers)
+        .every((layer) => layer.metadataSyncedRevision === null),
+      sourceBytesPreserved: (await Promise.all(payload.assets.map(async (asset) => await sha256Hex(asset.bytes) === asset.sha256))).every(Boolean),
+      relativeAssetPaths: payload.assets.every((asset) => /^assets\//.test(asset.assetReference) && !asset.assetReference.includes('..')),
+      calibrationReferenceOnly: manifestText.includes('projectionProfile') && manifestText.includes('surfaceBinding') && !manifestText.includes('calibrationCamera'),
+      outsideSignageNotPersisted: !manifestText.includes('outsideSignageOpacity'),
+      photoshopRuntimeNotPersisted: !/(targetSessionId|targetId|documentId|photoshopLayerId|OwnedLayerRegistry)/.test(manifestText),
+      bakeCacheNotPersisted: !/(bakedPixelRevision|metadataSyncedRevision|RenderTarget|visibilityBuffer)/.test(manifestText),
+      quickRailNotPersisted: !manifestText.includes('railExpanded'),
+      cameraUnchanged: JSON.stringify(cameraBefore) === JSON.stringify(snapshotSiteCameraRuntime()),
+      currentAuthoringSessionUnchanged: JSON.stringify(authoringBefore.selectedByFamily) === JSON.stringify(authoringSession.snapshot().selectedByFamily) &&
+        JSON.stringify(authoringBefore.stacks.map(([familyId, layers]) => [familyId, layers.map((layer) => layer.layerId)])) ===
+        JSON.stringify(authoringSession.snapshot().stacks.map(([familyId, layers]) => [familyId, layers.map((layer) => layer.layerId)])),
+      targetRegistryUnchanged: targetRegistryBefore === JSON.stringify(state.reverseBake.targetRegistry),
+      layoutInterlockUnchanged: layoutBefore === authoringCameraInterlock.layoutEditing,
+      quickRailUnchanged: railBefore === state.authoring.railExpanded,
+      contextLossCount: state.contextLossCount - contextLossBefore
+    };
+    report.technicalPass = report.schemaVersion === 1 && report.folderProject && report.projectUiAvailable &&
+      report.frontLayerCount === 3 && report.backLayerCount === 2 && report.roundTripExact && report.stableLayerIds &&
+      report.safeSequenceAfterLoad && report.loadedNeedsBake && report.loadedPhotoshopUnsynced &&
+      report.sourceBytesPreserved && report.relativeAssetPaths && report.calibrationReferenceOnly &&
+      report.outsideSignageNotPersisted && report.photoshopRuntimeNotPersisted && report.bakeCacheNotPersisted &&
+      report.quickRailNotPersisted && report.cameraUnchanged && report.currentAuthoringSessionUnchanged &&
+      report.targetRegistryUnchanged && report.layoutInterlockUnchanged && report.quickRailUnchanged &&
+      report.contextLossCount === 0;
+    window.block8DProjectDiagnostics = structuredClone(report);
+    return report;
+  } finally {
+    for (const runtime of prepared.runtimes) disposeAuthoringRuntime(runtime);
+  }
+};
 window.getBlock6APreviewArtifacts = () => projectionBakeRuntime.previewDataUrls(projectionPreviewCanvases);
 window.getBlock6AFullSourceArtifact = () => projectionBakeRuntime.fullSourceDataUrl();
 window.inspectBlock6AExportPng = async (kind) => {
@@ -6236,6 +6571,13 @@ async function start() {
     if (!response.ok) throw new Error(`Manifest load failed: ${response.status}`);
     return response.json();
   });
+  if (window.luuxProject) {
+    const project = await window.luuxProject.getState();
+    if (project.ok) {
+      state.authoring.project.hasCurrentProject = project.hasCurrentProject;
+      state.authoring.project.projectName = project.projectName;
+    }
+  }
   initializeLocationMarkers();
   const liveOption = document.createElement('option');
   liveOption.value = 'photoshop-live';

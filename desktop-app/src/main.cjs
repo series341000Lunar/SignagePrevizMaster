@@ -1,10 +1,13 @@
 'use strict';
 
-const { app, BrowserWindow, session } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, session } = require('electron');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const liveLinkConfig = require('./live-link-config.json');
 const { createLiveLinkBroker } = require('./live-link-broker.cjs');
+const { loadProjectFromDirectory, saveProjectToDirectory } = require('./project-storage.cjs');
 const { WebSocket } = require('ws');
 
 const smokeTest = process.argv.includes('--smoke-test');
@@ -16,6 +19,9 @@ const loopbackRequests = [];
 const criticalErrors = [];
 const liveLinkEvents = [];
 let liveLinkBroker = null;
+let currentProjectDirectory = null;
+let projectPersistencePromise = null;
+const pendingProjectOpens = new Map();
 
 if (smokeTest || linkSmokeTest) {
   const profileName = linkSmokeTest ? 'link-smoke-profile' : 'runtime-smoke-profile';
@@ -44,6 +50,100 @@ function writePngDataUrl(filePath, dataUrl) {
   if (!match) throw new Error(`Invalid PNG data URL for ${path.basename(filePath)}.`);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, Buffer.from(match[1], 'base64'));
+}
+
+function projectPersistence() {
+  if (!projectPersistencePromise) {
+    projectPersistencePromise = import(pathToFileURL(path.join(__dirname, 'project-persistence.js')).href);
+  }
+  return projectPersistencePromise;
+}
+
+function projectError(error) {
+  return {
+    ok: false,
+    error: {
+      code: error?.code || 'PROJECT_OPERATION_FAILED',
+      message: error?.message || String(error),
+      details: error?.details || null
+    }
+  };
+}
+
+function projectState() {
+  return {
+    hasCurrentProject: Boolean(currentProjectDirectory),
+    projectName: currentProjectDirectory ? path.basename(currentProjectDirectory) : null
+  };
+}
+
+function configureProjectIpc() {
+  ipcMain.handle('luux-project:get-state', () => ({ ok: true, ...projectState() }));
+  ipcMain.handle('luux-project:save-as', async (event, payload) => {
+    try {
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const selection = await dialog.showOpenDialog(owner, {
+        title: 'Save LUUX Signage Previz Project',
+        buttonLabel: 'Select Project Folder',
+        properties: ['openDirectory', 'createDirectory', 'promptToCreate']
+      });
+      if (selection.canceled || !selection.filePaths[0]) return { ok: true, canceled: true, ...projectState() };
+      const { validateProjectManifest } = await projectPersistence();
+      const result = await saveProjectToDirectory(selection.filePaths[0], payload, { validateManifest: validateProjectManifest });
+      currentProjectDirectory = result.projectDirectory;
+      return { ok: true, canceled: false, projectName: result.projectName, assetCount: result.assetCount, ...projectState() };
+    } catch (error) {
+      return projectError(error);
+    }
+  });
+  ipcMain.handle('luux-project:save', async (_event, payload) => {
+    try {
+      if (!currentProjectDirectory) {
+        return projectError(Object.assign(new Error('Use SAVE PROJECT AS before the first Save.'), { code: 'PROJECT_SAVE_AS_REQUIRED' }));
+      }
+      const { validateProjectManifest } = await projectPersistence();
+      const result = await saveProjectToDirectory(currentProjectDirectory, payload, { validateManifest: validateProjectManifest });
+      return { ok: true, canceled: false, projectName: result.projectName, assetCount: result.assetCount, ...projectState() };
+    } catch (error) {
+      return projectError(error);
+    }
+  });
+  ipcMain.handle('luux-project:open', async (event) => {
+    try {
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const selection = await dialog.showOpenDialog(owner, {
+        title: 'Open LUUX Signage Previz Project',
+        buttonLabel: 'Open Project',
+        properties: ['openDirectory']
+      });
+      if (selection.canceled || !selection.filePaths[0]) return { ok: true, canceled: true, ...projectState() };
+      const { validateProjectManifest } = await projectPersistence();
+      const loaded = await loadProjectFromDirectory(selection.filePaths[0], { validateManifest: validateProjectManifest });
+      const token = crypto.randomUUID();
+      pendingProjectOpens.set(token, loaded.projectDirectory);
+      return {
+        ok: true,
+        canceled: false,
+        token,
+        projectName: loaded.projectName,
+        manifest: loaded.manifest,
+        assets: loaded.assets
+      };
+    } catch (error) {
+      return projectError(error);
+    }
+  });
+  ipcMain.handle('luux-project:accept-open', (_event, token) => {
+    const directory = pendingProjectOpens.get(token);
+    if (!directory) return projectError(Object.assign(new Error('Project open transaction is no longer available.'), { code: 'PROJECT_OPEN_TOKEN_INVALID' }));
+    currentProjectDirectory = directory;
+    pendingProjectOpens.delete(token);
+    return { ok: true, ...projectState() };
+  });
+  ipcMain.handle('luux-project:cancel-open', (_event, token) => {
+    pendingProjectOpens.delete(token);
+    return { ok: true, ...projectState() };
+  });
 }
 
 async function waitForDiagnostics(window) {
@@ -185,6 +285,7 @@ async function runSmokeTest(window) {
     const outsideSignagePreview = await window.webContents.executeJavaScript('window.runOutsideSignagePreviewSmoke()', true);
     const block8b = await window.webContents.executeJavaScript('window.runBlock8BLayerStackSmoke()', true);
     const block8c = await window.webContents.executeJavaScript('window.runBlock8CCompositeSmoke()', true);
+    const block8d = await window.webContents.executeJavaScript('window.runBlock8DProjectSmoke()', true);
     const bakeVisibilityArtifacts = {
       front: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_VisibilityDiagnostic.png'),
       back: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_VisibilityDiagnostic.png'),
@@ -307,6 +408,18 @@ async function runSmokeTest(window) {
       block8c.cameraUnchanged === true && block8c.photoshopMutationCount === 0 &&
       block8c.photoshopLastAppliedUnchanged === true && block8c.contextLossCount === 0 &&
       block8c.projectionRuntimeCount === 1 &&
+      block8d.technicalPass === true && block8d.userValidation === 'PENDING' &&
+      block8d.schemaVersion === 1 && block8d.folderProject === true &&
+      block8d.frontLayerCount === 3 && block8d.backLayerCount === 2 &&
+      block8d.roundTripExact === true && block8d.stableLayerIds === true &&
+      block8d.safeSequenceAfterLoad === true && block8d.loadedNeedsBake === true &&
+      block8d.loadedPhotoshopUnsynced === true && block8d.sourceBytesPreserved === true &&
+      block8d.relativeAssetPaths === true && block8d.calibrationReferenceOnly === true &&
+      block8d.outsideSignageNotPersisted === true && block8d.photoshopRuntimeNotPersisted === true &&
+      block8d.bakeCacheNotPersisted === true && block8d.quickRailNotPersisted === true &&
+      block8d.cameraUnchanged === true && block8d.currentAuthoringSessionUnchanged === true &&
+      block8d.targetRegistryUnchanged === true && block8d.layoutInterlockUnchanged === true &&
+      block8d.quickRailUnchanged === true && block8d.contextLossCount === 0 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -342,6 +455,7 @@ async function runSmokeTest(window) {
       outsideSignagePreview,
       block8b,
       block8c,
+      block8d,
       screenshotPath
     };
     writeJson(reportPath, report);
@@ -770,6 +884,7 @@ function createWindow() {
     show: true,
     webPreferences: {
       ...securityPreferences,
+      preload: path.join(__dirname, 'project-preload.cjs'),
       backgroundThrottling: false
     }
   });
@@ -795,6 +910,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  configureProjectIpc();
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     if (details.url === liveLinkConfig.endpoint || details.url.startsWith(`${liveLinkConfig.endpoint}/`)) {
       loopbackRequests.push(details.url);

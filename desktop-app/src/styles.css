@@ -393,6 +393,50 @@ aside {
   background: #171c24;
 }
 
+.authoring-project-control {
+  border: 1px solid #303846;
+  border-radius: 7px;
+  padding: 9px;
+  display: grid;
+  gap: 8px;
+  background: #141a22;
+}
+
+.authoring-project-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #dfe8f2;
+  font-size: 11px;
+}
+
+.authoring-project-heading span,
+.authoring-project-control small {
+  color: #87a2bd;
+  overflow-wrap: anywhere;
+}
+
+.authoring-project-actions {
+  display: grid;
+  grid-template-columns: 1.35fr 0.7fr 1.2fr;
+  gap: 6px;
+}
+
+.authoring-project-actions button {
+  min-height: 34px;
+  padding: 6px;
+  font-size: 10px;
+}
+
+.authoring-project-control.busy {
+  border-color: #c79b45;
+}
+
+.authoring-project-control.failed {
+  border-color: #c75959;
+}
+
 .authoring-context {
   margin-bottom: 10px;
 }
