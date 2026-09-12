@@ -61,7 +61,7 @@ assert(/id="authoring-coverage-mask"/.test(htmlSource) && /id="authoring-coverag
 assert(/window\.runOutsideSignagePreviewSmoke/.test(rendererSource), 'Outside Signage Preview runtime smoke must be exposed.');
 assert(/runOutsideSignagePreviewSmoke/.test(mainSource), 'Outside Signage Preview runtime smoke must be included in the desktop report.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.8.1-outside-preview', 'Package version must identify the post-Block-8A Outside Preview correction.');
+assert(packageJson.version === '0.8.2-block8b', 'Package version must identify the Block 8B layer stack foundation.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');

@@ -95,6 +95,7 @@
         </div>
         <div id="authoring-overlay" class="authoring-overlay" hidden>
           <canvas id="authoring-coverage-mask" hidden aria-hidden="true"></canvas>
+          <canvas id="authoring-layer-composite" hidden aria-hidden="true"></canvas>
           <canvas id="authoring-coverage-preview" class="authoring-coverage-preview" aria-hidden="true"></canvas>
           <div id="authoring-image-layer" class="authoring-image-layer" aria-label="Authoring image layer">
             <img id="authoring-image-preview" alt="Imported authoring source" draggable="false">
@@ -202,6 +203,22 @@
             <input id="authoring-image-input" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" hidden>
             <div><strong id="authoring-source-name">No image selected</strong><span id="authoring-source-meta">PNG / JPG · original bitmap</span></div>
           </div>
+          <div class="authoring-layer-actions" aria-label="Selected layer actions">
+            <button id="authoring-replace-button" type="button" disabled>REPLACE SOURCE</button>
+            <input id="authoring-replace-input" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" hidden>
+            <button id="authoring-move-up" type="button" disabled>MOVE UP</button>
+            <button id="authoring-move-down" type="button" disabled>MOVE DOWN</button>
+            <button id="authoring-delete-layer" type="button" disabled>DELETE</button>
+          </div>
+          <section class="authoring-layer-panel" aria-labelledby="authoring-layer-panel-title">
+            <div class="authoring-layer-panel-heading">
+              <strong id="authoring-layer-panel-title">LAYERS</strong>
+              <span id="authoring-layer-count">0</span>
+            </div>
+            <div id="authoring-layer-list" class="authoring-layer-list" role="listbox" aria-label="Projection image layers">
+              <p class="authoring-layer-empty">No layers</p>
+            </div>
+          </section>
           <section class="outside-signage-control" aria-labelledby="outside-signage-title">
             <div class="outside-signage-heading">
               <strong id="outside-signage-title">OUTSIDE SIGNAGE</strong>
@@ -223,13 +240,14 @@
             <label>Rotation <input id="authoring-transform-rotation" type="number" step="0.1" value="0"></label>
           </fieldset>
           <button id="authoring-reset-transform" type="button" disabled>RESET TRANSFORM</button>
-          <p id="authoring-message" class="projection-poc-message">Import one PNG or JPG. A second import replaces the current source.</p>
+          <p id="authoring-message" class="projection-poc-message">Add PNG/JPG layers. Bake processes the selected visible layer only.</p>
         </section>
         <section id="projection-poc" class="projection-poc" aria-labelledby="projection-poc-title" hidden>
           <div class="projection-poc-heading">
             <h2 id="projection-poc-title">PROJECTION POC — CURRENT FAMILY</h2>
             <span id="projection-poc-state" class="projection-poc-state">READY</span>
           </div>
+          <p id="projection-selected-layer" class="projection-selected-layer">Layer: — · Family: — · Output: CANONICAL</p>
           <label class="projection-mask-toggle" for="projection-mask-enabled" title="Optional legacy/diagnostic bake-time mask. Normal FRONT/BACK baking uses OFF.">
             <input id="projection-mask-enabled" type="checkbox">
             <span>OPTIONAL BAKE MASK</span>

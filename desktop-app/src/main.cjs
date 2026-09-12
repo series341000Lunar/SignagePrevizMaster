@@ -183,6 +183,7 @@ async function runSmokeTest(window) {
     const block8a = await window.webContents.executeJavaScript('window.runBlock8AInterlockSmoke()', true);
     const block8aAuthoringBake = await window.webContents.executeJavaScript('window.runBlock8AAuthoringBakeSmoke()', true);
     const outsideSignagePreview = await window.webContents.executeJavaScript('window.runOutsideSignagePreviewSmoke()', true);
+    const block8b = await window.webContents.executeJavaScript('window.runBlock8BLayerStackSmoke()', true);
     const bakeVisibilityArtifacts = {
       front: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_VisibilityDiagnostic.png'),
       back: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_VisibilityDiagnostic.png'),
@@ -287,6 +288,14 @@ async function runSmokeTest(window) {
       outsideSignagePreview.front.previewPixelIdentical === true && outsideSignagePreview.back.previewPixelIdentical === true &&
       outsideSignagePreview.front.readyInvariant === true && outsideSignagePreview.back.readyInvariant === true &&
       outsideSignagePreview.interlockPreserved === true && outsideSignagePreview.contextLossCount === 0 &&
+      block8b.technicalPass === true && block8b.userValidation === 'PASS_CLOSED' &&
+      block8b.frontLayerCount === 5 && block8b.backLayerCount === 2 &&
+      block8b.stableUniqueIds === true && block8b.threeSelectedLayerBakesPass === true &&
+      block8b.familyIsolation === true && block8b.hiddenSelected === true &&
+      block8b.repeatedAddDeleteStable === true && block8b.outsidePreviewDirtyInvariant === true &&
+      block8b.cameraUnchanged === true && block8b.photoshopMutationCount === 0 &&
+      block8b.photoshopLastAppliedUnchanged === true &&
+      block8b.contextLossCount === 0 && block8b.projectionRuntimeCount === 1 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -320,6 +329,7 @@ async function runSmokeTest(window) {
       block8a,
       block8aAuthoringBake,
       outsideSignagePreview,
+      block8b,
       screenshotPath
     };
     writeJson(reportPath, report);

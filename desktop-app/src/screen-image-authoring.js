@@ -13,6 +13,23 @@ export const DEFAULT_AUTHORING_TRANSFORM = Object.freeze({
 const finite = (value, fallback) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
 
+function normalizeSource(source) {
+  if (!source || !(source.width > 0 && source.height > 0) || !isSupportedImageFile(source)) {
+    throw new Error('Projection authoring accepts only decoded PNG or JPG/JPEG files with original dimensions.');
+  }
+  return Object.freeze({
+    id: String(source.id),
+    filename: String(source.filename || source.name),
+    name: String(source.filename || source.name),
+    mimeType: String(source.mimeType || source.type).toLowerCase(),
+    type: String(source.mimeType || source.type).toLowerCase(),
+    width: Number(source.width),
+    height: Number(source.height),
+    hasAlpha: Boolean(source.hasAlpha),
+    byteLength: Number(source.byteLength || 0)
+  });
+}
+
 export function isSupportedImageFile({ name = '', type = '' } = {}) {
   const extension = String(name).split('.').pop()?.toLowerCase() || '';
   return SUPPORTED_IMAGE_TYPES.has(String(type).toLowerCase()) || SUPPORTED_IMAGE_EXTENSIONS.has(extension);
@@ -149,18 +166,7 @@ export class ScreenImageAuthoringSession {
   }
 
   setSource(source, familyId) {
-    if (!source || !(source.width > 0 && source.height > 0) || !isSupportedImageFile(source)) throw new Error('Block 8A accepts only decoded PNG or JPG/JPEG files with original dimensions.');
-    this.source = Object.freeze({
-      id: String(source.id),
-      filename: String(source.filename || source.name),
-      name: String(source.filename || source.name),
-      mimeType: String(source.mimeType || source.type).toLowerCase(),
-      type: String(source.mimeType || source.type).toLowerCase(),
-      width: Number(source.width),
-      height: Number(source.height),
-      hasAlpha: Boolean(source.hasAlpha),
-      byteLength: Number(source.byteLength || 0)
-    });
+    this.source = normalizeSource(source);
     this.familyId = String(familyId);
     this.transform = DEFAULT_AUTHORING_TRANSFORM;
     this.invalidate();
@@ -189,4 +195,200 @@ export class ScreenImageAuthoringSession {
   markBaked() { this.bakedRevision = this.revision; }
   get dirty() { return Boolean(this.source) && this.bakedRevision !== this.revision; }
   get status() { return !this.source ? 'NO IMAGE' : (this.dirty ? 'DIRTY / NEEDS BAKE' : 'READY'); }
+}
+
+export class ScreenImageLayerStack {
+  constructor({ disposeRuntime = null, idPrefix = 'layer' } = {}) {
+    this.activeFamilyId = null;
+    this.stacks = new Map();
+    this.selectedByFamily = new Map();
+    this.revision = 0;
+    this.sequence = 0;
+    this.idPrefix = String(idPrefix);
+    this.disposeRuntime = typeof disposeRuntime === 'function' ? disposeRuntime : () => {};
+  }
+
+  ensureFamily(familyId) {
+    const key = String(familyId);
+    if (!this.stacks.has(key)) this.stacks.set(key, []);
+    if (!this.selectedByFamily.has(key)) this.selectedByFamily.set(key, null);
+    return this.stacks.get(key);
+  }
+
+  activateFamily(familyId) {
+    const next = String(familyId);
+    const changed = this.activeFamilyId !== next;
+    this.activeFamilyId = next;
+    this.ensureFamily(next);
+    return changed;
+  }
+
+  bindFamily(familyId) { return this.activateFamily(familyId); }
+
+  nextLayerId() {
+    this.sequence += 1;
+    return `${this.idPrefix}-${this.sequence.toString(36).padStart(4, '0')}`;
+  }
+
+  invalidate() {
+    this.revision += 1;
+    const selected = this.selectedLayer;
+    if (selected) selected.bakedRevision = null;
+  }
+
+  syncOrder(layers = this.layers) {
+    layers.forEach((layer, index) => { layer.order = index; });
+  }
+
+  addLayer(source, familyId = this.activeFamilyId, runtime = source) {
+    if (familyId === null || familyId === undefined) throw new Error('A familyId is required before adding a layer.');
+    const key = String(familyId);
+    this.activateFamily(key);
+    const layer = {
+      layerId: this.nextLayerId(),
+      source: normalizeSource(source),
+      runtime,
+      transform: DEFAULT_AUTHORING_TRANSFORM,
+      visible: true,
+      order: 0,
+      familyId: key,
+      mappingMode: 'SCREEN_PROJECTED',
+      bakedRevision: null
+    };
+    this.ensureFamily(key).unshift(layer);
+    this.syncOrder();
+    this.selectedByFamily.set(key, layer.layerId);
+    this.invalidate();
+    return layer;
+  }
+
+  setSource(source, familyId = this.activeFamilyId) {
+    const key = String(familyId);
+    this.activateFamily(key);
+    if (!this.selectedLayer) return this.addLayer(source, key, source).source;
+    return this.replaceSelectedSource(source, source).source;
+  }
+
+  replaceSelectedSource(source, runtime = source) {
+    const layer = this.selectedLayer;
+    if (!layer) throw new Error('Select a layer before replacing its source.');
+    const normalized = normalizeSource(source);
+    const previousRuntime = layer.runtime;
+    layer.source = normalized;
+    layer.runtime = runtime;
+    this.invalidate();
+    if (previousRuntime && previousRuntime !== runtime) this.disposeRuntime(previousRuntime);
+    return layer;
+  }
+
+  selectLayer(layerId) {
+    const id = String(layerId);
+    const layer = this.layers.find((candidate) => candidate.layerId === id);
+    if (!layer || this.selectedLayerId === id) return false;
+    this.selectedByFamily.set(this.activeFamilyId, id);
+    this.invalidate();
+    return true;
+  }
+
+  deleteLayer(layerId = this.selectedLayerId) {
+    const index = this.layers.findIndex((layer) => layer.layerId === layerId);
+    if (index < 0) return null;
+    const [removed] = this.layers.splice(index, 1);
+    this.disposeRuntime(removed.runtime);
+    this.syncOrder();
+    const next = this.layers[index] || this.layers[index - 1] || null;
+    this.selectedByFamily.set(this.activeFamilyId, next?.layerId || null);
+    this.invalidate();
+    return removed;
+  }
+
+  moveLayer(layerId, direction) {
+    const index = this.layers.findIndex((layer) => layer.layerId === layerId);
+    const delta = direction === 'up' ? -1 : (direction === 'down' ? 1 : 0);
+    const target = index + delta;
+    if (index < 0 || delta === 0 || target < 0 || target >= this.layers.length) return false;
+    const [layer] = this.layers.splice(index, 1);
+    this.layers.splice(target, 0, layer);
+    this.syncOrder();
+    this.invalidate();
+    return true;
+  }
+
+  setLayerVisibility(layerId, visible) {
+    const layer = this.layers.find((candidate) => candidate.layerId === layerId);
+    if (!layer || layer.visible === Boolean(visible)) return false;
+    layer.visible = Boolean(visible);
+    this.invalidate();
+    return true;
+  }
+
+  setTransform(partial) {
+    const layer = this.selectedLayer;
+    if (!layer) return false;
+    const next = normalizeAuthoringTransform({ ...layer.transform, ...partial });
+    const changed = Object.keys(next).some((key) => next[key] !== layer.transform[key]);
+    if (!changed) return false;
+    layer.transform = next;
+    this.invalidate();
+    return true;
+  }
+
+  resetTransform() { return this.setTransform(DEFAULT_AUTHORING_TRANSFORM); }
+
+  markBaked() {
+    const layer = this.selectedLayer;
+    if (layer) layer.bakedRevision = this.revision;
+  }
+
+  disposeAll() {
+    for (const layers of this.stacks.values()) for (const layer of layers) this.disposeRuntime(layer.runtime);
+    this.stacks.clear();
+    this.selectedByFamily.clear();
+    this.activeFamilyId = null;
+  }
+
+  reset() {
+    this.stacks = new Map();
+    this.selectedByFamily = new Map();
+    this.activeFamilyId = null;
+    this.revision = 0;
+  }
+
+  snapshot() {
+    return {
+      activeFamilyId: this.activeFamilyId,
+      revision: this.revision,
+      sequence: this.sequence,
+      selectedByFamily: [...this.selectedByFamily.entries()],
+      stacks: [...this.stacks.entries()].map(([familyId, layers]) => [familyId, layers.map((layer) => ({ ...layer, transform: { ...layer.transform } }))])
+    };
+  }
+
+  restore(snapshot) {
+    this.stacks.clear();
+    this.selectedByFamily.clear();
+    this.activeFamilyId = snapshot.activeFamilyId;
+    this.revision = snapshot.revision;
+    this.sequence = snapshot.sequence;
+    this.selectedByFamily = new Map(snapshot.selectedByFamily);
+    this.stacks = new Map(snapshot.stacks.map(([familyId, layers]) => [familyId, layers.map((layer) => ({ ...layer, transform: normalizeAuthoringTransform(layer.transform) }))]));
+    for (const layers of this.stacks.values()) this.syncOrder(layers);
+  }
+
+  get layers() { return this.activeFamilyId === null ? [] : this.ensureFamily(this.activeFamilyId); }
+  get renderLayers() { return [...this.layers].reverse().filter((layer) => layer.visible); }
+  get selectedLayerId() { return this.activeFamilyId === null ? null : this.selectedByFamily.get(this.activeFamilyId) || null; }
+  get selectedLayer() { return this.layers.find((layer) => layer.layerId === this.selectedLayerId) || null; }
+  get source() { return this.selectedLayer?.source || null; }
+  get runtime() { return this.selectedLayer?.runtime || null; }
+  get familyId() { return this.activeFamilyId; }
+  get transform() { return this.selectedLayer?.transform || DEFAULT_AUTHORING_TRANSFORM; }
+  get bakedRevision() { return this.selectedLayer?.bakedRevision ?? null; }
+  get dirty() { const layer = this.selectedLayer; return Boolean(layer) && layer.bakedRevision !== this.revision; }
+  get status() {
+    const layer = this.selectedLayer;
+    if (!layer) return 'NO IMAGE';
+    if (!layer.visible) return 'HIDDEN / BAKE DISABLED';
+    return this.dirty ? 'DIRTY / NEEDS BAKE' : 'READY';
+  }
 }
