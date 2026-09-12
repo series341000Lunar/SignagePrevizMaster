@@ -172,7 +172,7 @@ assert.match(uxpSource, /\(0\.5 \/ 255\) \+ 0\.000001/);
 assert.match(uxpSource, /\.sort\(\(a, b\) => a\.composite\.order - b\.composite\.order\)/);
 assert.doesNotMatch(uxpSource, /getByName\(|find\(.*\.name === metadata\.authoringLayerName/);
 for (const id of ['authoring-opacity', 'authoring-blend-mode', 'authoring-quick-rail', 'quick-bake-current', 'quick-send-direct']) assert.match(htmlSource, new RegExp(`id="${id}"`));
-assert.doesNotMatch(htmlSource, /BAKE FULL MERGED/);
+assert.doesNotMatch(htmlSource, /data-photoshop-output="FULL_MERGED"/, 'later Full Merge must not alter Block 8C per-layer Photoshop send');
 
 console.log(JSON.stringify({
   block: '8C',

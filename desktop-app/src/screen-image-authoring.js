@@ -260,6 +260,7 @@ export class ScreenImageLayerStack {
     this.activeFamilyId = null;
     this.stacks = new Map();
     this.selectedByFamily = new Map();
+    this.mergedByFamily = new Map();
     this.revision = 0;
     this.sequence = 0;
     this.maskPathSequence = 0;
@@ -272,7 +273,21 @@ export class ScreenImageLayerStack {
     const key = String(familyId);
     if (!this.stacks.has(key)) this.stacks.set(key, []);
     if (!this.selectedByFamily.has(key)) this.selectedByFamily.set(key, null);
+    if (!this.mergedByFamily.has(key)) this.mergedByFamily.set(key, { revision: 0, bakedRevision: null });
     return this.stacks.get(key);
+  }
+
+  ensureMergedFamily(familyId) {
+    this.ensureFamily(familyId);
+    return this.mergedByFamily.get(String(familyId));
+  }
+
+  invalidateMerged(familyId = this.activeFamilyId) {
+    if (familyId === null || familyId === undefined) return false;
+    const merged = this.ensureMergedFamily(familyId);
+    merged.revision += 1;
+    merged.bakedRevision = null;
+    return true;
   }
 
   activateFamily(familyId) {
@@ -324,6 +339,7 @@ export class ScreenImageLayerStack {
       layer.pixelRevision += 1;
       layer.bakedPixelRevision = null;
       layer.bakedRevision = null;
+      this.invalidateMerged(layer.familyId);
     }
   }
 
@@ -363,6 +379,7 @@ export class ScreenImageLayerStack {
     this.syncOrder();
     this.selectedByFamily.set(key, layer.layerId);
     this.revision += 1;
+    this.invalidateMerged(key);
     return layer;
   }
 
@@ -403,6 +420,7 @@ export class ScreenImageLayerStack {
     const next = this.layers[index] || this.layers[index - 1] || null;
     this.selectedByFamily.set(this.activeFamilyId, next?.layerId || null);
     this.invalidateMetadata(this.layers);
+    this.invalidateMerged(removed.familyId);
     return removed;
   }
 
@@ -422,6 +440,7 @@ export class ScreenImageLayerStack {
     this.layers.splice(target, 0, layer);
     this.syncOrder();
     this.invalidateMetadata(this.layers);
+    this.invalidateMerged(layer.familyId);
     return true;
   }
 
@@ -430,6 +449,7 @@ export class ScreenImageLayerStack {
     if (!layer || layer.visible === Boolean(visible)) return false;
     layer.visible = Boolean(visible);
     this.invalidateMetadata([layer]);
+    this.invalidateMerged(layer.familyId);
     return true;
   }
 
@@ -439,6 +459,7 @@ export class ScreenImageLayerStack {
     if (!layer || layer.opacity === next) return false;
     layer.opacity = next;
     this.invalidateMetadata([layer]);
+    this.invalidateMerged(layer.familyId);
     return true;
   }
 
@@ -448,6 +469,7 @@ export class ScreenImageLayerStack {
     if (!layer || !AUTHORING_BLEND_MODES.includes(next) || layer.blendMode === next) return false;
     layer.blendMode = next;
     this.invalidateMetadata([layer]);
+    this.invalidateMerged(layer.familyId);
     return true;
   }
 
@@ -599,6 +621,26 @@ export class ScreenImageLayerStack {
     }
   }
 
+  markMergedBaked(familyId = this.activeFamilyId) {
+    if (familyId === null || familyId === undefined) return false;
+    const merged = this.ensureMergedFamily(familyId);
+    merged.bakedRevision = merged.revision;
+    return true;
+  }
+
+  mergedState(familyId = this.activeFamilyId) {
+    if (familyId === null || familyId === undefined) return Object.freeze({ revision: 0, bakedRevision: null, dirty: false, status: 'NO LAYERS' });
+    const layers = this.ensureFamily(familyId);
+    const merged = this.ensureMergedFamily(familyId);
+    const dirty = layers.length > 0 && merged.bakedRevision !== merged.revision;
+    return Object.freeze({
+      revision: merged.revision,
+      bakedRevision: merged.bakedRevision,
+      dirty,
+      status: layers.length === 0 ? 'NO LAYERS' : (dirty ? 'MERGED DIRTY / NEEDS BAKE' : 'MERGED READY')
+    });
+  }
+
   markMetadataSynced(layerIds = this.layers.map((layer) => layer.layerId)) {
     const ids = new Set(layerIds);
     for (const layer of this.layers) if (ids.has(layer.layerId)) layer.metadataSyncedRevision = layer.metadataRevision;
@@ -608,12 +650,14 @@ export class ScreenImageLayerStack {
     for (const layers of this.stacks.values()) for (const layer of layers) this.disposeRuntime(layer.runtime);
     this.stacks.clear();
     this.selectedByFamily.clear();
+    this.mergedByFamily.clear();
     this.activeFamilyId = null;
   }
 
   reset() {
     this.stacks = new Map();
     this.selectedByFamily = new Map();
+    this.mergedByFamily = new Map();
     this.activeFamilyId = null;
     this.revision = 0;
     this.maskPathSequence = 0;
@@ -628,6 +672,7 @@ export class ScreenImageLayerStack {
       maskPathSequence: this.maskPathSequence,
       maskPointSequence: this.maskPointSequence,
       selectedByFamily: [...this.selectedByFamily.entries()],
+      mergedByFamily: [...this.mergedByFamily.entries()].map(([familyId, merged]) => [familyId, { ...merged }]),
       stacks: [...this.stacks.entries()].map(([familyId, layers]) => [familyId, layers.map((layer) => ({
         ...layer,
         transform: { ...layer.transform },
@@ -639,6 +684,7 @@ export class ScreenImageLayerStack {
   restore(snapshot) {
     this.stacks.clear();
     this.selectedByFamily.clear();
+    this.mergedByFamily.clear();
     this.activeFamilyId = snapshot.activeFamilyId;
     this.revision = snapshot.revision;
     this.sequence = Number.isSafeInteger(snapshot.sequence) && snapshot.sequence >= 0 ? snapshot.sequence : 0;
@@ -657,6 +703,15 @@ export class ScreenImageLayerStack {
       metadataSyncedRevision: layer.metadataSyncedRevision ?? null,
       transform: normalizeAuthoringTransform(layer.transform)
     }))]));
+    this.mergedByFamily = new Map((snapshot.mergedByFamily || []).map(([familyId, merged]) => [String(familyId), {
+      revision: Number.isSafeInteger(merged?.revision) ? merged.revision : 0,
+      bakedRevision: Number.isSafeInteger(merged?.bakedRevision) ? merged.bakedRevision : null
+    }]));
+    for (const [familyId, layers] of this.stacks) {
+      if (!this.mergedByFamily.has(familyId)) {
+        this.mergedByFamily.set(familyId, { revision: layers.length > 0 ? 1 : 0, bakedRevision: null });
+      }
+    }
     for (const layers of this.stacks.values()) this.syncOrder(layers);
     const prefix = `${this.idPrefix}-`;
     for (const layers of this.stacks.values()) {

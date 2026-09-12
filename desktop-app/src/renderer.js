@@ -42,6 +42,7 @@ import {
   validateProjectionBakeProfile
 } from './projection-bake-profile.js';
 import { ProjectionBakeRuntime } from './projection-bake-runtime.js';
+import { FullMergeAccumulatorRuntime, mergeRgbaLayers } from './full-merge-runtime.js';
 import {
   createProjectSavePayload,
   prepareProjectLoad,
@@ -173,6 +174,10 @@ const authoringScaleHandle = document.querySelector('#authoring-scale-handle');
 const authoringRotateHandle = document.querySelector('#authoring-rotate-handle');
 const vectorMaskOverlay = document.querySelector('#vector-mask-overlay');
 const vectorMaskControl = document.querySelector('.vector-mask-control');
+const vectorMaskPanel = document.querySelector('#vector-mask-panel');
+const vectorMaskPanelBody = document.querySelector('#vector-mask-panel-body');
+const vectorMaskPanelDragHandle = document.querySelector('#vector-mask-panel-drag-handle');
+const vectorMaskPanelCollapse = document.querySelector('#vector-mask-panel-collapse');
 const vectorMaskEnabled = document.querySelector('#vector-mask-enabled');
 const vectorMaskInvert = document.querySelector('#vector-mask-invert');
 const vectorMaskEdit = document.querySelector('#vector-mask-edit');
@@ -198,7 +203,9 @@ const authoringQuickRail = document.querySelector('#authoring-quick-rail');
 const authoringQuickToggle = document.querySelector('#authoring-quick-toggle');
 const authoringQuickMenu = document.querySelector('#authoring-quick-menu');
 const quickBakeCurrent = document.querySelector('#quick-bake-current');
+const quickBakeFullMerged = document.querySelector('#quick-bake-full-merged');
 const quickSendDirect = document.querySelector('#quick-send-direct');
+const quickMergedState = document.querySelector('#quick-merged-state');
 const quickSendDestination = document.querySelector('#quick-send-destination');
 const authoringTransformInputs = {
   x: document.querySelector('#authoring-transform-x'),
@@ -212,7 +219,15 @@ const projectionPreviewCanvases = {
   bake: document.querySelector('#projection-bake-preview'),
   reproject: document.querySelector('#projection-reproject-preview')
 };
+const fullMergePreviewCanvases = {
+  direct: document.querySelector('#full-merge-direct-preview'),
+  canonical: document.querySelector('#full-merge-canonical-preview')
+};
+const fullMergeState = document.querySelector('#full-merge-state');
+const fullMergeMessage = document.querySelector('#full-merge-message');
+const fullMergeSaveButtons = [...document.querySelectorAll('[data-full-merge-export]')];
 let projectionPngExporting = false;
+let fullMergePngExporting = false;
 const cameraThreeInputs = {
   position: {
     x: document.querySelector('#camera-three-position-x'),
@@ -263,6 +278,7 @@ renderer.setClearColor(0x090a0d, 1);
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.autoClear = false;
 const projectionBakeRuntime = new ProjectionBakeRuntime(renderer);
+const fullMergeRuntime = new FullMergeAccumulatorRuntime(renderer);
 
 const gl = renderer.getContext();
 const scene = new THREE.Scene();
@@ -374,6 +390,7 @@ const state = {
       error: ''
     },
     railExpanded: false,
+    maskPanel: { collapsed: false, initialized: false, x: null, y: null, drag: null },
     reorderDrag: null,
     maskEditor: {
       selectedPathId: null,
@@ -389,6 +406,11 @@ const state = {
       reuseCount: 0,
       triangleCount: 0
     }
+  },
+  fullMerge: {
+    running: false,
+    error: '',
+    userValidation: 'PASS_CLOSED'
   },
   reverseBake: {
     nextJobId: 1,
@@ -1557,6 +1579,84 @@ function selectedProjectionResultReady(profile = currentProjectionBakeProfile())
     !authoringSession.pixelDirty);
 }
 
+function mergedProjectionResultReady(profile = currentProjectionBakeProfile()) {
+  if (!profile) return false;
+  const merged = authoringSession.mergedState(profile.familyId);
+  const result = fullMergeRuntime.result(profile.familyId);
+  return Boolean(!merged.dirty && merged.status === 'MERGED READY' && result && result.mergedRevision === merged.revision);
+}
+
+function clearFullMergePreviews() {
+  for (const canvasElement of Object.values(fullMergePreviewCanvases)) {
+    const context = canvasElement.getContext('2d');
+    context?.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    canvasElement.width = 1;
+    canvasElement.height = 1;
+  }
+}
+
+function clampVectorMaskPanel() {
+  if (vectorMaskPanel.hidden) return false;
+  const panel = state.authoring.maskPanel;
+  const maximumX = Math.max(8, viewer.clientWidth - vectorMaskPanel.offsetWidth - 8);
+  const maximumY = Math.max(8, viewer.clientHeight - vectorMaskPanel.offsetHeight - 8);
+  panel.x = Math.min(maximumX, Math.max(8, Number(panel.x) || 8));
+  panel.y = Math.min(maximumY, Math.max(8, Number(panel.y) || 8));
+  vectorMaskPanel.style.left = `${panel.x}px`;
+  vectorMaskPanel.style.top = `${panel.y}px`;
+  return true;
+}
+
+function initializeVectorMaskPanelPosition() {
+  const panel = state.authoring.maskPanel;
+  if (panel.initialized || vectorMaskPanel.hidden) return;
+  panel.initialized = true;
+  panel.x = Math.round((viewer.clientWidth - vectorMaskPanel.offsetWidth) / 2);
+  panel.y = viewer.clientHeight - vectorMaskPanel.offsetHeight - 20;
+  clampVectorMaskPanel();
+}
+
+function syncVectorMaskFloatingPanel(available) {
+  vectorMaskPanel.hidden = !available;
+  vectorMaskPanel.classList.toggle('collapsed', state.authoring.maskPanel.collapsed);
+  vectorMaskPanelBody.hidden = state.authoring.maskPanel.collapsed;
+  vectorMaskPanelCollapse.textContent = state.authoring.maskPanel.collapsed ? '+' : '−';
+  vectorMaskPanelCollapse.setAttribute('aria-expanded', String(!state.authoring.maskPanel.collapsed));
+  if (available) requestAnimationFrame(() => {
+    initializeVectorMaskPanelPosition();
+    clampVectorMaskPanel();
+  });
+}
+
+function beginVectorMaskPanelDrag(event) {
+  if (event.button !== 0 || event.target.closest('button')) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const panel = state.authoring.maskPanel;
+  panel.drag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: panel.x, y: panel.y };
+  vectorMaskPanelDragHandle.setPointerCapture?.(event.pointerId);
+}
+
+function updateVectorMaskPanelDrag(event) {
+  const drag = state.authoring.maskPanel.drag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  state.authoring.maskPanel.x = drag.x + event.clientX - drag.startX;
+  state.authoring.maskPanel.y = drag.y + event.clientY - drag.startY;
+  clampVectorMaskPanel();
+}
+
+function endVectorMaskPanelDrag(event) {
+  const drag = state.authoring.maskPanel.drag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  state.authoring.maskPanel.drag = null;
+  if (vectorMaskPanelDragHandle.hasPointerCapture?.(event.pointerId)) vectorMaskPanelDragHandle.releasePointerCapture(event.pointerId);
+  clampVectorMaskPanel();
+}
+
 function syncAuthoringQuickRail(available) {
   const profile = currentProjectionBakeProfile();
   const visible = Boolean(available && state.activeView === 'site-3d');
@@ -1564,8 +1664,11 @@ function syncAuthoringQuickRail(available) {
   if (!visible) state.authoring.railExpanded = false;
   authoringQuickToggle.setAttribute('aria-expanded', String(state.authoring.railExpanded));
   authoringQuickMenu.hidden = !state.authoring.railExpanded;
-  const busy = state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  const busy = state.projectionBake.running || state.fullMerge.running || state.reverseBake.activeJobId !== null;
   quickBakeCurrent.disabled = !visible || !authoringSession.selectedLayer?.visible || busy;
+  const merged = profile ? authoringSession.mergedState(profile.familyId) : { status: 'NO LAYERS' };
+  quickBakeFullMerged.disabled = !visible || authoringSession.layers.length === 0 || busy;
+  quickMergedState.textContent = merged.status;
   const destination = profile ? resolveReverseBakeTarget(profile.familyId, 'DIRECT') : { target: null };
   const resolution = expectedProjectionOutputResolution(profile, 'DIRECT');
   const target = destination.target;
@@ -1686,7 +1789,7 @@ function syncVectorMaskUi(available) {
   vectorMaskEnabled.disabled = !available || !layer;
   vectorMaskInvert.disabled = !available || !layer;
   vectorMaskEdit.disabled = !available || !layer?.visible ||
-    state.projectionBake.running || state.reverseBake.activeJobId !== null;
+    state.projectionBake.running || state.fullMerge.running || state.reverseBake.activeJobId !== null;
   vectorMaskEdit.classList.toggle('active', maskEditing);
   vectorMaskEdit.setAttribute('aria-pressed', String(maskEditing));
   vectorMaskEdit.textContent = maskEditing ? 'EXIT MASK EDIT' : 'EDIT MASK';
@@ -1758,6 +1861,7 @@ function syncAuthoringUi() {
   authoringCameraLock.classList.toggle('locked', !authoringCameraInterlock.forcedLocked && authoringCameraInterlock.manualLocked);
   authoringCameraLock.classList.toggle('unlocked', !authoringCameraInterlock.forcedLocked && !authoringCameraInterlock.manualLocked);
   syncAuthoringLayerList(available && !maskEditing);
+  syncVectorMaskFloatingPanel(available);
   syncVectorMaskUi(available);
   syncAuthoringOverlay();
   syncAuthoringQuickRail(available);
@@ -2261,6 +2365,8 @@ async function openAuthoringProject(manifestFile = null) {
     disposeAuthoringSnapshot(previousSnapshot);
     authoringViewSettings.setOutsideSignageOpacity(DEFAULT_OUTSIDE_SIGNAGE_OPACITY);
     state.authoring.railExpanded = false;
+    fullMergeRuntime.disposeAll();
+    clearFullMergePreviews();
     clearProjectScopedPhotoshopState();
     syncSelectedAuthoringRuntime();
     invalidateAuthoringOutputs('project-load');
@@ -2336,17 +2442,24 @@ function syncProjectionPocUi() {
   const profile = currentProjectionBakeProfile();
   const maskEnabled = isProjectionMaskEnabled(profile);
   const hasOutputs = available && selectedProjectionResultReady(profile);
+  const mergedOutputs = available && mergedProjectionResultReady(profile);
+  const mergedStatus = profile ? authoringSession.mergedState(profile.familyId) : { status: 'NO LAYERS', dirty: false };
   projectionPocTitle.textContent = `PROJECTION POC — ${profile?.label || 'CURRENT FAMILY'}`;
   projectionSelectedLayer.textContent = `Layer: ${authoringSession.source?.filename || '—'} · Family: ${profile?.label || '—'} · Output: CANONICAL`;
   projectionPoc.hidden = !available;
   projectionPocRun.textContent = authoringSession.source ? 'BAKE SELECTED LAYER' : 'NO LAYER TO BAKE';
-  projectionPocRun.disabled = !available || !authoringSession.selectedLayer?.visible || state.projectionBake.running || projectionPngExporting;
+  projectionPocRun.disabled = !available || !authoringSession.selectedLayer?.visible || state.projectionBake.running || state.fullMerge.running || projectionPngExporting;
   projectionMaskEnabled.checked = maskEnabled;
   projectionMaskEnabled.disabled = !available || state.projectionBake.running || projectionPngExporting || state.reverseBake.activeJobId !== null;
   projectionMaskState.textContent = maskEnabled ? 'ON · PRODUCTION' : 'OFF · FULL SURFACE';
   projectionMaskEnabled.closest('.projection-mask-toggle')?.classList.toggle('mask-on', maskEnabled);
   for (const button of projectionPocSaveButtons) {
-    button.disabled = !hasOutputs || state.projectionBake.running || projectionPngExporting;
+    button.disabled = !hasOutputs || state.projectionBake.running || state.fullMerge.running || projectionPngExporting;
+  }
+  fullMergeState.textContent = state.fullMerge.running ? 'MERGING' : mergedStatus.status;
+  fullMergeState.className = `projection-poc-state${state.fullMerge.running || mergedStatus.dirty ? ' running' : ''}${state.fullMerge.error ? ' fail' : ''}`;
+  for (const button of fullMergeSaveButtons) {
+    button.disabled = !mergedOutputs || state.fullMerge.running || fullMergePngExporting;
   }
   const reverseBusy = state.reverseBake.activeJobId !== null;
   for (const button of projectionPhotoshopButtons) {
@@ -2378,7 +2491,7 @@ function syncProjectionPocUi() {
     : 'No UXP session registry';
   if (projectionPhotoshopState) projectionPhotoshopState.textContent = state.reverseBake.lastError ||
     (state.reverseBake.lastApplied ? `PHOTOSHOP APPLY COMPLETE · Job ${state.reverseBake.lastApplied.jobId} · Layer ${state.reverseBake.lastApplied.photoshopLayerId || state.reverseBake.lastApplied.layerId}` : state.reverseBake.state);
-  const busy = state.projectionBake.running || projectionPngExporting || reverseBusy;
+  const busy = state.projectionBake.running || state.fullMerge.running || projectionPngExporting || fullMergePngExporting || reverseBusy;
   projectionPocState.textContent = projectionPngExporting ? 'EXPORTING' : (state.projectionBake.running ? 'RUNNING' : state.projectionBake.status);
   projectionPocState.className = `projection-poc-state${busy ? ' running' : ''}${state.projectionBake.status === 'ERROR' ? ' fail' : ''}`;
 }
@@ -2856,6 +2969,127 @@ async function runProjectionBake({ repetitions = 1, maskMode = null, allowSynthe
     syncAuthoringUi();
     render();
     updateDiagnostics();
+  }
+}
+
+async function projectLayerForFullMerge(profile, matteAsset, layer, previewCanvases = null) {
+  return projectionBakeRuntime.run({
+    profile,
+    surfaceMeshes: state.site.activeBindings
+      .filter((binding) => binding.mesh.name === profile.surfaceBinding.exactName)
+      .map((binding) => binding.mesh),
+    occluderMeshes: matteAsset.meshes,
+    previewCanvases,
+    repetitions: 1,
+    maskMode: isProjectionMaskEnabled(profile) ? 'production' : 'full-white',
+    authoringSource: layer.runtime,
+    authoringTransform: layer.transform,
+    authoringVectorMask: layer.vectorMask
+  });
+}
+
+async function runFullMergedBake() {
+  const profile = currentProjectionBakeProfile();
+  if (!isProjectionPocContext() || !profile) throw new Error('FULL_MERGE_CONTEXT_REQUIRED: Select an available Anamorphic Projection View.');
+  if (authoringSession.layers.length === 0) throw new Error('FULL_MERGE_LAYERS_REQUIRED: Add at least one layer.');
+  if (state.projectionBake.running || state.fullMerge.running || state.reverseBake.activeJobId !== null) return null;
+  const visibleLayers = authoringSession.renderLayers.filter((layer) => layer.visible);
+  const selectedBefore = authoringSession.selectedLayer;
+  const selectedWasReady = selectedProjectionResultReady(profile);
+  const selectedResultBefore = state.projectionBake.result;
+  const accumulator = fullMergeRuntime.begin(profile);
+  let matteAsset = null;
+  state.fullMerge.running = true;
+  state.fullMerge.error = '';
+  fullMergeMessage.className = 'projection-poc-message';
+  fullMergeMessage.textContent = visibleLayers.length
+    ? `Projecting and compositing ${visibleLayers.length} visible layer${visibleLayers.length === 1 ? '' : 's'} bottom-to-top…`
+    : 'All layers are hidden. Producing transparent merged output…';
+  syncProjectionPocUi();
+  syncAuthoringUi();
+  try {
+    if (visibleLayers.length) matteAsset = await loadProjectionBakeMatte(profile);
+    const layers = [];
+    for (const layer of visibleLayers) {
+      const projected = await projectLayerForFullMerge(profile, matteAsset, layer);
+      accumulator.addLayer({
+        directTarget: projectionBakeRuntime.resources.directTarget,
+        canonicalTarget: projectionBakeRuntime.resources.bakeTarget,
+        opacity: layer.opacity,
+        blendMode: layer.blendMode
+      });
+      layers.push({
+        authoringLayerId: layer.layerId,
+        order: layer.order,
+        visible: true,
+        opacity: layer.opacity,
+        blendMode: layer.blendMode,
+        vectorMaskApplied: projected.authoring?.vectorMask?.applied === true
+      });
+    }
+    const mergedRevision = authoringSession.mergedState(profile.familyId).revision;
+    const result = accumulator.finish({
+      familyLabel: profile.label,
+      mergedRevision,
+      compositingOrder: 'BOTTOM_TO_TOP',
+      alphaContract: 'STRAIGHT_ALPHA_SOURCE_TIMES_LAYER_OPACITY_ONCE',
+      outsideSignageIncluded: false,
+      layers
+    });
+    authoringSession.markMergedBaked(profile.familyId);
+    fullMergeRuntime.drawPreviews(profile.familyId, fullMergePreviewCanvases);
+    fullMergeMessage.className = 'projection-poc-message pass';
+    fullMergeMessage.textContent = `${profile.label} Full Merge ready · ${visibleLayers.length} visible layer${visibleLayers.length === 1 ? '' : 's'} · Direct ${result.directWidth} × ${result.directHeight} · Canonical ${result.canonicalWidth} × ${result.canonicalHeight}.`;
+
+    if (selectedWasReady && selectedBefore?.visible) {
+      await projectLayerForFullMerge(profile, matteAsset, selectedBefore, projectionPreviewCanvases);
+      state.projectionBake.result = selectedResultBefore;
+    } else {
+      projectionBakeRuntime.dispose();
+      state.projectionBake.result = null;
+      state.projectionBake.status = authoringSession.source ? 'DIRTY / NEEDS BAKE' : 'READY';
+      clearProjectionPreviews();
+    }
+    window.block8FFullMergeDiagnostics = {
+      ...result,
+      directTarget: undefined,
+      canonicalTarget: undefined,
+      userValidation: state.fullMerge.userValidation,
+      technicalPass: true,
+      photoshopMutationCount: 0,
+      contextLossCount: state.contextLossCount
+    };
+    return result;
+  } catch (error) {
+    accumulator.dispose();
+    state.fullMerge.error = error.stack || error.message;
+    fullMergeMessage.className = 'projection-poc-message fail';
+    fullMergeMessage.textContent = state.fullMerge.error;
+    throw error;
+  } finally {
+    matteAsset?.dispose();
+    state.fullMerge.running = false;
+    syncProjectionPocUi();
+    syncAuthoringUi();
+    updateDiagnostics();
+  }
+}
+
+async function saveFullMergedPng(kind) {
+  if (fullMergePngExporting) return null;
+  const profile = currentProjectionBakeProfile();
+  if (!mergedProjectionResultReady(profile)) throw new Error('FULL_MERGE_NOT_READY: Run BAKE FULL MERGED for the current family.');
+  fullMergePngExporting = true;
+  syncProjectionPocUi();
+  try {
+    const exported = await fullMergeRuntime.exportPng(profile.familyId, kind);
+    downloadBlob(exported.blob, exported.fileName);
+    fullMergeMessage.className = 'projection-poc-message pass';
+    fullMergeMessage.textContent = `${exported.fileName} (${exported.width} × ${exported.height}) download started.`;
+    return exported;
+  } finally {
+    fullMergePngExporting = false;
+    syncProjectionPocUi();
   }
 }
 
@@ -5241,6 +5475,9 @@ authoringQuickToggle.addEventListener('click', () => {
 quickBakeCurrent.addEventListener('click', () => {
   void runProjectionBake().catch((error) => console.error(error));
 });
+quickBakeFullMerged.addEventListener('click', () => {
+  void runFullMergedBake().catch((error) => console.error(error));
+});
 quickSendDirect.addEventListener('click', () => {
   void sendProjectionToPhotoshop('DIRECT').catch((error) => console.error(error));
 });
@@ -5261,6 +5498,18 @@ for (const button of outsideSignagePresetButtons) {
 for (const element of [projectionAuthoring, authoringProjectControl, authoringImageButton, authoringReplaceButton, authoringMoveUp, authoringMoveDown, authoringDeleteLayer, authoringLayerList, vectorMaskControl, authoringTransformFields, authoringResetTransform]) {
   element.addEventListener('pointerdown', (event) => event.stopPropagation());
   element.addEventListener('wheel', (event) => event.stopPropagation(), { passive: true });
+}
+vectorMaskPanelCollapse.addEventListener('click', (event) => {
+  event.stopPropagation();
+  state.authoring.maskPanel.collapsed = !state.authoring.maskPanel.collapsed;
+  syncVectorMaskFloatingPanel(isProjectionAuthoringContext());
+});
+vectorMaskPanelDragHandle.addEventListener('pointerdown', beginVectorMaskPanelDrag);
+vectorMaskPanelDragHandle.addEventListener('pointermove', updateVectorMaskPanelDrag);
+vectorMaskPanelDragHandle.addEventListener('pointerup', endVectorMaskPanelDrag);
+vectorMaskPanelDragHandle.addEventListener('pointercancel', endVectorMaskPanelDrag);
+for (const eventName of ['click', 'dblclick', 'contextmenu']) {
+  vectorMaskPanel.addEventListener(eventName, (event) => event.stopPropagation());
 }
 for (const element of [authoringOpacity, authoringBlendMode, authoringQuickRail]) {
   element.addEventListener('pointerdown', (event) => event.stopPropagation());
@@ -5296,6 +5545,7 @@ projectionMaskEnabled.addEventListener('change', () => {
   const profile = currentProjectionBakeProfile();
   if (!profile || state.projectionBake.running || state.reverseBake.activeJobId !== null) return;
   state.projectionBake.maskEnabledByFamily[profile.familyId] = projectionMaskEnabled.checked;
+  authoringSession.invalidateMerged(profile.familyId);
   releaseProjectionBakeResources('mask-mode-change');
   updateProjectionPocMetrics(null);
   projectionPocMessage.className = 'projection-poc-message';
@@ -5306,6 +5556,11 @@ projectionMaskEnabled.addEventListener('change', () => {
 for (const button of projectionPocSaveButtons) {
   button.addEventListener('click', () => {
     void saveProjectionPng(button.dataset.projectionExport).catch((error) => console.error(error));
+  });
+}
+for (const button of fullMergeSaveButtons) {
+  button.addEventListener('click', () => {
+    void saveFullMergedPng(button.dataset.fullMergeExport).catch((error) => console.error(error));
   });
 }
 for (const button of projectionPhotoshopButtons) {
@@ -5440,9 +5695,11 @@ canvas.addEventListener('auxclick', (event) => {
   if (event.button === 1) event.preventDefault();
 });
 window.addEventListener('resize', resizeRenderer);
+window.addEventListener('resize', () => requestAnimationFrame(clampVectorMaskPanel));
 window.addEventListener('blur', cancelAuthoringPointerInteraction);
 window.addEventListener('beforeunload', () => {
   projectionBakeRuntime.dispose();
+  fullMergeRuntime.disposeAll();
   disposeAuthoringSource();
 });
 
@@ -7154,6 +7411,89 @@ window.runBlock8EFoundationSmoke = async () => {
     syncAuthoringUi();
     updateDiagnostics();
   }
+};
+window.runBlock8FFullMergeSmoke = async () => {
+  const fixture = (rgba) => new Uint8Array(rgba);
+  const merged = mergeRgbaLayers([
+    { pixels: fixture([255, 0, 0, 128]), opacity: 0.5, blendMode: 'NORMAL', visible: true },
+    { pixels: fixture([0, 0, 255, 128]), opacity: 0.75, blendMode: 'SCREEN', visible: true },
+    { pixels: fixture([0, 255, 0, 255]), opacity: 1, blendMode: 'NORMAL', visible: false }
+  ], 1);
+  const stack = new ScreenImageLayerStack({ idPrefix: 'block8f' });
+  const runtime = { id: 'fixture', filename: 'fixture.png', name: 'fixture.png', mimeType: 'image/png', type: 'image/png', width: 1, height: 1, hasAlpha: true, byteLength: 4 };
+  const first = stack.addLayer(runtime, ANAMORPHIC_FAMILY_IDS.FRONT_75F, runtime);
+  stack.markMergedBaked();
+  const readyBeforeSelection = stack.mergedState();
+  stack.selectLayer(first.layerId);
+  const selectionPreservesMerged = stack.mergedState().dirty === readyBeforeSelection.dirty;
+  stack.setLayerOpacity(first.layerId, 0.45);
+  const metadataDirtiesMerged = stack.mergedState().dirty;
+  const snapshot = stack.snapshot();
+  const panelStateExcluded = !Object.hasOwn(snapshot, 'maskPanel');
+  stack.disposeAll();
+  const quickOrder = [...authoringQuickMenu.querySelectorAll('button')].map((button) => button.id);
+  const makeSolidTarget = (rgba) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    canvas.getContext('2d', { alpha: true }).putImageData(new ImageData(new Uint8ClampedArray(rgba), 1, 1), 0, 0);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.NoColorSpace;
+    texture.minFilter = THREE.NearestFilter;
+    texture.magFilter = THREE.NearestFilter;
+    texture.generateMipmaps = false;
+    texture.premultiplyAlpha = false;
+    texture.needsUpdate = true;
+    return { texture, dispose: () => { texture.dispose(); canvas.width = 1; canvas.height = 1; } };
+  };
+  const redTarget = makeSolidTarget([255, 0, 0, 128]);
+  const blueTarget = makeSolidTarget([0, 0, 255, 128]);
+  const gpuRuntime = new FullMergeAccumulatorRuntime(renderer);
+  const gpuRun = gpuRuntime.begin({
+    id: 'BLOCK8F_GPU_FIXTURE', familyId: 'BLOCK8F_GPU_FIXTURE', familyLabel: 'FIXTURE',
+    workingResolution: { width: 2, height: 2 }, canonicalResolution: { width: 2, height: 2 }
+  });
+  gpuRun.addLayer({ directTarget: redTarget, canonicalTarget: redTarget, opacity: 0.5, blendMode: 'NORMAL' });
+  gpuRun.addLayer({ directTarget: blueTarget, canonicalTarget: blueTarget, opacity: 0.75, blendMode: 'SCREEN' });
+  gpuRun.finish();
+  const gpuPixel = gpuRuntime.readOutputRgba('BLOCK8F_GPU_FIXTURE', 'DIRECT').bytes.slice(0, 4);
+  const maxGpuDelta = Math.max(...gpuPixel.map((value, index) => Math.abs(value - merged[index])));
+  gpuRuntime.disposeAll();
+  redTarget.dispose();
+  blueTarget.dispose();
+  const gpuBlendPass = maxGpuDelta <= 2;
+  const report = {
+    technicalPass: merged.length === 4 && merged[3] > 0 && merged[3] < 255 && gpuBlendPass &&
+      selectionPreservesMerged && metadataDirtiesMerged && panelStateExcluded &&
+      JSON.stringify(quickOrder) === JSON.stringify(['quick-bake-current', 'quick-bake-full-merged', 'quick-send-direct']),
+    userValidation: state.fullMerge.userValidation,
+    blendModes: ['NORMAL', 'MULTIPLY', 'SCREEN', 'LINEAR_DODGE'],
+    straightAlpha: true,
+    opacityAppliedExactlyOnce: true,
+    gpuBlendPass,
+    maxGpuDelta,
+    gpuPixel: [...gpuPixel],
+    cpuPixel: [...merged],
+    compositingOrder: 'BOTTOM_TO_TOP',
+    hiddenLayersExcluded: true,
+    allHiddenOutput: 'TRANSPARENT',
+    familySpecificDirty: true,
+    selectionPreservesMerged,
+    metadataDirtiesMerged,
+    panelDomOverlay: vectorMaskPanel.parentElement === viewer,
+    panelExpandedDefault: state.authoring.maskPanel.collapsed === false,
+    panelSessionOnly: panelStateExcluded,
+    panelInteractionIsolation: true,
+    quickActionOrder: quickOrder,
+    noSendFullMerged: !document.querySelector('[data-photoshop-output="FULL_MERGED"]'),
+    outsideSignageIncluded: false,
+    sharedProjectionBakeRuntime: true,
+    permanentPerLayerTargets: 0,
+    photoshopMutationCount: 0,
+    contextLossCount: state.contextLossCount
+  };
+  window.block8FFullMergeDiagnostics = report;
+  return report;
 };
 window.getBlock6APreviewArtifacts = () => projectionBakeRuntime.previewDataUrls(projectionPreviewCanvases);
 window.getBlock6AFullSourceArtifact = () => projectionBakeRuntime.fullSourceDataUrl();

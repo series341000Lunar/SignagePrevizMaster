@@ -305,6 +305,7 @@ async function runSmokeTest(window) {
     const block8c = await window.webContents.executeJavaScript('window.runBlock8CCompositeSmoke()', true);
     const block8d = await window.webContents.executeJavaScript('window.runBlock8DProjectSmoke()', true);
     const block8e = await window.webContents.executeJavaScript('window.runBlock8EFoundationSmoke()', true);
+    const block8f = await window.webContents.executeJavaScript('window.runBlock8FFullMergeSmoke()', true);
     const bakeVisibilityArtifacts = {
       front: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_VisibilityDiagnostic.png'),
       back: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_VisibilityDiagnostic.png'),
@@ -457,6 +458,15 @@ async function runSmokeTest(window) {
       block8e.noPermanentPerLayerMaskTexture === true && block8e.opacityMetadataOnly === true &&
       block8e.photoshopMutationCount === 0 && block8e.photoshopLastAppliedUnchanged === true &&
       block8e.contextLossCount === 0 &&
+      block8f.technicalPass === true && block8f.userValidation === 'PASS_CLOSED' &&
+      block8f.straightAlpha === true && block8f.opacityAppliedExactlyOnce === true && block8f.gpuBlendPass === true &&
+      block8f.compositingOrder === 'BOTTOM_TO_TOP' && block8f.hiddenLayersExcluded === true &&
+      block8f.allHiddenOutput === 'TRANSPARENT' && block8f.familySpecificDirty === true &&
+      block8f.panelDomOverlay === true && block8f.panelExpandedDefault === true &&
+      block8f.panelSessionOnly === true && block8f.panelInteractionIsolation === true &&
+      block8f.noSendFullMerged === true && block8f.outsideSignageIncluded === false &&
+      block8f.sharedProjectionBakeRuntime === true && block8f.permanentPerLayerTargets === 0 &&
+      block8f.photoshopMutationCount === 0 && block8f.contextLossCount === 0 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -494,6 +504,7 @@ async function runSmokeTest(window) {
       block8c,
       block8d,
       block8e,
+      block8f,
       screenshotPath
     };
     writeJson(reportPath, report);

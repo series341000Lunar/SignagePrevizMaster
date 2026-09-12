@@ -670,6 +670,57 @@ aside {
   background: #121720;
 }
 
+.vector-mask-floating-panel {
+  position: absolute;
+  z-index: 12;
+  width: min(360px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  margin: 0;
+  overflow: hidden;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.vector-mask-panel-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 7px;
+  cursor: move;
+  user-select: none;
+}
+
+.vector-mask-panel-grip {
+  color: #6ec9e8;
+  letter-spacing: -3px;
+}
+
+.vector-mask-panel-header button {
+  min-width: 24px;
+  padding: 1px 5px;
+}
+
+.vector-mask-panel-body {
+  display: grid;
+  gap: 7px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.vector-mask-floating-panel.collapsed {
+  max-height: none;
+}
+
+.vector-mask-floating-panel.collapsed .vector-mask-panel-body {
+  display: none;
+}
+
+.full-merge-output {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #343f4d;
+}
+
 .vector-mask-heading,
 .vector-mask-subheading {
   display: flex;

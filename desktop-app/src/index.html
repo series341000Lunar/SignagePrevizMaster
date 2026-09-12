@@ -104,10 +104,47 @@
             <button id="authoring-rotate-handle" class="authoring-handle rotate" type="button" aria-label="Rotation handle"></button>
           </div>
         </div>
+        <section id="vector-mask-panel" class="vector-mask-control vector-mask-floating-panel" aria-labelledby="vector-mask-title" hidden>
+          <div id="vector-mask-panel-drag-handle" class="vector-mask-heading vector-mask-panel-header">
+            <span class="vector-mask-panel-grip" aria-hidden="true">&#8942;&#8942;</span>
+            <strong id="vector-mask-title">VECTOR MASK</strong>
+            <span id="vector-mask-coordinate">SOURCE UV</span>
+            <button id="vector-mask-panel-collapse" type="button" aria-expanded="true" aria-controls="vector-mask-panel-body" title="Collapse Vector Mask panel">&#8722;</button>
+          </div>
+          <div id="vector-mask-panel-body" class="vector-mask-panel-body">
+            <div class="vector-mask-toggles">
+              <label><input id="vector-mask-enabled" type="checkbox"> MASK ENABLE</label>
+              <label><input id="vector-mask-invert" type="checkbox"> INVERT</label>
+            </div>
+            <button id="vector-mask-edit" class="vector-mask-edit" type="button" aria-pressed="false" disabled>EDIT MASK</button>
+            <div class="vector-mask-subheading"><strong>PATHS</strong><span id="vector-mask-path-count">0</span></div>
+            <div id="vector-mask-path-list" class="vector-mask-path-list" role="listbox" aria-label="Vector mask paths">
+              <p class="vector-mask-empty">No paths</p>
+            </div>
+            <div class="vector-mask-actions">
+              <button id="vector-mask-add-path" type="button" disabled>+ NEW PATH</button>
+              <button id="vector-mask-delete-path" type="button" disabled>DELETE PATH</button>
+              <button id="vector-mask-close-path" type="button" disabled>CLOSE PATH</button>
+              <button id="vector-mask-clear" type="button" disabled>CLEAR MASK</button>
+            </div>
+            <div class="vector-mask-selection-controls">
+              <span>Selected Segment</span>
+              <div>
+                <button id="vector-mask-segment-linear" type="button" disabled>LINEAR</button>
+                <button id="vector-mask-segment-bezier" type="button" disabled>BEZIER</button>
+              </div>
+              <span>Selected Point</span>
+              <button id="vector-mask-delete-point" type="button" disabled>DELETE POINT</button>
+            </div>
+            <small id="vector-mask-message" role="status">Open path: click to add · first anchor closes. Closed path: double-click empty source space or use + NEW PATH. Drag empty space to select.</small>
+          </div>
+        </section>
         <div id="authoring-quick-rail" class="authoring-quick-rail" hidden>
           <div id="authoring-quick-menu" class="authoring-quick-menu" hidden>
             <button id="quick-bake-current" type="button">BAKE CURRENT</button>
+            <button id="quick-bake-full-merged" type="button">BAKE FULL MERGED</button>
             <button id="quick-send-direct" type="button">SEND DIRECT</button>
+            <small id="quick-merged-state">NO LAYERS</small>
             <small id="quick-send-destination">NO DIRECT TARGET</small>
           </div>
           <button id="authoring-quick-toggle" class="authoring-quick-toggle" type="button" aria-expanded="false" aria-controls="authoring-quick-menu" title="Projection quick actions">
@@ -259,37 +296,6 @@
             </select>
             <small id="authoring-metadata-state">METADATA DIRTY</small>
           </section>
-          <section class="vector-mask-control" aria-labelledby="vector-mask-title">
-            <div class="vector-mask-heading">
-              <strong id="vector-mask-title">VECTOR MASK</strong>
-              <span id="vector-mask-coordinate">SOURCE UV</span>
-            </div>
-            <div class="vector-mask-toggles">
-              <label><input id="vector-mask-enabled" type="checkbox"> MASK ENABLE</label>
-              <label><input id="vector-mask-invert" type="checkbox"> INVERT</label>
-            </div>
-            <button id="vector-mask-edit" class="vector-mask-edit" type="button" aria-pressed="false" disabled>EDIT MASK</button>
-            <div class="vector-mask-subheading"><strong>PATHS</strong><span id="vector-mask-path-count">0</span></div>
-            <div id="vector-mask-path-list" class="vector-mask-path-list" role="listbox" aria-label="Vector mask paths">
-              <p class="vector-mask-empty">No paths</p>
-            </div>
-            <div class="vector-mask-actions">
-              <button id="vector-mask-add-path" type="button" disabled>+ NEW PATH</button>
-              <button id="vector-mask-delete-path" type="button" disabled>DELETE PATH</button>
-              <button id="vector-mask-close-path" type="button" disabled>CLOSE PATH</button>
-              <button id="vector-mask-clear" type="button" disabled>CLEAR MASK</button>
-            </div>
-            <div class="vector-mask-selection-controls">
-              <span>Selected Segment</span>
-              <div>
-                <button id="vector-mask-segment-linear" type="button" disabled>LINEAR</button>
-                <button id="vector-mask-segment-bezier" type="button" disabled>BEZIER</button>
-              </div>
-              <span>Selected Point</span>
-              <button id="vector-mask-delete-point" type="button" disabled>DELETE POINT</button>
-            </div>
-            <small id="vector-mask-message" role="status">Open path: click to add · first anchor closes. Closed path: double-click empty source space or use + NEW PATH. Drag empty space to select.</small>
-          </section>
           <section class="outside-signage-control" aria-labelledby="outside-signage-title">
             <div class="outside-signage-heading">
               <strong id="outside-signage-title">OUTSIDE SIGNAGE</strong>
@@ -337,6 +343,21 @@
             <button type="button" data-projection-export="bake" disabled>SAVE BAKE PNG</button>
             <button type="button" data-projection-export="reproject" disabled>SAVE REPROJECTED PNG</button>
           </div>
+          <section class="full-merge-output" aria-labelledby="full-merge-title">
+            <div class="projection-poc-heading">
+              <h3 id="full-merge-title">FULL MERGED — CURRENT FAMILY</h3>
+              <span id="full-merge-state" class="projection-poc-state">NO LAYERS</span>
+            </div>
+            <div class="projection-poc-previews">
+              <figure><figcaption>MERGED DIRECT</figcaption><canvas id="full-merge-direct-preview"></canvas></figure>
+              <figure><figcaption>MERGED CANONICAL</figcaption><canvas id="full-merge-canonical-preview"></canvas></figure>
+            </div>
+            <div class="projection-poc-save-actions" aria-label="Full merged PNG export">
+              <button type="button" data-full-merge-export="DIRECT" disabled>SAVE MERGED DIRECT PNG</button>
+              <button type="button" data-full-merge-export="CANONICAL" disabled>SAVE MERGED CANONICAL PNG</button>
+            </div>
+            <p id="full-merge-message" class="projection-poc-message">BAKE FULL MERGED composites visible layers in bottom-to-top order. Photoshop send remains per-layer only.</p>
+          </section>
           <section class="projection-photoshop-output" aria-label="Output to Photoshop">
             <h3>OUTPUT TO PHOTOSHOP</h3>
             <dl class="projection-poc-metrics">

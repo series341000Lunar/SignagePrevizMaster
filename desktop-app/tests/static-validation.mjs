@@ -70,7 +70,7 @@ assert(/id="authoring-coverage-mask"/.test(htmlSource) && /id="authoring-coverag
 assert(/window\.runOutsideSignagePreviewSmoke/.test(rendererSource), 'Outside Signage Preview runtime smoke must be exposed.');
 assert(/runOutsideSignagePreviewSmoke/.test(mainSource), 'Outside Signage Preview runtime smoke must be included in the desktop report.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.8.5-block8e2', 'Package version must identify Block 8E-2 vector mask raster integration.');
+assert(packageJson.version === '0.8.6-block8f', 'Package version must identify Block 8F Full Merge and floating mask panel integration.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
