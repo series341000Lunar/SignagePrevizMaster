@@ -3,7 +3,7 @@
 Date: 2026-09-12
 Baseline HEAD: `5747f032432fbc171111b60b57349fba9fd39c22`
 
-Status: **IMPLEMENTED / AUTOMATED TECHNICAL PASS / USER VALIDATION PENDING**
+Status: **CLOSED / USER VALIDATED**
 
 ## BLOCK 8D STATUS
 
@@ -19,8 +19,8 @@ Save As: directory selection, asset staging/verification, then manifest commit
 
 Save: updates the current session project; first Save falls back to Save As
 
-Open: directory selection followed by complete validation/decode before the
-current authoring state is replaced
+Open: exact `project.json` file selection or Project-panel drag/drop, followed
+by complete validation/decode before the current authoring state is replaced
 
 Atomic save: staged asset writes and atomic `project.json` replacement; a
 failed save preserves the prior manifest and usable project
@@ -66,10 +66,21 @@ Target, protocol, Electron runtime, and Live Link tests pass
 
 Context loss: `0`
 
-Known issue: non-ASCII source filenames remain unsupported for Photoshop
+Known issue: Korean, Japanese, and other non-ASCII source filenames can load
+from a Project but remain unsupported for Photoshop
 `SEND DIRECT` under the project ASCII filename policy. This remains
 `KNOWN ISSUE / USER ACCEPTED / NON-BLOCKING`; generated internal project paths
 do not change that contract.
+
+User validation on 2026-09-12 confirmed FRONT75/BACK restoration, 50% Outside
+Signage reset, Layout Interlock, Bake, session-scoped target behavior, and a
+new English-filename source Send without removing earlier Photoshop canvas
+layers. Project-loaded Korean-filename layers did not Send and are covered only
+by the accepted Known Issue above.
+
+Final user validation also confirmed exact `project.json` selection,
+Project-panel `project.json` drag/drop, and the Photoshop UXP panel's
+full-height vertical scrollbar after plugin reload.
 
 ## Main implementation files
 
@@ -99,6 +110,6 @@ Detailed automated evidence and the required user procedure are in
 - autosave, recent projects, cloud sync, asset browser, and missing-file search;
 - camera animation and JPG sequence rendering.
 
-Block 8D remains `OPEN`. It may be closed only after the user completes the
-Save → Restart → Open → Bake → new-session Photoshop Send procedure and gives
-an explicit PASS.
+Block 8D is `CLOSED`. The user completed the Save → Restart → Open → Bake →
+new-session Photoshop Send procedure, verified the loading enhancements and
+UXP scrollbar, and gave an explicit All PASS on 2026-09-12.

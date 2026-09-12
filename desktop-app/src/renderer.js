@@ -1738,15 +1738,21 @@ function clearProjectScopedPhotoshopState() {
   state.reverseBake.lastError = '';
 }
 
-async function openAuthoringProject() {
+async function openAuthoringProject(manifestFile = null) {
   if (!window.luuxProject) throw new Error('PROJECT_BRIDGE_UNAVAILABLE: Project persistence bridge is unavailable.');
   if (state.authoring.project.busy) return false;
-  setProjectOperationState({ busy: true, status: 'Selecting project folder...', error: '' });
+  setProjectOperationState({
+    busy: true,
+    status: manifestFile ? 'Opening dropped project.json...' : 'Selecting project.json...',
+    error: ''
+  });
   let result = null;
   let prepared = null;
   let transferred = false;
   try {
-    result = await window.luuxProject.open();
+    result = manifestFile
+      ? await window.luuxProject.openDroppedManifest(manifestFile)
+      : await window.luuxProject.open();
     if (!result.ok) throw projectOperationError(result);
     if (result.canceled) {
       setProjectOperationState({ busy: false, status: 'Project open canceled.', error: '' });
@@ -4371,6 +4377,34 @@ authoringProjectSave.addEventListener('click', () => {
 authoringProjectOpen.addEventListener('click', () => {
   void openAuthoringProject().catch((error) => console.error(error));
 });
+let authoringProjectDragDepth = 0;
+authoringProjectControl.addEventListener('dragenter', (event) => {
+  if (!event.dataTransfer?.types?.includes('Files')) return;
+  event.preventDefault();
+  authoringProjectDragDepth += 1;
+  authoringProjectControl.classList.add('drag-over');
+});
+authoringProjectControl.addEventListener('dragover', (event) => {
+  if (!event.dataTransfer?.types?.includes('Files')) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+});
+authoringProjectControl.addEventListener('dragleave', () => {
+  authoringProjectDragDepth = Math.max(0, authoringProjectDragDepth - 1);
+  if (authoringProjectDragDepth === 0) authoringProjectControl.classList.remove('drag-over');
+});
+authoringProjectControl.addEventListener('drop', (event) => {
+  event.preventDefault();
+  authoringProjectDragDepth = 0;
+  authoringProjectControl.classList.remove('drag-over');
+  const manifestFile = [...(event.dataTransfer?.files || [])]
+    .find((file) => file.name.toLowerCase() === 'project.json');
+  if (!manifestFile) {
+    setProjectOperationState({ busy: false, error: 'PROJECT_MANIFEST_PATH_INVALID: Drop the exact project.json file.' });
+    return;
+  }
+  void openAuthoringProject(manifestFile).catch((error) => console.error(error));
+});
 authoringCameraLock.addEventListener('click', toggleAuthoringCameraLock);
 layoutEditButton.addEventListener('click', toggleLayoutEdit);
 authoringImageButton.addEventListener('click', () => authoringImageInput.click());
@@ -5959,7 +5993,7 @@ window.runBlock8DProjectSmoke = async () => {
       userValidation: 'PENDING',
       schemaVersion: payload.manifest.schemaVersion,
       folderProject: true,
-      projectUiAvailable: Boolean(window.luuxProject && authoringProjectSaveAs && authoringProjectSave && authoringProjectOpen),
+      projectUiAvailable: Boolean(window.luuxProject?.openDroppedManifest && authoringProjectSaveAs && authoringProjectSave && authoringProjectOpen),
       frontLayerCount: payload.manifest.families[ANAMORPHIC_FAMILY_IDS.FRONT_75F].layers.length,
       backLayerCount: payload.manifest.families[ANAMORPHIC_FAMILY_IDS.BACK].layers.length,
       roundTripExact: JSON.stringify(before) === JSON.stringify(after),

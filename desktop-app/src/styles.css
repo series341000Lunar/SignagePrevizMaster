@@ -437,6 +437,25 @@ aside {
   border-color: #c75959;
 }
 
+.authoring-project-drop-hint {
+  display: block;
+  margin-top: 2px;
+  padding: 6px;
+  border: 1px dashed #52606f;
+  color: #8fa2b8;
+  text-align: center;
+}
+
+.authoring-project-control.drag-over {
+  border-color: #65dca1;
+  background: #183128;
+}
+
+.authoring-project-control.drag-over .authoring-project-drop-hint {
+  border-color: #65dca1;
+  color: #65dca1;
+}
+
 .authoring-context {
   margin-bottom: 10px;
 }

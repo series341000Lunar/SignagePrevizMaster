@@ -34,6 +34,17 @@ function resolveAssetPath(projectRoot, reference) {
   return resolved;
 }
 
+function projectDirectoryFromManifestPath(manifestPath) {
+  if (typeof manifestPath !== 'string' || !manifestPath.trim()) {
+    fail('PROJECT_MANIFEST_PATH_INVALID', 'A project.json file path is required.');
+  }
+  const resolved = path.resolve(manifestPath);
+  if (path.basename(resolved).toLowerCase() !== 'project.json') {
+    fail('PROJECT_MANIFEST_PATH_INVALID', `Select the exact project.json file: ${manifestPath}`);
+  }
+  return path.dirname(resolved);
+}
+
 function bufferOf(value) {
   if (Buffer.isBuffer(value)) return value;
   if (value instanceof Uint8Array) return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
@@ -182,6 +193,7 @@ async function loadProjectFromDirectory(projectDirectory, { validateManifest } =
 module.exports = {
   ProjectStorageError,
   loadProjectFromDirectory,
+  projectDirectoryFromManifestPath,
   saveProjectToDirectory,
   validateReference
 };

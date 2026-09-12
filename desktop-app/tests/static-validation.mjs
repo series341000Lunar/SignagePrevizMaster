@@ -30,6 +30,7 @@ const uxpRoot = path.join(projectRoot, 'photoshop-uxp', 'luux-live-link');
 const uxpManifest = JSON.parse(await readFile(path.join(uxpRoot, 'manifest.json'), 'utf8'));
 const uxpConfigSource = await readFile(path.join(uxpRoot, 'config.js'), 'utf8');
 const uxpHtmlSource = await readFile(path.join(uxpRoot, 'index.html'), 'utf8');
+const uxpStylesSource = await readFile(path.join(uxpRoot, 'styles.css'), 'utf8');
 const uxpSource = await readFile(path.join(uxpRoot, 'index.js'), 'utf8');
 const captureSource = uxpSource.slice(
   uxpSource.indexOf('async function captureComposite()'),
@@ -86,12 +87,23 @@ assert(/\.project\.json\.tmp-/.test(projectStorageSource) &&
 assert(/contextBridge\.exposeInMainWorld\('luuxProject'/.test(projectPreloadSource) &&
   !/readAnyPath|writeAnyPath|node:fs/.test(projectPreloadSource),
   'Renderer must receive only project-specific IPC operations, never generic filesystem access.');
+assert(/webUtils\.getPathForFile/.test(projectPreloadSource) && /openDroppedManifest/.test(projectPreloadSource) &&
+  /open-dropped-manifest/.test(mainSource),
+  'Project drag/drop must resolve a dropped project.json through the narrow preload boundary.');
+assert(/properties:\s*\['openFile'\]/.test(mainSource) && /extensions:\s*\['json'\]/.test(mainSource) &&
+  /projectDirectoryFromManifestPath/.test(projectStorageSource),
+  'Open Project must select and validate the exact project.json file.');
 assert(/preload:\s*path\.join\(__dirname, 'project-preload\.cjs'\)/.test(mainSource),
   'The secure BrowserWindow must install the project-specific preload bridge.');
 assert(/window\.runBlock8DProjectSmoke/.test(rendererSource) && /block8d\.technicalPass === true/.test(mainSource),
   'Block 8D runtime smoke must be part of integrated Electron acceptance.');
 assert(/id="authoring-project-save-as"/.test(htmlSource) && /id="authoring-project-save"/.test(htmlSource) &&
   /id="authoring-project-open"/.test(htmlSource), 'Block 8D must expose minimal Save As, Save, and Open controls.');
+assert(/DROP project\.json HERE TO OPEN/.test(htmlSource) && /addEventListener\('drop'/.test(rendererSource),
+  'Block 8D must expose project.json drag/drop loading.');
+assert(/class="panel-scroll"/.test(uxpHtmlSource) && /overflow-y:\s*scroll/.test(uxpStylesSource) &&
+  /height:\s*100vh/.test(uxpStylesSource),
+  'The UXP panel must provide an explicit full-height vertical scroll container.');
 assert(/PROJECTION_FRAME_NORMALIZED_TOP_LEFT/.test(screenImageAuthoringSource) &&
   /class ScreenImageAuthoringSession/.test(screenImageAuthoringSource),
   'Block 8A must store one authoring layer in projection-frame normalized coordinates.');

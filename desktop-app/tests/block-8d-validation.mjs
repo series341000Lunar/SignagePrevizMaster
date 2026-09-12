@@ -17,7 +17,11 @@ import {
 import { ScreenImageLayerStack } from '../src/screen-image-authoring.js';
 
 const require = createRequire(import.meta.url);
-const { loadProjectFromDirectory, saveProjectToDirectory } = require('../src/project-storage.cjs');
+const {
+  loadProjectFromDirectory,
+  projectDirectoryFromManifestPath,
+  saveProjectToDirectory
+} = require('../src/project-storage.cjs');
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const rendererSource = await readFile(path.join(appRoot, 'src', 'renderer.js'), 'utf8');
 const mainSource = await readFile(path.join(appRoot, 'src', 'main.cjs'), 'utf8');
@@ -131,6 +135,11 @@ const projectDirectory = path.join(tempRoot, 'MyProject');
 try {
   const saved = await saveProjectToDirectory(projectDirectory, payload, { validateManifest: validateProjectManifest });
   assert.equal(saved.assetCount, 5);
+  assert.equal(projectDirectoryFromManifestPath(path.join(projectDirectory, 'project.json')), path.resolve(projectDirectory));
+  assert.throws(
+    () => projectDirectoryFromManifestPath(path.join(projectDirectory, 'other.json')),
+    (error) => error.code === 'PROJECT_MANIFEST_PATH_INVALID'
+  );
   const onDiskManifestBeforeFailure = await readFile(path.join(projectDirectory, 'project.json'), 'utf8');
   for (const asset of payload.assets) {
     const projectBytes = await readFile(path.join(projectDirectory, ...asset.assetReference.split('/')));
@@ -255,6 +264,12 @@ assert.match(mainSource, /preload:\s*path\.join\(__dirname, 'project-preload\.cj
 assert.match(preloadSource, /luux-project:save-as/);
 assert.match(preloadSource, /luux-project:save/);
 assert.match(preloadSource, /luux-project:open/);
+assert.match(preloadSource, /openDroppedManifest/);
+assert.match(preloadSource, /webUtils\.getPathForFile/);
+assert.match(mainSource, /properties:\s*\['openFile'\]/);
+assert.match(mainSource, /extensions:\s*\['json'\]/);
+assert.match(rendererSource, /addEventListener\('drop'/);
+assert.match(rendererSource, /file\.name\.toLowerCase\(\) === 'project\.json'/);
 assert.doesNotMatch(preloadSource, /readAnyPath|writeAnyPath|require\('node:fs/);
 assert.match(htmlSource, /id="authoring-project-save-as"/);
 assert.match(htmlSource, /id="authoring-project-save"/);

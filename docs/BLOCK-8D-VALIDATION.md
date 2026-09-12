@@ -6,12 +6,15 @@ Date: 2026-09-12
 
 - Implementation: `IMPLEMENTED`
 - Automated technical validation: `PASS`
-- User Save / Restart / Open / Photoshop validation: `PENDING`
-- Block 8D gate: `OPEN`
+- User core Save / Restart / Open / Bake validation: `PASS — 2026-09-12`
+- Loading UX enhancement validation: `PASS — 2026-09-12`
+- Photoshop UXP scroll enhancement validation: `PASS — 2026-09-12`
+- Block 8D gate: `CLOSED`
 
 Automated persistence and Electron runtime evidence do not replace the final
-user-operated GUI and Photoshop round trip. Block 8D must not be marked
-`CLOSED` before that validation passes.
+user-operated GUI and Photoshop round trip. The user explicitly confirmed the
+complete Block 8D flow, exact `project.json` loading interactions, and the
+reloaded Photoshop UXP panel scroll behavior on 2026-09-12.
 
 ## Implemented contract
 
@@ -38,9 +41,13 @@ user-operated GUI and Photoshop round trip. Block 8D must not be marked
 - Loaded authoring layers retain their IDs but start `NEEDS BAKE` and
   `PHOTOSHOP UNSYNCED`. The next generated layer ID resumes above all loaded
   sequence numbers.
-- Save, Save As, and Open use a narrow preload/IPC project API. Renderer Node
+- Save, Save As, and Open use a narrow preload/IPC project API. Open selects
+  the exact `project.json` file and the Project panel also accepts a dropped
+  `project.json`. Renderer Node
   access is not enabled; `nodeIntegration: false`, `contextIsolation: true`,
   `sandbox: true`, and `webSecurity: true` remain intact.
+- The Photoshop UXP panel uses an explicit full-height vertical scroll
+  container so registered targets and lower diagnostics remain reachable.
 
 ## Persisted
 
@@ -98,29 +105,40 @@ The Electron report at `desktop-app/.runtime/dev-runtime.json` records:
 The Live Link runtime report also passed, proving that Block 8D did not break
 the existing link smoke architecture. It is not a real Photoshop confirmation.
 
+## User validation evidence — 2026-09-12
+
+- The saved folder project under `ProjectsSave` reopened successfully.
+- FRONT75 and BACK sources and independent stacks restored successfully.
+- Outside Signage opacity returned to 50%.
+- Layout Camera Interlock and `BAKE CURRENT` passed.
+- The previous Photoshop target was not restored. After app restart and target
+  re-registration, an English-filename source completed `SEND DIRECT`.
+- Existing Photoshop canvas layers from Block 8C remained present when the new
+  image was registered and sent, confirming non-destructive ownership behavior.
+- Exact `project.json` file selection and Project-panel `project.json`
+  drag/drop both passed.
+- After reloading the Photoshop UXP plugin, the full-height vertical scrollbar
+  and access to lower controls and diagnostics passed.
+- Correction: project-loaded layers whose original filenames contain Korean
+  characters did not complete `SEND DIRECT`. Their Project Load succeeded; the
+  successful Photoshop send used a separately added English-filename source.
+
 ## Preserved known issues
 
-- A Japanese or other non-ASCII source filename can open in Previz but fail
+- A Korean, Japanese, or other non-ASCII source filename can open in Previz and
+  restore from a Project but fail
   `SEND DIRECT`. The required ASCII filename policy remains
   `KNOWN ISSUE / USER ACCEPTED / NON-BLOCKING`. Generated ASCII project asset
   paths do not claim to fix Photoshop filename compatibility.
 - The accepted BACK ordinary-preview occlusion discrepancy remains
   `KNOWN ISSUE / USER ACCEPTED / NON-BLOCKING`.
 
-## Required user validation
+## User validation completion
 
-1. Create three FRONT75 layers and two BACK layers.
-2. Give every layer different Position, Scale, Rotation, Opacity, Blend,
-   Visibility, and Order values.
-3. Run `SAVE PROJECT AS...`.
-4. Exit and restart the app.
-5. Run `OPEN PROJECT...` and verify both family stacks, IDs, sources, transforms,
-   opacity, blend, visibility, and order.
-6. Confirm Outside Signage opacity returned to its session default.
-7. Enter Layout Edit and confirm camera interlock.
-8. Run `BAKE CURRENT` and confirm the existing Bake path works.
-9. Confirm the prior Photoshop target did not auto-restore.
-10. Register a target in the current Photoshop session, run `SEND DIRECT`, and
-    confirm a new Photoshop layer ownership mapping is created.
+The required Save, restart, exact-file Open, `project.json` drag/drop, Bake,
+new-session Photoshop Send, and UXP panel scrolling checks all passed in the
+user-operated application and Photoshop workflow.
 
-USER VALIDATION: **PENDING**
+USER VALIDATION: **PASS — 2026-09-12**
+
+BLOCK 8D GATE: **CLOSED**

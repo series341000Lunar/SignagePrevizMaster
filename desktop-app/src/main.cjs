@@ -7,7 +7,11 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const liveLinkConfig = require('./live-link-config.json');
 const { createLiveLinkBroker } = require('./live-link-broker.cjs');
-const { loadProjectFromDirectory, saveProjectToDirectory } = require('./project-storage.cjs');
+const {
+  loadProjectFromDirectory,
+  projectDirectoryFromManifestPath,
+  saveProjectToDirectory
+} = require('./project-storage.cjs');
 const { WebSocket } = require('ws');
 
 const smokeTest = process.argv.includes('--smoke-test');
@@ -77,6 +81,22 @@ function projectState() {
   };
 }
 
+async function prepareProjectOpen(manifestPath) {
+  const projectDirectory = projectDirectoryFromManifestPath(manifestPath);
+  const { validateProjectManifest } = await projectPersistence();
+  const loaded = await loadProjectFromDirectory(projectDirectory, { validateManifest: validateProjectManifest });
+  const token = crypto.randomUUID();
+  pendingProjectOpens.set(token, loaded.projectDirectory);
+  return {
+    ok: true,
+    canceled: false,
+    token,
+    projectName: loaded.projectName,
+    manifest: loaded.manifest,
+    assets: loaded.assets
+  };
+}
+
 function configureProjectIpc() {
   ipcMain.handle('luux-project:get-state', () => ({ ok: true, ...projectState() }));
   ipcMain.handle('luux-project:save-as', async (event, payload) => {
@@ -114,21 +134,19 @@ function configureProjectIpc() {
       const selection = await dialog.showOpenDialog(owner, {
         title: 'Open LUUX Signage Previz Project',
         buttonLabel: 'Open Project',
-        properties: ['openDirectory']
+        defaultPath: currentProjectDirectory ? path.join(currentProjectDirectory, 'project.json') : undefined,
+        filters: [{ name: 'LUUX Signage Previz Project', extensions: ['json'] }],
+        properties: ['openFile']
       });
       if (selection.canceled || !selection.filePaths[0]) return { ok: true, canceled: true, ...projectState() };
-      const { validateProjectManifest } = await projectPersistence();
-      const loaded = await loadProjectFromDirectory(selection.filePaths[0], { validateManifest: validateProjectManifest });
-      const token = crypto.randomUUID();
-      pendingProjectOpens.set(token, loaded.projectDirectory);
-      return {
-        ok: true,
-        canceled: false,
-        token,
-        projectName: loaded.projectName,
-        manifest: loaded.manifest,
-        assets: loaded.assets
-      };
+      return await prepareProjectOpen(selection.filePaths[0]);
+    } catch (error) {
+      return projectError(error);
+    }
+  });
+  ipcMain.handle('luux-project:open-dropped-manifest', async (_event, manifestPath) => {
+    try {
+      return await prepareProjectOpen(manifestPath);
     } catch (error) {
       return projectError(error);
     }
