@@ -208,7 +208,7 @@ try {
   assertCurrentUnchanged();
 
   const unsupported = structuredClone(payload.manifest);
-  unsupported.schemaVersion = 2;
+  unsupported.schemaVersion = PROJECT_SCHEMA_VERSION + 1;
   await assert.rejects(
     prepareProjectLoad(unsupported, payload.assets, { decodeAsset }),
     (error) => error.code === 'PROJECT_SCHEMA_UNSUPPORTED'

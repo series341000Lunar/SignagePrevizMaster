@@ -660,6 +660,126 @@ aside {
   width: 100%;
 }
 
+.vector-mask-control {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid #3b4756;
+  border-radius: 4px;
+  background: #121720;
+}
+
+.vector-mask-heading,
+.vector-mask-subheading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #dce6f2;
+  font: 700 9px Consolas, monospace;
+}
+
+.vector-mask-heading span,
+.vector-mask-subheading span,
+.vector-mask-control small {
+  color: #89a0b8;
+  font: 8px Consolas, monospace;
+}
+
+.vector-mask-toggles,
+.vector-mask-actions,
+.vector-mask-selection-controls > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.vector-mask-toggles label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #aeb6c3;
+  font: 8px Consolas, monospace;
+}
+
+.vector-mask-edit {
+  width: 100%;
+  border-color: #6ec9e8;
+  color: #bceeff;
+  font-weight: 700;
+}
+
+.vector-mask-edit.active {
+  border-color: #ffb45e;
+  background: #382b1d;
+  color: #ffd18e;
+}
+
+.vector-mask-actions button,
+.vector-mask-selection-controls button {
+  min-width: 0;
+  padding: 6px 3px;
+  font-size: 8px;
+}
+
+.vector-mask-path-list {
+  display: grid;
+  gap: 4px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.vector-mask-path-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 84px;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #343f4d;
+  border-radius: 3px;
+  background: #171c24;
+}
+
+.vector-mask-path-row.selected {
+  border-color: #6ec9e8;
+  background: #1d3440;
+}
+
+.vector-mask-path-row button,
+.vector-mask-path-row select {
+  min-width: 0;
+  padding: 4px;
+  font-size: 8px;
+}
+
+.vector-mask-path-select {
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vector-mask-empty {
+  margin: 2px 0;
+  color: #707a87;
+  font: 8px Consolas, monospace;
+}
+
+.vector-mask-selection-controls {
+  display: grid;
+  gap: 5px;
+  color: #aeb6c3;
+  font: 8px Consolas, monospace;
+}
+
+#vector-mask-message.fail {
+  color: #ff8d8d;
+}
+
+#vector-mask-message.pass {
+  color: #62daa1;
+}
+
 #authoring-metadata-state {
   grid-column: 1 / -1;
 }
@@ -785,6 +905,10 @@ aside {
   pointer-events: auto;
 }
 
+.authoring-overlay.mask-editing {
+  pointer-events: auto;
+}
+
 .authoring-coverage-preview {
   position: absolute;
   inset: 0;
@@ -802,6 +926,109 @@ aside {
   cursor: default;
   touch-action: none;
   user-select: none;
+}
+
+.authoring-overlay.mask-editing .authoring-image-layer {
+  pointer-events: none;
+}
+
+.vector-mask-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: none;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  touch-action: none;
+}
+
+.authoring-overlay.mask-editing .vector-mask-overlay {
+  display: block;
+  pointer-events: auto;
+}
+
+.vector-mask-path {
+  fill: rgba(110, 201, 232, 0.08);
+  stroke: #6ec9e8;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.vector-mask-path.open {
+  fill: none;
+  stroke-dasharray: 5 4;
+}
+
+.vector-mask-path.subtract {
+  stroke: #ff8d8d;
+}
+
+.vector-mask-path.selected {
+  stroke-width: 2.5;
+}
+
+.vector-mask-segment-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  vector-effect: non-scaling-stroke;
+  cursor: copy;
+  pointer-events: stroke;
+}
+
+.vector-mask-segment-hit.selected {
+  stroke: rgba(255, 180, 94, 0.28);
+}
+
+.vector-mask-anchor,
+.vector-mask-handle {
+  vector-effect: non-scaling-stroke;
+  pointer-events: all;
+}
+
+.vector-mask-anchor {
+  fill: #171c24;
+  stroke: #d7f6ff;
+  stroke-width: 2;
+  cursor: move;
+}
+
+.vector-mask-anchor.selected {
+  fill: #ffb45e;
+  stroke: #fff1d8;
+}
+
+.vector-mask-anchor.close-target {
+  fill: #62daa1;
+  stroke: #effff7;
+  stroke-width: 3;
+  cursor: crosshair;
+}
+
+.vector-mask-handle-line {
+  stroke: #ffcf8f;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.vector-mask-handle {
+  fill: #ffcf8f;
+  stroke: #171c24;
+  stroke-width: 1.5;
+  cursor: move;
+}
+
+.vector-mask-marquee {
+  fill: rgba(110, 201, 232, 0.12);
+  stroke: #6ec9e8;
+  stroke-width: 1;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .authoring-overlay.editing .authoring-image-layer {

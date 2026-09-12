@@ -4,8 +4,15 @@ import {
   AUTHORING_COORDINATE_SPACE,
   normalizeAuthoringTransform
 } from './screen-image-authoring.js';
+import {
+  VECTOR_MASK_OPERATIONS,
+  VECTOR_MASK_SEGMENT_TYPES,
+  cloneVectorMask,
+  createEmptyVectorMask
+} from './vector-mask-model.js';
 
-export const PROJECT_SCHEMA_VERSION = 1;
+export const PROJECT_SCHEMA_VERSION = 2;
+export const PROJECT_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2]);
 export const PROJECT_TYPE = 'LUUX_SIGNAGE_PREVIZ';
 export const PROJECT_MAPPING_MODE = 'SCREEN_PROJECTED';
 
@@ -30,9 +37,9 @@ function object(value, code, label) {
   return value;
 }
 
-function exactKeys(value, allowed, code, label) {
+function exactKeys(value, allowed, code, label, schemaVersion = PROJECT_SCHEMA_VERSION) {
   for (const key of Object.keys(value)) {
-    if (!allowed.includes(key)) fail(code, `${label}.${key} is not part of schemaVersion 1.`);
+    if (!allowed.includes(key)) fail(code, `${label}.${key} is not part of schemaVersion ${schemaVersion}.`);
   }
 }
 
@@ -111,14 +118,64 @@ function validateProfileReference(reference, familyId, profiles) {
   }
 }
 
+function validateVectorMask(mask, label, pathIds, pointIds) {
+  object(mask, 'PROJECT_VECTOR_MASK_INVALID', label);
+  exactKeys(mask, ['enabled', 'invert', 'paths'], 'PROJECT_VECTOR_MASK_INVALID', label);
+  if (typeof mask.enabled !== 'boolean') fail('PROJECT_VECTOR_MASK_INVALID', `${label}.enabled must be boolean.`);
+  if (typeof mask.invert !== 'boolean') fail('PROJECT_VECTOR_MASK_INVALID', `${label}.invert must be boolean.`);
+  if (!Array.isArray(mask.paths)) fail('PROJECT_VECTOR_MASK_INVALID', `${label}.paths must be an array.`);
+  mask.paths.forEach((pathValue, pathIndex) => {
+    const pathLabel = `${label}.paths[${pathIndex}]`;
+    object(pathValue, 'PROJECT_VECTOR_MASK_INVALID', pathLabel);
+    exactKeys(pathValue, ['pathId', 'enabled', 'operation', 'closed', 'points'], 'PROJECT_VECTOR_MASK_INVALID', pathLabel);
+    nonEmptyString(pathValue.pathId, 'PROJECT_VECTOR_MASK_ID_INVALID', `${pathLabel}.pathId`);
+    if (pathIds.has(pathValue.pathId)) fail('PROJECT_VECTOR_MASK_ID_DUPLICATE', `Duplicate pathId: ${pathValue.pathId}`);
+    pathIds.add(pathValue.pathId);
+    if (typeof pathValue.enabled !== 'boolean') fail('PROJECT_VECTOR_MASK_INVALID', `${pathLabel}.enabled must be boolean.`);
+    if (!VECTOR_MASK_OPERATIONS.includes(pathValue.operation)) {
+      fail('PROJECT_VECTOR_MASK_OPERATION_INVALID', `${pathLabel}.operation must be ADD or SUBTRACT.`);
+    }
+    if (typeof pathValue.closed !== 'boolean') fail('PROJECT_VECTOR_MASK_INVALID', `${pathLabel}.closed must be boolean.`);
+    if (!Array.isArray(pathValue.points) || pathValue.points.length < 1) {
+      fail('PROJECT_VECTOR_MASK_POINTS_INVALID', `${pathLabel}.points must contain at least one point.`);
+    }
+    if (pathValue.closed && pathValue.points.length < 3) {
+      fail('PROJECT_VECTOR_MASK_POINTS_INVALID', `${pathLabel} requires at least three points when closed.`);
+    }
+    pathValue.points.forEach((pointValue, pointIndex) => {
+      const pointLabel = `${pathLabel}.points[${pointIndex}]`;
+      object(pointValue, 'PROJECT_VECTOR_MASK_INVALID', pointLabel);
+      exactKeys(pointValue, [
+        'pointId', 'x', 'y', 'inHandle', 'outHandle', 'segmentTypeToNext'
+      ], 'PROJECT_VECTOR_MASK_INVALID', pointLabel);
+      nonEmptyString(pointValue.pointId, 'PROJECT_VECTOR_MASK_ID_INVALID', `${pointLabel}.pointId`);
+      if (pointIds.has(pointValue.pointId)) fail('PROJECT_VECTOR_MASK_ID_DUPLICATE', `Duplicate pointId: ${pointValue.pointId}`);
+      pointIds.add(pointValue.pointId);
+      finiteNumber(pointValue.x, 'PROJECT_VECTOR_MASK_COORDINATE_INVALID', `${pointLabel}.x`);
+      finiteNumber(pointValue.y, 'PROJECT_VECTOR_MASK_COORDINATE_INVALID', `${pointLabel}.y`);
+      for (const handleName of ['inHandle', 'outHandle']) {
+        const handle = object(pointValue[handleName], 'PROJECT_VECTOR_MASK_COORDINATE_INVALID', `${pointLabel}.${handleName}`);
+        exactKeys(handle, ['x', 'y'], 'PROJECT_VECTOR_MASK_COORDINATE_INVALID', `${pointLabel}.${handleName}`);
+        finiteNumber(handle.x, 'PROJECT_VECTOR_MASK_COORDINATE_INVALID', `${pointLabel}.${handleName}.x`);
+        finiteNumber(handle.y, 'PROJECT_VECTOR_MASK_COORDINATE_INVALID', `${pointLabel}.${handleName}.y`);
+      }
+      if (!VECTOR_MASK_SEGMENT_TYPES.includes(pointValue.segmentTypeToNext)) {
+        fail('PROJECT_VECTOR_MASK_SEGMENT_INVALID', `${pointLabel}.segmentTypeToNext is unsupported.`);
+      }
+    });
+  });
+}
+
 export function validateProjectManifest(manifest, { profiles = PROJECTION_BAKE_PROFILES } = {}) {
   object(manifest, 'PROJECT_MANIFEST_INVALID', 'project');
   if (!Number.isSafeInteger(manifest.schemaVersion)) fail('PROJECT_SCHEMA_INVALID', 'schemaVersion must be an integer.');
   if (manifest.schemaVersion > PROJECT_SCHEMA_VERSION) {
     fail('PROJECT_SCHEMA_UNSUPPORTED', `schemaVersion ${manifest.schemaVersion} is newer than supported version ${PROJECT_SCHEMA_VERSION}.`);
   }
-  if (manifest.schemaVersion !== PROJECT_SCHEMA_VERSION) fail('PROJECT_SCHEMA_UNSUPPORTED', `schemaVersion ${manifest.schemaVersion} is unsupported.`);
-  exactKeys(manifest, ['schemaVersion', 'projectType', 'coordinateSpace', 'families'], 'PROJECT_MANIFEST_INVALID', 'project');
+  if (!PROJECT_SUPPORTED_SCHEMA_VERSIONS.includes(manifest.schemaVersion)) {
+    fail('PROJECT_SCHEMA_UNSUPPORTED', `schemaVersion ${manifest.schemaVersion} is unsupported.`);
+  }
+  exactKeys(manifest, ['schemaVersion', 'projectType', 'coordinateSpace', 'families'], 'PROJECT_MANIFEST_INVALID', 'project', manifest.schemaVersion);
   if (manifest.projectType !== PROJECT_TYPE) fail('PROJECT_MANIFEST_INVALID', `projectType must be ${PROJECT_TYPE}.`);
   if (manifest.coordinateSpace !== AUTHORING_COORDINATE_SPACE) {
     fail('PROJECT_COORDINATE_INVALID', `coordinateSpace must be ${AUTHORING_COORDINATE_SPACE}.`);
@@ -126,10 +183,12 @@ export function validateProjectManifest(manifest, { profiles = PROJECTION_BAKE_P
   object(manifest.families, 'PROJECT_MANIFEST_INVALID', 'families');
   const knownFamilies = Object.keys(profiles);
   const layerIds = new Set();
+  const pathIds = new Set();
+  const pointIds = new Set();
   for (const familyId of Object.keys(manifest.families)) {
     if (!knownFamilies.includes(familyId)) fail('PROJECT_FAMILY_UNKNOWN', `Unknown familyId: ${familyId}`);
     const family = object(manifest.families[familyId], 'PROJECT_MANIFEST_INVALID', `families.${familyId}`);
-    exactKeys(family, ['familyId', 'projectionProfile', 'layers'], 'PROJECT_MANIFEST_INVALID', `families.${familyId}`);
+    exactKeys(family, ['familyId', 'projectionProfile', 'layers'], 'PROJECT_MANIFEST_INVALID', `families.${familyId}`, manifest.schemaVersion);
     if (family.familyId !== familyId) fail('PROJECT_FAMILY_MISMATCH', `Family ownership mismatch for ${familyId}.`);
     validateProfileReference(family.projectionProfile, familyId, profiles);
     if (!Array.isArray(family.layers)) fail('PROJECT_MANIFEST_INVALID', `${familyId}.layers must be an array.`);
@@ -137,10 +196,12 @@ export function validateProjectManifest(manifest, { profiles = PROJECTION_BAKE_P
     family.layers.forEach((layer, index) => {
       const label = `families.${familyId}.layers[${index}]`;
       object(layer, 'PROJECT_MANIFEST_INVALID', label);
-      exactKeys(layer, [
+      const layerKeys = [
         'familyId', 'layerId', 'order', 'visible', 'source', 'mappingMode',
         'transform', 'opacity', 'blendMode'
-      ], 'PROJECT_MANIFEST_INVALID', label);
+      ];
+      if (manifest.schemaVersion >= 2) layerKeys.push('vectorMask');
+      exactKeys(layer, layerKeys, 'PROJECT_MANIFEST_INVALID', label, manifest.schemaVersion);
       if (layer.familyId !== familyId) fail('PROJECT_FAMILY_MISMATCH', `${label}.familyId does not match its owning family.`);
       nonEmptyString(layer.layerId, 'PROJECT_LAYER_ID_INVALID', `${label}.layerId`);
       if (layerIds.has(layer.layerId)) fail('PROJECT_LAYER_ID_DUPLICATE', `Duplicate layerId: ${layer.layerId}`);
@@ -167,6 +228,7 @@ export function validateProjectManifest(manifest, { profiles = PROJECTION_BAKE_P
       finiteNumber(layer.opacity, 'PROJECT_OPACITY_INVALID', `${label}.opacity`);
       if (layer.opacity < 0 || layer.opacity > 1) fail('PROJECT_OPACITY_INVALID', `${label}.opacity must be between 0 and 1.`);
       if (!AUTHORING_BLEND_MODES.includes(layer.blendMode)) fail('PROJECT_BLEND_MODE_UNSUPPORTED', `${label}.blendMode is unsupported.`);
+      if (manifest.schemaVersion >= 2) validateVectorMask(layer.vectorMask, `${label}.vectorMask`, pathIds, pointIds);
     });
   }
   return manifest;
@@ -237,7 +299,8 @@ export async function createProjectSavePayload(stack, {
         mappingMode: PROJECT_MAPPING_MODE,
         transform: { ...layer.transform },
         opacity: layer.opacity,
-        blendMode: layer.blendMode
+        blendMode: layer.blendMode,
+        vectorMask: cloneVectorMask(layer.vectorMask || createEmptyVectorMask())
       });
     }
     manifest.families[familyId] = family;
@@ -340,6 +403,9 @@ export async function prepareProjectLoad(manifest, assetRecords, {
           transform: normalizeAuthoringTransform(layer.transform),
           opacity: layer.opacity,
           blendMode: layer.blendMode,
+          vectorMask: manifest.schemaVersion >= 2
+            ? cloneVectorMask(layer.vectorMask)
+            : createEmptyVectorMask(),
           pixelRevision: 1,
           bakedPixelRevision: null,
           metadataRevision: 1,

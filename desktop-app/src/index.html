@@ -97,6 +97,7 @@
           <canvas id="authoring-coverage-mask" hidden aria-hidden="true"></canvas>
           <canvas id="authoring-layer-composite" hidden aria-hidden="true"></canvas>
           <canvas id="authoring-coverage-preview" class="authoring-coverage-preview" aria-hidden="true"></canvas>
+          <svg id="vector-mask-overlay" class="vector-mask-overlay" aria-label="Vector mask editor overlay"></svg>
           <div id="authoring-image-layer" class="authoring-image-layer" aria-label="Authoring image layer">
             <img id="authoring-image-preview" alt="Imported authoring source" draggable="false">
             <button id="authoring-scale-handle" class="authoring-handle scale" type="button" aria-label="Uniform scale handle"></button>
@@ -257,6 +258,37 @@
               <option value="LINEAR_DODGE">LINEAR DODGE (ADD)</option>
             </select>
             <small id="authoring-metadata-state">METADATA DIRTY</small>
+          </section>
+          <section class="vector-mask-control" aria-labelledby="vector-mask-title">
+            <div class="vector-mask-heading">
+              <strong id="vector-mask-title">VECTOR MASK</strong>
+              <span id="vector-mask-coordinate">SOURCE UV</span>
+            </div>
+            <div class="vector-mask-toggles">
+              <label><input id="vector-mask-enabled" type="checkbox"> MASK ENABLE</label>
+              <label><input id="vector-mask-invert" type="checkbox"> INVERT</label>
+            </div>
+            <button id="vector-mask-edit" class="vector-mask-edit" type="button" aria-pressed="false" disabled>EDIT MASK</button>
+            <div class="vector-mask-subheading"><strong>PATHS</strong><span id="vector-mask-path-count">0</span></div>
+            <div id="vector-mask-path-list" class="vector-mask-path-list" role="listbox" aria-label="Vector mask paths">
+              <p class="vector-mask-empty">No paths</p>
+            </div>
+            <div class="vector-mask-actions">
+              <button id="vector-mask-add-path" type="button" disabled>+ NEW PATH</button>
+              <button id="vector-mask-delete-path" type="button" disabled>DELETE PATH</button>
+              <button id="vector-mask-close-path" type="button" disabled>CLOSE PATH</button>
+              <button id="vector-mask-clear" type="button" disabled>CLEAR MASK</button>
+            </div>
+            <div class="vector-mask-selection-controls">
+              <span>Selected Segment</span>
+              <div>
+                <button id="vector-mask-segment-linear" type="button" disabled>LINEAR</button>
+                <button id="vector-mask-segment-bezier" type="button" disabled>BEZIER</button>
+              </div>
+              <span>Selected Point</span>
+              <button id="vector-mask-delete-point" type="button" disabled>DELETE POINT</button>
+            </div>
+            <small id="vector-mask-message" role="status">Open path: click to add · first anchor closes. Closed path: double-click empty source space or use + NEW PATH. Drag empty space to select.</small>
           </section>
           <section class="outside-signage-control" aria-labelledby="outside-signage-title">
             <div class="outside-signage-heading">

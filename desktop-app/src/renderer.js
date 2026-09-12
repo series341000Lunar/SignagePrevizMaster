@@ -55,8 +55,18 @@ import {
   isSupportedImageFile,
   LayoutCameraInterlock,
   ScreenImageLayerStack,
+  screenPointToSourceUv,
+  sourceUvToScreenPoint,
   transformToViewportRect
 } from './screen-image-authoring.js';
+import {
+  VECTOR_MASK_COORDINATE_SPACE,
+  evaluateVectorMaskSegment,
+  rasterizeVectorMask,
+  vectorMaskContributionMode,
+  vectorMaskPath,
+  vectorMaskPoint
+} from './vector-mask-model.js';
 import {
   AuthoringViewSettings,
   DEFAULT_OUTSIDE_SIGNAGE_OPACITY,
@@ -154,11 +164,29 @@ const authoringMessage = document.querySelector('#authoring-message');
 const authoringOverlay = document.querySelector('#authoring-overlay');
 const authoringCoverageMask = document.querySelector('#authoring-coverage-mask');
 const authoringLayerComposite = document.querySelector('#authoring-layer-composite');
+const authoringVectorMaskedSource = document.createElement('canvas');
+const authoringVectorMaskScratch = document.createElement('canvas');
 const authoringCoveragePreview = document.querySelector('#authoring-coverage-preview');
 const authoringImageLayer = document.querySelector('#authoring-image-layer');
 const authoringImagePreview = document.querySelector('#authoring-image-preview');
 const authoringScaleHandle = document.querySelector('#authoring-scale-handle');
 const authoringRotateHandle = document.querySelector('#authoring-rotate-handle');
+const vectorMaskOverlay = document.querySelector('#vector-mask-overlay');
+const vectorMaskControl = document.querySelector('.vector-mask-control');
+const vectorMaskEnabled = document.querySelector('#vector-mask-enabled');
+const vectorMaskInvert = document.querySelector('#vector-mask-invert');
+const vectorMaskEdit = document.querySelector('#vector-mask-edit');
+const vectorMaskCoordinate = document.querySelector('#vector-mask-coordinate');
+const vectorMaskPathCount = document.querySelector('#vector-mask-path-count');
+const vectorMaskPathList = document.querySelector('#vector-mask-path-list');
+const vectorMaskAddPath = document.querySelector('#vector-mask-add-path');
+const vectorMaskDeletePath = document.querySelector('#vector-mask-delete-path');
+const vectorMaskClosePath = document.querySelector('#vector-mask-close-path');
+const vectorMaskClear = document.querySelector('#vector-mask-clear');
+const vectorMaskSegmentLinear = document.querySelector('#vector-mask-segment-linear');
+const vectorMaskSegmentBezier = document.querySelector('#vector-mask-segment-bezier');
+const vectorMaskDeletePoint = document.querySelector('#vector-mask-delete-point');
+const vectorMaskMessage = document.querySelector('#vector-mask-message');
 const outsideSignageOpacity = document.querySelector('#outside-signage-opacity');
 const outsideSignageOpacityValue = document.querySelector('#outside-signage-opacity-value');
 const outsideSignagePresetButtons = [...document.querySelectorAll('[data-outside-signage-preset]')];
@@ -332,6 +360,7 @@ const state = {
   authoring: {
     sourceRuntime: null,
     layoutCameraSnapshot: null,
+    maskCameraSnapshot: null,
     previousAnamorphicCameraMode: null,
     importError: '',
     userValidation: 'PASS_CLOSED',
@@ -346,6 +375,13 @@ const state = {
     },
     railExpanded: false,
     reorderDrag: null,
+    maskEditor: {
+      selectedPathId: null,
+      selectedPointId: null,
+      selectedSegmentStartPointId: null,
+      selectedPointRefs: [],
+      drag: null
+    },
     coverageCache: {
       key: null,
       canvas: authoringCoverageMask,
@@ -1010,9 +1046,9 @@ function syncAnamorphicControls() {
   const familyContext = state.activeView === 'site-3d' && state.site.world === 'world3d' &&
     state.site.mappingMode === 'anamorphic';
   siteAnamorphicFamilyControl.hidden = !familyContext;
-  siteAnamorphicFamilySelect.disabled = !familyContext || authoringCameraInterlock.layoutEditing || authoringPointerSession.active;
+  siteAnamorphicFamilySelect.disabled = !familyContext || authoringCameraInterlock.forcedLocked || authoringPointerSession.active || Boolean(state.authoring.maskEditor.drag);
   anamorphicCameraResetButton.hidden = !isAnamorphicCalibrationContext();
-  anamorphicCameraResetButton.disabled = !isAnamorphicCalibrationContext() || !state.site.surfaceSetAvailable || authoringCameraInterlock.layoutEditing;
+  anamorphicCameraResetButton.disabled = !isAnamorphicCalibrationContext() || !state.site.surfaceSetAvailable || authoringCameraInterlock.forcedLocked;
   anamorphicFovControl.hidden = !isAnamorphicCalibrationFramingActive();
   anamorphicFovInput.disabled = !isAnamorphicCalibrationFramingActive() || !state.site.surfaceSetAvailable || authoringCameraInterlock.cameraLocked;
   const calibrationLabel = currentAnamorphicFamily()?.label ?? 'ANAMORPHIC';
@@ -1185,10 +1221,34 @@ function drawAuthoringCoveragePreview(frame) {
     layerContext.globalCompositeOperation = 'source-in';
     layerContext.imageSmoothingEnabled = true;
     layerContext.imageSmoothingQuality = 'high';
+    let previewSource = layer.runtime.image;
+    if (vectorMaskContributionMode(layer.vectorMask) !== 'PASS_THROUGH') {
+      const sourceWidth = Math.max(1, Math.round(rect.width * pixelRatio));
+      const sourceHeight = Math.max(1, Math.round(rect.height * pixelRatio));
+      authoringVectorMaskedSource.width = sourceWidth;
+      authoringVectorMaskedSource.height = sourceHeight;
+      authoringVectorMaskScratch.width = sourceWidth;
+      authoringVectorMaskScratch.height = sourceHeight;
+      const sourceContext = authoringVectorMaskedSource.getContext('2d', { alpha: true });
+      sourceContext.clearRect(0, 0, sourceWidth, sourceHeight);
+      sourceContext.imageSmoothingEnabled = true;
+      sourceContext.imageSmoothingQuality = 'high';
+      sourceContext.drawImage(layer.runtime.image, 0, 0, sourceWidth, sourceHeight);
+      rasterizeVectorMask(
+        authoringVectorMaskScratch.getContext('2d', { alpha: true }),
+        layer.vectorMask,
+        sourceWidth,
+        sourceHeight
+      );
+      sourceContext.globalCompositeOperation = 'destination-in';
+      sourceContext.drawImage(authoringVectorMaskScratch, 0, 0);
+      sourceContext.globalCompositeOperation = 'source-over';
+      previewSource = authoringVectorMaskedSource;
+    }
     layerContext.translate(rect.centerX * pixelRatio, rect.centerY * pixelRatio);
     layerContext.rotate(rect.rotationDegrees * Math.PI / 180);
     layerContext.drawImage(
-      layer.runtime.image,
+      previewSource,
       -rect.width * pixelRatio * 0.5,
       -rect.height * pixelRatio * 0.5,
       rect.width * pixelRatio,
@@ -1203,6 +1263,152 @@ function drawAuthoringCoveragePreview(frame) {
   context.globalAlpha = 1;
 }
 
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+
+function vectorMaskEditorPath() {
+  return vectorMaskPath(authoringSession.selectedLayer?.vectorMask, state.authoring.maskEditor.selectedPathId);
+}
+
+function vectorMaskEditorPoint() {
+  return vectorMaskPoint(vectorMaskEditorPath(), state.authoring.maskEditor.selectedPointId);
+}
+
+function vectorMaskPointReferenceKey(pathId, pointId) {
+  return `${pathId}\u0000${pointId}`;
+}
+
+function selectedVectorMaskPointKeys() {
+  return new Set(state.authoring.maskEditor.selectedPointRefs.map((reference) =>
+    vectorMaskPointReferenceKey(reference.pathId, reference.pointId)
+  ));
+}
+
+function setVectorMaskPointSelection(references, primary = null) {
+  const unique = [];
+  const keys = new Set();
+  for (const reference of references || []) {
+    const pathValue = vectorMaskPath(authoringSession.selectedLayer?.vectorMask, reference.pathId);
+    if (!vectorMaskPoint(pathValue, reference.pointId)) continue;
+    const key = vectorMaskPointReferenceKey(reference.pathId, reference.pointId);
+    if (keys.has(key)) continue;
+    keys.add(key);
+    unique.push({ pathId: reference.pathId, pointId: reference.pointId });
+  }
+  state.authoring.maskEditor.selectedPointRefs = unique;
+  const preferred = primary && keys.has(vectorMaskPointReferenceKey(primary.pathId, primary.pointId))
+    ? primary
+    : unique[0] || null;
+  state.authoring.maskEditor.selectedPathId = preferred?.pathId || state.authoring.maskEditor.selectedPathId;
+  state.authoring.maskEditor.selectedPointId = preferred?.pointId || null;
+  state.authoring.maskEditor.selectedSegmentStartPointId = null;
+  return unique;
+}
+
+function createVectorMaskSvgElement(name, attributes = {}) {
+  const element = document.createElementNS(SVG_NAMESPACE, name);
+  for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, String(value));
+  return element;
+}
+
+function sourcePointToMaskOverlay(pointValue, frame, profile) {
+  const normalized = sourceUvToScreenPoint(
+    { u: pointValue.x, v: pointValue.y },
+    authoringSession.selectedLayer.source,
+    profile.workingResolution.aspect,
+    authoringSession.selectedLayer.transform
+  );
+  return { x: normalized.x * frame.width, y: normalized.y * frame.height };
+}
+
+function vectorMaskSegmentSvgPath(pathValue, index, frame, profile) {
+  const start = pathValue.points[index];
+  const end = pathValue.points[(index + 1) % pathValue.points.length];
+  const p0 = sourcePointToMaskOverlay(start, frame, profile);
+  const p3 = sourcePointToMaskOverlay(end, frame, profile);
+  if (start.segmentTypeToNext !== 'CUBIC_BEZIER') return `M ${p0.x} ${p0.y} L ${p3.x} ${p3.y}`;
+  const p1 = sourcePointToMaskOverlay(start.outHandle, frame, profile);
+  const p2 = sourcePointToMaskOverlay(end.inHandle, frame, profile);
+  return `M ${p0.x} ${p0.y} C ${p1.x} ${p1.y} ${p2.x} ${p2.y} ${p3.x} ${p3.y}`;
+}
+
+function drawVectorMaskOverlay(frame, profile) {
+  vectorMaskOverlay.replaceChildren();
+  vectorMaskOverlay.setAttribute('viewBox', `0 0 ${frame.width} ${frame.height}`);
+  vectorMaskOverlay.setAttribute('data-coordinate-space', VECTOR_MASK_COORDINATE_SPACE);
+  const layer = authoringSession.selectedLayer;
+  if (!authoringCameraInterlock.maskEditing || !layer?.visible) return;
+  const selectedPointKeys = selectedVectorMaskPointKeys();
+  for (const pathValue of layer.vectorMask.paths) {
+    const selected = pathValue.pathId === state.authoring.maskEditor.selectedPathId;
+    const closesOnFirstAnchor = selected && !pathValue.closed && pathValue.points.length >= 3 &&
+      state.authoring.maskEditor.selectedPointId === pathValue.points.at(-1)?.pointId;
+    const segmentCount = pathValue.closed ? pathValue.points.length : Math.max(0, pathValue.points.length - 1);
+    const combined = [];
+    for (let index = 0; index < segmentCount; index += 1) {
+      const segmentData = vectorMaskSegmentSvgPath(pathValue, index, frame, profile);
+      combined.push(segmentData);
+      const start = pathValue.points[index];
+      const hit = createVectorMaskSvgElement('path', { d: segmentData });
+      hit.classList.add('vector-mask-segment-hit');
+      hit.classList.toggle('selected', selected && start.pointId === state.authoring.maskEditor.selectedSegmentStartPointId);
+      hit.dataset.pathId = pathValue.pathId;
+      hit.dataset.startPointId = start.pointId;
+      hit.addEventListener('pointerdown', beginVectorMaskSegmentInsert);
+      vectorMaskOverlay.append(hit);
+    }
+    if (combined.length) {
+      const visiblePath = createVectorMaskSvgElement('path', { d: combined.join(' ') });
+      visiblePath.classList.add('vector-mask-path');
+      visiblePath.classList.toggle('open', !pathValue.closed);
+      visiblePath.classList.toggle('subtract', pathValue.operation === 'SUBTRACT');
+      visiblePath.classList.toggle('selected', selected);
+      if (!pathValue.enabled) visiblePath.setAttribute('opacity', '0.35');
+      vectorMaskOverlay.prepend(visiblePath);
+    }
+    for (const [pointIndex, pointValue] of pathValue.points.entries()) {
+      const anchor = sourcePointToMaskOverlay(pointValue, frame, profile);
+      const circle = createVectorMaskSvgElement('circle', { cx: anchor.x, cy: anchor.y, r: selected ? 5 : 4 });
+      circle.classList.add('vector-mask-anchor');
+      circle.classList.toggle('selected', selectedPointKeys.has(vectorMaskPointReferenceKey(pathValue.pathId, pointValue.pointId)));
+      circle.classList.toggle('close-target', closesOnFirstAnchor && pointIndex === 0);
+      circle.dataset.pathId = pathValue.pathId;
+      circle.dataset.pointId = pointValue.pointId;
+      circle.addEventListener('pointerdown', beginVectorMaskPointDrag);
+      vectorMaskOverlay.append(circle);
+    }
+  }
+  const selectedPoint = vectorMaskEditorPoint();
+  if (selectedPoint) {
+    const anchor = sourcePointToMaskOverlay(selectedPoint, frame, profile);
+    for (const handleName of ['inHandle', 'outHandle']) {
+      const handle = sourcePointToMaskOverlay(selectedPoint[handleName], frame, profile);
+      const line = createVectorMaskSvgElement('line', { x1: anchor.x, y1: anchor.y, x2: handle.x, y2: handle.y });
+      line.classList.add('vector-mask-handle-line');
+      vectorMaskOverlay.append(line);
+      const circle = createVectorMaskSvgElement('circle', { cx: handle.x, cy: handle.y, r: 4 });
+      circle.classList.add('vector-mask-handle');
+      circle.dataset.pathId = state.authoring.maskEditor.selectedPathId;
+      circle.dataset.pointId = selectedPoint.pointId;
+      circle.dataset.handleName = handleName;
+      circle.addEventListener('pointerdown', beginVectorMaskHandleDrag);
+      vectorMaskOverlay.append(circle);
+    }
+  }
+  const drag = state.authoring.maskEditor.drag;
+  if (drag?.kind === 'marquee' && drag.currentOverlay) {
+    const left = Math.min(drag.startOverlay.x, drag.currentOverlay.x);
+    const top = Math.min(drag.startOverlay.y, drag.currentOverlay.y);
+    const marquee = createVectorMaskSvgElement('rect', {
+      x: left,
+      y: top,
+      width: Math.abs(drag.currentOverlay.x - drag.startOverlay.x),
+      height: Math.abs(drag.currentOverlay.y - drag.startOverlay.y)
+    });
+    marquee.classList.add('vector-mask-marquee');
+    vectorMaskOverlay.append(marquee);
+  }
+}
+
 function syncAuthoringOverlay() {
   const selectedLayer = authoringSession.selectedLayer;
   const runtimeSource = syncSelectedAuthoringRuntime();
@@ -1210,6 +1416,7 @@ function syncAuthoringOverlay() {
     state.site.anamorphicCameraMode === 'CALIBRATION');
   authoringOverlay.hidden = !visible;
   authoringOverlay.classList.toggle('editing', visible && authoringCameraInterlock.layoutEditing);
+  authoringOverlay.classList.toggle('mask-editing', visible && authoringCameraInterlock.maskEditing);
   if (!visible) return;
   const frame = authoringFrameRect();
   const profile = currentProjectionBakeProfile();
@@ -1233,6 +1440,7 @@ function syncAuthoringOverlay() {
     authoringImageLayer.style.transform = `translate(-50%, -50%) rotate(${rect.rotationDegrees}deg)`;
   }
   drawAuthoringCoveragePreview(frame);
+  drawVectorMaskOverlay(frame, profile);
 }
 
 function syncAuthoringLayerList(available) {
@@ -1383,11 +1591,126 @@ function syncAuthoringProjectUi(available) {
   authoringProjectOpen.disabled = !available || !bridgeAvailable || blocked;
 }
 
+function normalizeVectorMaskEditorSelection() {
+  const paths = authoringSession.selectedLayer?.vectorMask?.paths || [];
+  state.authoring.maskEditor.selectedPointRefs = (state.authoring.maskEditor.selectedPointRefs || []).filter((reference) =>
+    Boolean(vectorMaskPoint(paths.find((candidate) => candidate.pathId === reference.pathId), reference.pointId))
+  );
+  let pathValue = paths.find((candidate) => candidate.pathId === state.authoring.maskEditor.selectedPathId) || null;
+  if (!pathValue) {
+    pathValue = paths.find((candidate) => candidate.pathId === state.authoring.maskEditor.selectedPointRefs[0]?.pathId) || paths[0] || null;
+    state.authoring.maskEditor.selectedPathId = pathValue?.pathId || null;
+    state.authoring.maskEditor.selectedPointId = null;
+    state.authoring.maskEditor.selectedSegmentStartPointId = null;
+  }
+  if (state.authoring.maskEditor.selectedPointId && !vectorMaskPoint(pathValue, state.authoring.maskEditor.selectedPointId)) {
+    state.authoring.maskEditor.selectedPointId = null;
+  }
+  if (state.authoring.maskEditor.selectedPointId) {
+    const primaryKey = vectorMaskPointReferenceKey(pathValue.pathId, state.authoring.maskEditor.selectedPointId);
+    if (!state.authoring.maskEditor.selectedPointRefs.some((reference) =>
+      vectorMaskPointReferenceKey(reference.pathId, reference.pointId) === primaryKey)) {
+      state.authoring.maskEditor.selectedPointRefs.push({ pathId: pathValue.pathId, pointId: state.authoring.maskEditor.selectedPointId });
+    }
+  }
+  const segmentStart = vectorMaskPoint(pathValue, state.authoring.maskEditor.selectedSegmentStartPointId);
+  const segmentIndex = segmentStart ? pathValue.points.indexOf(segmentStart) : -1;
+  if (!segmentStart || (!pathValue.closed && segmentIndex === pathValue.points.length - 1)) {
+    state.authoring.maskEditor.selectedSegmentStartPointId = null;
+  }
+  return pathValue;
+}
+
+function syncVectorMaskPathList(available) {
+  const layer = authoringSession.selectedLayer;
+  const mask = layer?.vectorMask;
+  const selectedPath = normalizeVectorMaskEditorSelection();
+  vectorMaskPathList.replaceChildren();
+  vectorMaskPathCount.textContent = String(mask?.paths.length || 0);
+  if (!mask?.paths.length) {
+    const empty = document.createElement('p');
+    empty.className = 'vector-mask-empty';
+    empty.textContent = 'No paths';
+    vectorMaskPathList.append(empty);
+    return selectedPath;
+  }
+  mask.paths.forEach((pathValue, index) => {
+    const row = document.createElement('div');
+    row.className = 'vector-mask-path-row';
+    row.classList.toggle('selected', pathValue.pathId === selectedPath?.pathId);
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', String(pathValue.pathId === selectedPath?.pathId));
+    const enabled = document.createElement('button');
+    enabled.type = 'button';
+    enabled.textContent = pathValue.enabled ? 'ON' : 'OFF';
+    enabled.title = pathValue.enabled ? 'Disable path' : 'Enable path';
+    enabled.disabled = !available || !layer;
+    enabled.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (authoringSession.setVectorMaskPathEnabled(layer.layerId, pathValue.pathId, !pathValue.enabled)) {
+        setVectorMaskMessage(`Path ${String(index + 1).padStart(2, '0')} ${pathValue.enabled ? 'enabled' : 'disabled'}.`, 'pass');
+        syncAuthoringUi();
+      }
+    });
+    const select = document.createElement('button');
+    select.type = 'button';
+    select.className = 'vector-mask-path-select';
+    select.textContent = `Path ${String(index + 1).padStart(2, '0')} · ${pathValue.closed ? 'CLOSED' : 'OPEN'}`;
+    select.title = `${pathValue.pathId} · ${pathValue.points.length} points`;
+    select.disabled = !available || !layer;
+    select.addEventListener('click', () => selectVectorMaskPath(pathValue.pathId));
+    const operation = document.createElement('select');
+    operation.setAttribute('aria-label', `Path ${index + 1} operation`);
+    for (const value of ['ADD', 'SUBTRACT']) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      operation.append(option);
+    }
+    operation.value = pathValue.operation;
+    operation.disabled = !available || !layer;
+    operation.addEventListener('change', (event) => setVectorMaskPathOperation(pathValue.pathId, event.currentTarget.value));
+    row.append(enabled, select, operation);
+    vectorMaskPathList.append(row);
+  });
+  return selectedPath;
+}
+
+function syncVectorMaskUi(available) {
+  const layer = authoringSession.selectedLayer;
+  const mask = layer?.vectorMask;
+  const maskEditing = authoringCameraInterlock.maskEditing;
+  vectorMaskCoordinate.textContent = VECTOR_MASK_COORDINATE_SPACE;
+  vectorMaskEnabled.checked = Boolean(mask?.enabled);
+  vectorMaskInvert.checked = Boolean(mask?.invert);
+  vectorMaskEnabled.disabled = !available || !layer;
+  vectorMaskInvert.disabled = !available || !layer;
+  vectorMaskEdit.disabled = !available || !layer?.visible ||
+    state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  vectorMaskEdit.classList.toggle('active', maskEditing);
+  vectorMaskEdit.setAttribute('aria-pressed', String(maskEditing));
+  vectorMaskEdit.textContent = maskEditing ? 'EXIT MASK EDIT' : 'EDIT MASK';
+  const selectedPath = syncVectorMaskPathList(available);
+  const selectedPoint = vectorMaskEditorPoint();
+  const segmentStart = vectorMaskPoint(selectedPath, state.authoring.maskEditor.selectedSegmentStartPointId);
+  vectorMaskAddPath.disabled = !available || !layer;
+  vectorMaskDeletePath.disabled = !available || !selectedPath;
+  vectorMaskClosePath.disabled = !available || !selectedPath || selectedPath.closed || selectedPath.points.length < 3;
+  vectorMaskClear.disabled = !available || !mask?.paths.length;
+  vectorMaskSegmentLinear.disabled = !available || !segmentStart;
+  vectorMaskSegmentBezier.disabled = !available || !segmentStart;
+  vectorMaskSegmentLinear.classList.toggle('active', segmentStart?.segmentTypeToNext === 'LINEAR');
+  vectorMaskSegmentBezier.classList.toggle('active', segmentStart?.segmentTypeToNext === 'CUBIC_BEZIER');
+  vectorMaskDeletePoint.disabled = !available || !selectedPoint ||
+    (selectedPath.closed && selectedPath.points.length <= 3) || (!selectedPath.closed && selectedPath.points.length <= 1);
+}
+
 function syncAuthoringUi() {
   const available = isProjectionAuthoringContext();
   const source = authoringSession.source;
   const selectedLayer = authoringSession.selectedLayer;
   const layoutEditing = authoringCameraInterlock.layoutEditing;
+  const maskEditing = authoringCameraInterlock.maskEditing;
   projectionAuthoring.hidden = !available;
   authoringFamily.textContent = currentAnamorphicFamily()?.label || '—';
   authoringState.textContent = authoringSession.status;
@@ -1413,11 +1736,11 @@ function syncAuthoringUi() {
   for (const [name, input] of Object.entries(authoringTransformInputs)) {
     input.value = String(authoringSession.transform[name]);
   }
-  authoringTransformFields.disabled = !available || !selectedLayer?.visible || !layoutEditing;
-  authoringResetTransform.disabled = !available || !selectedLayer?.visible || !layoutEditing;
-  authoringImageButton.disabled = !available || state.projectionBake.running || state.reverseBake.activeJobId !== null;
-  authoringReplaceButton.disabled = !available || !source || state.projectionBake.running || state.reverseBake.activeJobId !== null;
-  authoringDeleteLayer.disabled = !available || !source || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  authoringTransformFields.disabled = !available || !selectedLayer?.visible || !layoutEditing || maskEditing;
+  authoringResetTransform.disabled = !available || !selectedLayer?.visible || !layoutEditing || maskEditing;
+  authoringImageButton.disabled = !available || maskEditing || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  authoringReplaceButton.disabled = !available || !source || maskEditing || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  authoringDeleteLayer.disabled = !available || !source || maskEditing || state.projectionBake.running || state.reverseBake.activeJobId !== null;
   const selectedIndex = authoringSession.layers.findIndex((layer) => layer.layerId === authoringSession.selectedLayerId);
   authoringMoveUp.disabled = !available || selectedIndex <= 0 || state.projectionBake.running || state.reverseBake.activeJobId !== null;
   authoringMoveDown.disabled = !available || selectedIndex < 0 || selectedIndex >= authoringSession.layers.length - 1 || state.projectionBake.running || state.reverseBake.activeJobId !== null;
@@ -1425,16 +1748,17 @@ function syncAuthoringUi() {
   layoutEditButton.classList.toggle('active', layoutEditing);
   layoutEditButton.setAttribute('aria-pressed', String(layoutEditing));
   layoutEditButton.textContent = layoutEditing ? 'EXIT LAYOUT EDIT' : 'LAYOUT EDIT';
-  authoringCameraLock.disabled = !available || layoutEditing;
+  authoringCameraLock.disabled = !available || authoringCameraInterlock.forcedLocked;
   authoringCameraLock.setAttribute('aria-pressed', String(authoringCameraInterlock.cameraLocked));
   authoringCameraLockLabel.textContent = authoringCameraInterlock.displayState;
-  authoringCameraLock.title = layoutEditing
-    ? 'Camera locked while editing layout'
-    : 'Toggle camera lock outside Layout Edit';
-  authoringCameraLock.classList.toggle('interlocked', layoutEditing);
-  authoringCameraLock.classList.toggle('locked', !layoutEditing && authoringCameraInterlock.manualLocked);
-  authoringCameraLock.classList.toggle('unlocked', !layoutEditing && !authoringCameraInterlock.manualLocked);
-  syncAuthoringLayerList(available);
+  authoringCameraLock.title = authoringCameraInterlock.forcedLocked
+    ? 'Camera locked while editing authoring data'
+    : 'Toggle camera lock outside editor modes';
+  authoringCameraLock.classList.toggle('interlocked', authoringCameraInterlock.forcedLocked);
+  authoringCameraLock.classList.toggle('locked', !authoringCameraInterlock.forcedLocked && authoringCameraInterlock.manualLocked);
+  authoringCameraLock.classList.toggle('unlocked', !authoringCameraInterlock.forcedLocked && !authoringCameraInterlock.manualLocked);
+  syncAuthoringLayerList(available && !maskEditing);
+  syncVectorMaskUi(available);
   syncAuthoringOverlay();
   syncAuthoringQuickRail(available);
   syncAuthoringProjectUi(available);
@@ -1450,6 +1774,7 @@ function toggleAuthoringCameraLock() {
 
 function enterLayoutEdit() {
   if (!isProjectionAuthoringContext() || !authoringSession.selectedLayer?.visible || authoringCameraInterlock.layoutEditing) return false;
+  if (authoringCameraInterlock.maskEditing && !exitVectorMaskEdit()) return false;
   state.authoring.layoutCameraSnapshot = snapshotSiteCameraRuntime();
   state.authoring.previousAnamorphicCameraMode = state.site.anamorphicCameraMode;
   authoringCameraInterlock.enterLayout();
@@ -1506,6 +1831,159 @@ function toggleLayoutEdit() {
   return authoringCameraInterlock.layoutEditing ? exitLayoutEdit() : enterLayoutEdit();
 }
 
+function setVectorMaskMessage(message, stateName = '') {
+  vectorMaskMessage.textContent = message;
+  vectorMaskMessage.className = stateName;
+}
+
+function resetVectorMaskEditorSelection() {
+  state.authoring.maskEditor.selectedPathId = null;
+  state.authoring.maskEditor.selectedPointId = null;
+  state.authoring.maskEditor.selectedSegmentStartPointId = null;
+  state.authoring.maskEditor.selectedPointRefs = [];
+  state.authoring.maskEditor.drag = null;
+}
+
+function enterVectorMaskEdit() {
+  if (!isProjectionAuthoringContext() || !authoringSession.selectedLayer?.visible || authoringCameraInterlock.maskEditing) return false;
+  if (authoringCameraInterlock.layoutEditing && !exitLayoutEdit()) return false;
+  state.authoring.maskCameraSnapshot = snapshotSiteCameraRuntime();
+  state.authoring.previousAnamorphicCameraMode = state.site.anamorphicCameraMode;
+  if (!authoringCameraInterlock.enterMask()) return false;
+  applyAnamorphicCalibrationCamera();
+  state.authoring.calibrationCameraSnapshot = snapshotSiteCameraRuntime();
+  normalizeVectorMaskEditorSelection();
+  setVectorMaskMessage('MASK EDIT active. Open path: click to append. Closed path: double-click empty source space or use + NEW PATH. Drag empty space to select anchors.', 'pass');
+  syncSiteCameraControls();
+  render();
+  updateDiagnostics();
+  return true;
+}
+
+function exitVectorMaskEdit() {
+  if (!authoringCameraInterlock.maskEditing) return false;
+  endVectorMaskPointerInteraction();
+  const snapshot = state.authoring.maskCameraSnapshot;
+  const previousMode = state.authoring.previousAnamorphicCameraMode;
+  authoringCameraInterlock.exitMask();
+  if (snapshot) restoreSiteCameraRuntime(snapshot);
+  if (previousMode) state.site.anamorphicCameraMode = previousMode;
+  state.authoring.maskCameraSnapshot = null;
+  state.authoring.previousAnamorphicCameraMode = null;
+  state.authoring.calibrationCameraSnapshot = null;
+  setVectorMaskMessage('Mask editor closed. Layer-local vector mask remains active in Preview and the next Bake.');
+  syncSiteCameraControls();
+  resizeRenderer();
+  updateDiagnostics();
+  return true;
+}
+
+function toggleVectorMaskEdit() {
+  return authoringCameraInterlock.maskEditing ? exitVectorMaskEdit() : enterVectorMaskEdit();
+}
+
+function commitVectorMaskChange(message) {
+  invalidateAuthoringOutputs('vector-mask-authoring-change');
+  setVectorMaskMessage(`${message} Preview updated; BAKE CURRENT is now required.`, 'pass');
+  syncAuthoringUi();
+  render();
+  updateDiagnostics();
+  return true;
+}
+
+function selectVectorMaskPath(pathId) {
+  if (!vectorMaskPath(authoringSession.selectedLayer?.vectorMask, pathId)) return false;
+  state.authoring.maskEditor.selectedPathId = pathId;
+  state.authoring.maskEditor.selectedPointId = null;
+  state.authoring.maskEditor.selectedSegmentStartPointId = null;
+  state.authoring.maskEditor.selectedPointRefs = [];
+  syncAuthoringUi();
+  return true;
+}
+
+function addVectorMaskPath(initialPoint = { x: 0.5, y: 0.5 }) {
+  const layer = authoringSession.selectedLayer;
+  if (!layer) return false;
+  const created = authoringSession.addVectorMaskPath(layer.layerId, { operation: 'ADD', initialPoint });
+  if (!created) return false;
+  state.authoring.maskEditor.selectedPathId = created.pathId;
+  state.authoring.maskEditor.selectedPointId = created.points[0]?.pointId || null;
+  state.authoring.maskEditor.selectedSegmentStartPointId = null;
+  state.authoring.maskEditor.selectedPointRefs = created.points[0]
+    ? [{ pathId: created.pathId, pointId: created.points[0].pointId }]
+    : [];
+  return commitVectorMaskChange(`${created.pathId} created as an open ADD path.`);
+}
+
+function deleteSelectedVectorMaskPath() {
+  const layer = authoringSession.selectedLayer;
+  const pathId = state.authoring.maskEditor.selectedPathId;
+  if (!layer || !pathId || !authoringSession.deleteVectorMaskPath(layer.layerId, pathId)) return false;
+  resetVectorMaskEditorSelection();
+  normalizeVectorMaskEditorSelection();
+  return commitVectorMaskChange(`${pathId} deleted.`);
+}
+
+function clearSelectedLayerVectorMask() {
+  const layer = authoringSession.selectedLayer;
+  if (!layer || !authoringSession.clearVectorMask(layer.layerId)) return false;
+  resetVectorMaskEditorSelection();
+  return commitVectorMaskChange('Selected layer vector mask cleared and disabled.');
+}
+
+function setVectorMaskPathOperation(pathId, operation) {
+  const layer = authoringSession.selectedLayer;
+  if (!layer || !authoringSession.setVectorMaskPathOperation(layer.layerId, pathId, operation)) return false;
+  state.authoring.maskEditor.selectedPathId = pathId;
+  return commitVectorMaskChange(`${pathId} operation changed to ${operation}.`);
+}
+
+function closeSelectedVectorMaskPath() {
+  const layer = authoringSession.selectedLayer;
+  const pathId = state.authoring.maskEditor.selectedPathId;
+  if (!layer || !pathId) return false;
+  try {
+    if (!authoringSession.closeVectorMaskPath(layer.layerId, pathId)) return false;
+    return commitVectorMaskChange(`${pathId} closed explicitly.`);
+  } catch (error) {
+    setVectorMaskMessage(error.message, 'fail');
+    syncAuthoringUi();
+    return false;
+  }
+}
+
+function setSelectedVectorMaskSegmentType(segmentType) {
+  const layer = authoringSession.selectedLayer;
+  const { selectedPathId, selectedSegmentStartPointId } = state.authoring.maskEditor;
+  if (!layer || !selectedPathId || !selectedSegmentStartPointId) return false;
+  try {
+    if (!authoringSession.setVectorMaskSegmentType(layer.layerId, selectedPathId, selectedSegmentStartPointId, segmentType)) return false;
+    return commitVectorMaskChange(`Selected segment changed to ${segmentType}.`);
+  } catch (error) {
+    setVectorMaskMessage(error.message, 'fail');
+    return false;
+  }
+}
+
+function deleteSelectedVectorMaskPoint() {
+  const layer = authoringSession.selectedLayer;
+  const { selectedPathId, selectedPointId } = state.authoring.maskEditor;
+  if (!layer || !selectedPathId || !selectedPointId) return false;
+  try {
+    if (!authoringSession.deleteVectorMaskPoint(layer.layerId, selectedPathId, selectedPointId)) return false;
+    state.authoring.maskEditor.selectedPointId = null;
+    state.authoring.maskEditor.selectedSegmentStartPointId = null;
+    state.authoring.maskEditor.selectedPointRefs = state.authoring.maskEditor.selectedPointRefs.filter((reference) =>
+      reference.pathId !== selectedPathId || reference.pointId !== selectedPointId
+    );
+    return commitVectorMaskChange(`${selectedPointId} deleted.`);
+  } catch (error) {
+    setVectorMaskMessage(error.message, 'fail');
+    syncAuthoringUi();
+    return false;
+  }
+}
+
 function commitAuthoringTransform(partial, reason = 'authoring-transform-change') {
   if (!authoringCameraInterlock.layoutEditing || !authoringSession.selectedLayer?.visible) return false;
   if (!authoringSession.setTransform(partial)) return false;
@@ -1516,8 +1994,10 @@ function commitAuthoringTransform(partial, reason = 'authoring-transform-change'
 }
 
 function selectAuthoringLayer(layerId) {
+  if (authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
   if (!authoringSession.selectLayer(layerId)) return false;
   cancelAuthoringPointerInteraction();
+  resetVectorMaskEditorSelection();
   authoringMessage.className = 'projection-poc-message';
   authoringMessage.textContent = `Selected ${authoringSession.source.filename}. Bake and transforms now target this layer only.`;
   syncAuthoringUi();
@@ -1527,6 +2007,7 @@ function selectAuthoringLayer(layerId) {
 function toggleAuthoringLayerVisibility(layerId) {
   const layer = authoringSession.layers.find((candidate) => candidate.layerId === layerId);
   if (!layer || !authoringSession.setLayerVisibility(layerId, !layer.visible)) return false;
+  if (!layer.visible && layer.layerId === authoringSession.selectedLayerId && authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
   cancelAuthoringPointerInteraction();
   authoringMessage.className = 'projection-poc-message';
   authoringMessage.textContent = `${layer.source.filename} visibility ${layer.visible ? 'ON' : 'OFF'}; pixels remain valid and metadata will sync on explicit Send.`;
@@ -1566,6 +2047,7 @@ function commitAuthoringBlendMode(value) {
 }
 
 function deleteSelectedAuthoringLayer() {
+  if (authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
   const removed = authoringSession.deleteLayer();
   if (!removed) return false;
   if (!authoringSession.source && authoringCameraInterlock.layoutEditing) exitLayoutEdit();
@@ -1771,6 +2253,7 @@ async function openAuthoringProject(manifestFile = null) {
     if (!acceptance.ok) throw projectOperationError(acceptance, 'PROJECT_OPEN_TOKEN_INVALID');
 
     if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
+    if (authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
     cancelAuthoringPointerInteraction();
     const previousSnapshot = authoringSession.snapshot();
     authoringSession.restore(prepared.snapshot);
@@ -2240,7 +2723,8 @@ async function runProjectionBake({ repetitions = 1, maskMode = null, allowSynthe
       repetitions,
       maskMode: requestedMaskMode,
       authoringSource,
-      authoringTransform: authoringSource ? authoringSession.transform : null
+      authoringTransform: authoringSource ? authoringSession.transform : null,
+      authoringVectorMask: authoringSource ? selectedLayer.vectorMask : null
     });
     matteAsset.dispose();
     result.matteAsset = matteAsset.diagnostics;
@@ -2255,11 +2739,14 @@ async function runProjectionBake({ repetitions = 1, maskMode = null, allowSynthe
     const maxSampleDelta = (sample, target) => Math.max(...sample.source.map((value, index) => Math.abs(value - sample[target][index])));
     const sampleMatchesIfVisible = (sample, target, maximumDelta) =>
       sample[target][3] === 0 || maxSampleDelta(sample, target) <= maximumDelta;
+    const vectorMaskApplied = result.authoring?.vectorMask?.applied === true;
     result.technicalThresholds = {
-      canonicalCoverage: requestedMaskMode === 'production' && profile.familyId === ANAMORPHIC_FAMILY_IDS.FRONT_75F
+      canonicalCoverage: vectorMaskApplied
+        ? { min: 0.001, max: 1 }
+        : requestedMaskMode === 'production' && profile.familyId === ANAMORPHIC_FAMILY_IDS.FRONT_75F
         ? { min: 0.5, max: 0.65 }
         : { min: 0.01, max: 1 },
-      visibleScreenPixelCountMin: 100_000,
+      visibleScreenPixelCountMin: vectorMaskApplied ? 10_000 : 100_000,
       maeMax: 1,
       rmseMax: 5,
       silhouetteIouMin: 0.999,
@@ -3170,6 +3657,7 @@ function isThreeDimensionalView() {
 function setActiveView(view) {
   if (!['2d', '3d-plane', 'site-3d'].includes(view)) throw new Error(`Unknown view: ${view}`);
   if (authoringCameraInterlock.layoutEditing && view !== state.activeView) exitLayoutEdit();
+  if (authoringCameraInterlock.maskEditing && view !== state.activeView) exitVectorMaskEdit();
   const enteringLegacy = view === 'site-3d' && state.activeView !== 'site-3d' &&
     state.site.world === 'legacy2d' && state.site.mappingMode === 'normal';
   state.activeView = view;
@@ -3286,7 +3774,7 @@ function formatMs(value) {
 }
 
 function pointerRequirementsSatisfied() {
-  if (authoringCameraInterlock.layoutEditing) return false;
+  if (authoringCameraInterlock.forcedLocked) return false;
   const live = state.link.lastFrame;
   const pointerSurfaceAvailable = state.activeView === 'site-3d'
     ? state.site.surfaceSetAvailable && state.site.activeBindings.length > 0 &&
@@ -3332,6 +3820,8 @@ function updatePointerControls() {
   }
   if (authoringCameraInterlock.layoutEditing) {
     dragHint.textContent = 'LAYOUT EDIT: Drag image · Corner: uniform scale · Top handle: rotate · Camera interlocked';
+  } else if (authoringCameraInterlock.maskEditing) {
+    dragHint.textContent = 'MASK EDIT: Open path click adds · First anchor closes · Closed path double-click starts new · Drag space selects';
   }
   if (!available && !pointerQueue.snapshot().activeRequestId) state.pointer.state = 'UNAVAILABLE';
   else if (available && state.pointer.state === 'UNAVAILABLE') state.pointer.state = 'READY';
@@ -4274,6 +4764,290 @@ function authoringClientPoint(event) {
   };
 }
 
+function vectorMaskEventUv(event, clampToSource = true) {
+  const layer = authoringSession.selectedLayer;
+  const profile = currentProjectionBakeProfile();
+  if (!layer || !profile) return null;
+  const normalized = authoringClientPoint(event);
+  const uv = screenPointToSourceUv(
+    { x: normalized.x, y: normalized.y },
+    layer.source,
+    profile.workingResolution.aspect,
+    layer.transform
+  );
+  return {
+    x: clampToSource ? Math.min(1, Math.max(0, uv.u)) : uv.u,
+    y: clampToSource ? Math.min(1, Math.max(0, uv.v)) : uv.v,
+    inside: uv.inside
+  };
+}
+
+function vectorMaskEventOverlayPoint(event) {
+  const normalized = authoringClientPoint(event);
+  return {
+    x: normalized.x * normalized.frame.width,
+    y: normalized.y * normalized.frame.height
+  };
+}
+
+function tryCloseVectorMaskAtFirstPoint(pathValue, pointId) {
+  const layer = authoringSession.selectedLayer;
+  const first = pathValue?.points?.[0];
+  const last = pathValue?.points?.at(-1);
+  const drawingFromLastPoint = state.authoring.maskEditor.selectedPathId === pathValue?.pathId &&
+    state.authoring.maskEditor.selectedPointId === last?.pointId;
+  if (!layer || pathValue.closed || pathValue.points.length < 3 || pointId !== first?.pointId || !drawingFromLastPoint) return false;
+  if (!authoringSession.closeVectorMaskPath(layer.layerId, pathValue.pathId)) return false;
+  setVectorMaskPointSelection([{ pathId: pathValue.pathId, pointId: first.pointId }], {
+    pathId: pathValue.pathId,
+    pointId: first.pointId
+  });
+  commitVectorMaskChange(`${pathValue.pathId} closed by returning to its first anchor.`);
+  return true;
+}
+
+function beginVectorMaskPointDrag(event) {
+  if (event.button !== 0 || !authoringCameraInterlock.maskEditing) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const { pathId, pointId } = event.currentTarget.dataset;
+  const pathValue = vectorMaskPath(authoringSession.selectedLayer?.vectorMask, pathId);
+  const pointValue = vectorMaskPoint(pathValue, pointId);
+  if (!pointValue) return;
+  if (tryCloseVectorMaskAtFirstPoint(pathValue, pointId)) return;
+  const key = vectorMaskPointReferenceKey(pathId, pointId);
+  const alreadySelected = selectedVectorMaskPointKeys().has(key);
+  if (!alreadySelected) {
+    setVectorMaskPointSelection([{ pathId, pointId }], { pathId, pointId });
+  } else {
+    state.authoring.maskEditor.selectedPathId = pathId;
+    state.authoring.maskEditor.selectedPointId = pointId;
+  }
+  const index = pathValue.points.indexOf(pointValue);
+  state.authoring.maskEditor.selectedSegmentStartPointId = pathValue.closed || index < pathValue.points.length - 1 ? pointId : null;
+  state.authoring.maskEditor.drag = {
+    kind: 'anchors',
+    pointerId: event.pointerId,
+    pointReferences: state.authoring.maskEditor.selectedPointRefs.map((reference) => ({ ...reference })),
+    lastUv: vectorMaskEventUv(event, false)
+  };
+  vectorMaskOverlay.setPointerCapture(event.pointerId);
+  syncAuthoringUi();
+}
+
+function beginVectorMaskHandleDrag(event) {
+  if (event.button !== 0 || !authoringCameraInterlock.maskEditing) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const { pathId, pointId, handleName } = event.currentTarget.dataset;
+  setVectorMaskPointSelection([{ pathId, pointId }], { pathId, pointId });
+  state.authoring.maskEditor.drag = { kind: 'handle', pointerId: event.pointerId, pathId, pointId, handleName };
+  vectorMaskOverlay.setPointerCapture(event.pointerId);
+}
+
+function nearestVectorMaskSegmentT(pathValue, startPointId, target) {
+  let nearestT = 0.5;
+  let nearestDistance = Infinity;
+  for (let index = 1; index < 100; index += 1) {
+    const t = index / 100;
+    const sample = evaluateVectorMaskSegment(pathValue, startPointId, t);
+    const distance = (sample.x - target.x) ** 2 + (sample.y - target.y) ** 2;
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestT = t;
+    }
+  }
+  return nearestT;
+}
+
+function beginVectorMaskSegmentInsert(event) {
+  if (event.button !== 0 || !authoringCameraInterlock.maskEditing) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const layer = authoringSession.selectedLayer;
+  const { pathId, startPointId } = event.currentTarget.dataset;
+  const pathValue = vectorMaskPath(layer?.vectorMask, pathId);
+  const uv = vectorMaskEventUv(event);
+  if (!layer || !pathValue || !uv) return;
+  const t = nearestVectorMaskSegmentT(pathValue, startPointId, uv);
+  const inserted = authoringSession.insertVectorMaskPoint(layer.layerId, pathId, startPointId, t);
+  if (!inserted) return;
+  setVectorMaskPointSelection([{ pathId, pointId: inserted.pointId }], { pathId, pointId: inserted.pointId });
+  state.authoring.maskEditor.selectedSegmentStartPointId = inserted.pointId;
+  commitVectorMaskChange(`${inserted.pointId} inserted on the selected segment with shape-preserving subdivision.`);
+}
+
+function appendVectorMaskPointAtUv(uv, { createPath = false } = {}) {
+  const layer = authoringSession.selectedLayer;
+  if (!layer || !uv) return;
+  if (!uv.inside) {
+    setVectorMaskMessage('VECTOR_MASK_POINT_OUTSIDE_SOURCE: Add anchors inside the transformed source bounds.', 'fail');
+    return;
+  }
+  let pathValue = vectorMaskEditorPath();
+  if (!pathValue || pathValue.closed) {
+    if (!createPath) {
+      setVectorMaskPointSelection([]);
+      setVectorMaskMessage('No point added. Double-click empty source space or use + NEW PATH to start another path.', 'pass');
+      syncAuthoringUi();
+      return null;
+    }
+    const created = authoringSession.addVectorMaskPath(layer.layerId, { operation: 'ADD', initialPoint: uv });
+    setVectorMaskPointSelection([{ pathId: created.pathId, pointId: created.points[0].pointId }], {
+      pathId: created.pathId,
+      pointId: created.points[0].pointId
+    });
+    commitVectorMaskChange(`${created.pathId} created at the clicked source coordinate.`);
+    return created.points[0];
+  }
+  const created = authoringSession.appendVectorMaskPoint(layer.layerId, pathValue.pathId, uv.x, uv.y);
+  if (!created) return;
+  setVectorMaskPointSelection([{ pathId: pathValue.pathId, pointId: created.pointId }], {
+    pathId: pathValue.pathId,
+    pointId: created.pointId
+  });
+  const previous = pathValue.points[pathValue.points.length - 2];
+  state.authoring.maskEditor.selectedSegmentStartPointId = previous?.pointId || null;
+  commitVectorMaskChange(`${created.pointId} appended to ${pathValue.pathId}.`);
+  return created;
+}
+
+function createVectorMaskPathByDoubleClick(event) {
+  if (event.button !== 0 || event.target !== vectorMaskOverlay || !authoringCameraInterlock.maskEditing) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  const pathValue = vectorMaskEditorPath();
+  if (pathValue && !pathValue.closed) {
+    setVectorMaskMessage('Finish or close the current open path before starting another path by double-click.', 'fail');
+    return false;
+  }
+  const uv = vectorMaskEventUv(event, false);
+  if (!uv?.inside) {
+    setVectorMaskMessage('VECTOR_MASK_POINT_OUTSIDE_SOURCE: Start a new path inside the transformed source bounds.', 'fail');
+    return false;
+  }
+  return Boolean(appendVectorMaskPointAtUv(uv, { createPath: true }));
+}
+
+function beginVectorMaskMarquee(event) {
+  if (event.button !== 0 || event.target !== vectorMaskOverlay || !authoringCameraInterlock.maskEditing) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const startOverlay = vectorMaskEventOverlayPoint(event);
+  state.authoring.maskEditor.drag = {
+    kind: 'marquee',
+    pointerId: event.pointerId,
+    startOverlay,
+    currentOverlay: { ...startOverlay },
+    startUv: vectorMaskEventUv(event, false),
+    moved: false
+  };
+  vectorMaskOverlay.setPointerCapture(event.pointerId);
+  syncAuthoringOverlay();
+}
+
+function selectVectorMaskPointsInOverlayRect(startOverlay, endOverlay) {
+  const layer = authoringSession.selectedLayer;
+  const profile = currentProjectionBakeProfile();
+  if (!layer || !profile) return [];
+  const frame = authoringFrameRect();
+  const left = Math.min(startOverlay.x, endOverlay.x);
+  const right = Math.max(startOverlay.x, endOverlay.x);
+  const top = Math.min(startOverlay.y, endOverlay.y);
+  const bottom = Math.max(startOverlay.y, endOverlay.y);
+  const selected = [];
+  for (const pathValue of layer.vectorMask.paths) {
+    for (const pointValue of pathValue.points) {
+      const overlay = sourcePointToMaskOverlay(pointValue, frame, profile);
+      if (overlay.x >= left && overlay.x <= right && overlay.y >= top && overlay.y <= bottom) {
+        selected.push({ pathId: pathValue.pathId, pointId: pointValue.pointId });
+      }
+    }
+  }
+  setVectorMaskPointSelection(selected, selected[0] || null);
+  return selected;
+}
+
+function vectorMaskSelectedPoints(pointReferences) {
+  const mask = authoringSession.selectedLayer?.vectorMask;
+  return (pointReferences || []).flatMap((reference) => {
+    const pathValue = vectorMaskPath(mask, reference.pathId);
+    const pointValue = vectorMaskPoint(pathValue, reference.pointId);
+    return pointValue ? [pointValue] : [];
+  });
+}
+
+function updateVectorMaskPointerInteraction(event) {
+  const drag = state.authoring.maskEditor.drag;
+  if (!drag || drag.pointerId !== event.pointerId) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  if (drag.kind === 'marquee') {
+    drag.currentOverlay = vectorMaskEventOverlayPoint(event);
+    drag.moved ||= Math.hypot(
+      drag.currentOverlay.x - drag.startOverlay.x,
+      drag.currentOverlay.y - drag.startOverlay.y
+    ) >= 4;
+    syncAuthoringOverlay();
+    return true;
+  }
+  const layer = authoringSession.selectedLayer;
+  const uv = vectorMaskEventUv(event, false);
+  if (!layer || !uv) return false;
+  let changed = false;
+  if (drag.kind === 'anchors') {
+    const points = vectorMaskSelectedPoints(drag.pointReferences);
+    if (!points.length || !drag.lastUv) return false;
+    const requestedX = uv.x - drag.lastUv.x;
+    const requestedY = uv.y - drag.lastUv.y;
+    const minX = Math.min(...points.map((pointValue) => pointValue.x));
+    const maxX = Math.max(...points.map((pointValue) => pointValue.x));
+    const minY = Math.min(...points.map((pointValue) => pointValue.y));
+    const maxY = Math.max(...points.map((pointValue) => pointValue.y));
+    const deltaX = Math.max(-minX, Math.min(1 - maxX, requestedX));
+    const deltaY = Math.max(-minY, Math.min(1 - maxY, requestedY));
+    changed = authoringSession.translateVectorMaskPoints(layer.layerId, drag.pointReferences, deltaX, deltaY);
+    drag.lastUv = {
+      x: drag.lastUv.x + deltaX,
+      y: drag.lastUv.y + deltaY
+    };
+  } else if (drag.kind === 'handle') {
+    changed = authoringSession.updateVectorMaskPoint(layer.layerId, drag.pathId, drag.pointId, {
+      [drag.handleName]: uv
+    });
+  }
+  if (changed) {
+    invalidateAuthoringOutputs('vector-mask-point-drag');
+    syncAuthoringOverlay();
+    updateDiagnostics();
+  }
+  return true;
+}
+
+function endVectorMaskPointerInteraction(event = null) {
+  const drag = state.authoring.maskEditor.drag;
+  if (!drag) return false;
+  const pointerId = event?.pointerId ?? drag.pointerId;
+  if (pointerId !== drag.pointerId) return false;
+  if (vectorMaskOverlay.hasPointerCapture?.(pointerId)) vectorMaskOverlay.releasePointerCapture(pointerId);
+  state.authoring.maskEditor.drag = null;
+  const completed = Boolean(event && event.type !== 'pointercancel');
+  if (drag.kind === 'marquee') {
+    if (completed && drag.moved) {
+      const selected = selectVectorMaskPointsInOverlayRect(drag.startOverlay, drag.currentOverlay);
+      setVectorMaskMessage(`${selected.length} anchor${selected.length === 1 ? '' : 's'} selected by marquee. Drag any selected anchor to move the set.`, 'pass');
+    } else if (completed) {
+      appendVectorMaskPointAtUv(drag.startUv);
+    }
+  } else if (drag.kind === 'anchors') {
+    setVectorMaskMessage(`${drag.pointReferences.length} selected anchor${drag.pointReferences.length === 1 ? '' : 's'} moved in ${VECTOR_MASK_COORDINATE_SPACE}.`, 'pass');
+  } else {
+    setVectorMaskMessage(`Bezier handle moved in ${VECTOR_MASK_COORDINATE_SPACE}.`, 'pass');
+  }
+  syncAuthoringUi();
+  return true;
+}
+
 function beginAuthoringPointerInteraction(event, mode) {
   if (event.button !== 0 || !authoringCameraInterlock.layoutEditing || !authoringSession.selectedLayer?.visible ||
       state.projectionBake.running || state.reverseBake.activeJobId !== null) return false;
@@ -4319,12 +5093,14 @@ view3dPlaneButton.addEventListener('click', () => setActiveView('3d-plane'));
 viewSite3dButton.addEventListener('click', () => setActiveView('site-3d'));
 siteWorldSelect.addEventListener('change', () => {
   if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
+  if (authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
   state.site.world = siteWorldSelect.value;
   if (state.site.world === 'legacy2d') state.site.legacyCameraLocked = true;
   applySiteSurfaceSelection();
 });
 siteMappingSelect.addEventListener('change', () => {
   if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
+  if (authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
   state.site.mappingMode = siteMappingSelect.value;
   if (state.site.world === 'legacy2d') state.site.legacyCameraLocked = true;
   applySiteSurfaceSelection();
@@ -4332,7 +5108,7 @@ siteMappingSelect.addEventListener('change', () => {
 siteAnamorphicFamilySelect.addEventListener('change', () => {
   const family = SITE_SCENE_PROFILE.worlds.world3d.anamorphicFamilies[siteAnamorphicFamilySelect.value];
   if (!family?.available) return;
-  if (authoringPointerSession.active || authoringCameraInterlock.layoutEditing) {
+  if (authoringPointerSession.active || authoringCameraInterlock.forcedLocked || state.authoring.maskEditor.drag) {
     siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
     return;
   }
@@ -4407,6 +5183,26 @@ authoringProjectControl.addEventListener('drop', (event) => {
 });
 authoringCameraLock.addEventListener('click', toggleAuthoringCameraLock);
 layoutEditButton.addEventListener('click', toggleLayoutEdit);
+vectorMaskEdit.addEventListener('click', toggleVectorMaskEdit);
+vectorMaskEnabled.addEventListener('change', (event) => {
+  const layer = authoringSession.selectedLayer;
+  if (layer && authoringSession.setVectorMaskEnabled(layer.layerId, event.currentTarget.checked)) {
+    commitVectorMaskChange(`Vector Mask ${layer.vectorMask.enabled ? 'enabled' : 'disabled'}.`);
+  }
+});
+vectorMaskInvert.addEventListener('change', (event) => {
+  const layer = authoringSession.selectedLayer;
+  if (layer && authoringSession.setVectorMaskInvert(layer.layerId, event.currentTarget.checked)) {
+    commitVectorMaskChange(`Whole Vector Mask invert ${layer.vectorMask.invert ? 'enabled' : 'disabled'}.`);
+  }
+});
+vectorMaskAddPath.addEventListener('click', () => addVectorMaskPath());
+vectorMaskDeletePath.addEventListener('click', deleteSelectedVectorMaskPath);
+vectorMaskClosePath.addEventListener('click', closeSelectedVectorMaskPath);
+vectorMaskClear.addEventListener('click', clearSelectedLayerVectorMask);
+vectorMaskSegmentLinear.addEventListener('click', () => setSelectedVectorMaskSegmentType('LINEAR'));
+vectorMaskSegmentBezier.addEventListener('click', () => setSelectedVectorMaskSegmentType('CUBIC_BEZIER'));
+vectorMaskDeletePoint.addEventListener('click', deleteSelectedVectorMaskPoint);
 authoringImageButton.addEventListener('click', () => authoringImageInput.click());
 authoringImageInput.addEventListener('change', () => {
   const file = authoringImageInput.files?.[0] || null;
@@ -4449,6 +5245,10 @@ quickSendDirect.addEventListener('click', () => {
   void sendProjectionToPhotoshop('DIRECT').catch((error) => console.error(error));
 });
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && authoringCameraInterlock.maskEditing) {
+    exitVectorMaskEdit();
+    return;
+  }
   if (event.key === 'Escape' && state.authoring.railExpanded) {
     state.authoring.railExpanded = false;
     syncAuthoringUi();
@@ -4458,7 +5258,7 @@ for (const button of outsideSignagePresetButtons) {
   button.addEventListener('click', () => commitOutsideSignageOpacity(OUTSIDE_SIGNAGE_PRESETS[button.dataset.outsideSignagePreset]));
   button.addEventListener('pointerdown', (event) => event.stopPropagation());
 }
-for (const element of [projectionAuthoring, authoringProjectControl, authoringImageButton, authoringReplaceButton, authoringMoveUp, authoringMoveDown, authoringDeleteLayer, authoringLayerList, authoringTransformFields, authoringResetTransform]) {
+for (const element of [projectionAuthoring, authoringProjectControl, authoringImageButton, authoringReplaceButton, authoringMoveUp, authoringMoveDown, authoringDeleteLayer, authoringLayerList, vectorMaskControl, authoringTransformFields, authoringResetTransform]) {
   element.addEventListener('pointerdown', (event) => event.stopPropagation());
   element.addEventListener('wheel', (event) => event.stopPropagation(), { passive: true });
 }
@@ -4471,6 +5271,11 @@ for (const element of [authoringOpacity, authoringBlendMode, authoringQuickRail]
 authoringImageLayer.addEventListener('pointerdown', (event) => beginAuthoringPointerInteraction(event, 'move'));
 authoringScaleHandle.addEventListener('pointerdown', (event) => beginAuthoringPointerInteraction(event, 'scale'));
 authoringRotateHandle.addEventListener('pointerdown', (event) => beginAuthoringPointerInteraction(event, 'rotate'));
+vectorMaskOverlay.addEventListener('pointerdown', beginVectorMaskMarquee);
+vectorMaskOverlay.addEventListener('pointermove', updateVectorMaskPointerInteraction);
+vectorMaskOverlay.addEventListener('pointerup', endVectorMaskPointerInteraction);
+vectorMaskOverlay.addEventListener('pointercancel', (event) => endVectorMaskPointerInteraction(event));
+vectorMaskOverlay.addEventListener('dblclick', createVectorMaskPathByDoubleClick);
 authoringOverlay.addEventListener('pointermove', updateAuthoringPointerInteraction);
 authoringOverlay.addEventListener('pointerup', (event) => {
   if (!authoringPointerSession.owns(event.pointerId)) return;
@@ -6019,7 +6824,7 @@ window.runBlock8DProjectSmoke = async () => {
       quickRailUnchanged: railBefore === state.authoring.railExpanded,
       contextLossCount: state.contextLossCount - contextLossBefore
     };
-    report.technicalPass = report.schemaVersion === 1 && report.folderProject && report.projectUiAvailable &&
+    report.technicalPass = report.schemaVersion === 2 && report.folderProject && report.projectUiAvailable &&
       report.frontLayerCount === 3 && report.backLayerCount === 2 && report.roundTripExact && report.stableLayerIds &&
       report.safeSequenceAfterLoad && report.loadedNeedsBake && report.loadedPhotoshopUnsynced &&
       report.sourceBytesPreserved && report.relativeAssetPaths && report.calibrationReferenceOnly &&
@@ -6031,6 +6836,323 @@ window.runBlock8DProjectSmoke = async () => {
     return report;
   } finally {
     for (const runtime of prepared.runtimes) disposeAuthoringRuntime(runtime);
+  }
+};
+window.runBlock8EFoundationSmoke = async () => {
+  if (!state.texture?.image || !state.asset) throw new Error('Block 8E-2 runtime smoke requires the decoded original local bitmap.');
+  const previous = {
+    activeView: state.activeView,
+    world: state.site.world,
+    mappingMode: state.site.mappingMode,
+    family: state.site.anamorphicFamily,
+    cameraMode: state.site.anamorphicCameraMode,
+    camera: snapshotSiteCameraRuntime(),
+    authoringStack: authoringSession.snapshot(),
+    manualLocked: authoringCameraInterlock.manualLocked,
+    previousManualLocked: authoringCameraInterlock.previousManualLocked,
+    layoutEditing: authoringCameraInterlock.layoutEditing,
+    maskEditing: authoringCameraInterlock.maskEditing,
+    projectionStatus: state.projectionBake.status,
+    projectionResult: state.projectionBake.result,
+    projectionError: state.projectionBake.error
+  };
+  const contextLossBefore = state.contextLossCount;
+  const photoshopBefore = {
+    nextJobId: state.reverseBake.nextJobId,
+    lastApplied: state.reverseBake.lastApplied
+  };
+  try {
+    if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
+    if (authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
+    authoringSession.reset();
+    resetVectorMaskEditorSelection();
+    setActiveView('site-3d');
+    state.site.world = 'world3d';
+    state.site.mappingMode = 'anamorphic';
+    state.site.anamorphicFamily = 'front75f';
+    state.site.anamorphicCameraMode = 'CALIBRATION';
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    authoringCameraInterlock.requestManualLock(false);
+    applySiteSurfaceSelection();
+
+    const decodedImage = document.createElement('canvas');
+    decodedImage.width = 320;
+    decodedImage.height = 240;
+    const decodedContext = decodedImage.getContext('2d', { alpha: true });
+    const decodedGradient = decodedContext.createLinearGradient(0, 0, decodedImage.width, decodedImage.height);
+    decodedGradient.addColorStop(0, '#ff3bd4');
+    decodedGradient.addColorStop(0.5, '#00e5ff');
+    decodedGradient.addColorStop(1, '#ffe020');
+    decodedContext.fillStyle = decodedGradient;
+    decodedContext.fillRect(0, 0, decodedImage.width, decodedImage.height);
+    const runtime = {
+      id: `block8e-${state.asset.sha256 || state.asset.fileName}`,
+      filename: `Block8E_${state.asset.fileName}`,
+      name: `Block8E_${state.asset.fileName}`,
+      mimeType: state.asset.mime || 'image/png',
+      type: state.asset.mime || 'image/png',
+      width: decodedImage.width,
+      height: decodedImage.height,
+      hasAlpha: true,
+      byteLength: state.asset.bytes || 0,
+      image: decodedImage,
+      objectUrl: null
+    };
+    const layer = authoringSession.addLayer(runtime, ANAMORPHIC_FAMILY_IDS.FRONT_75F, runtime);
+    authoringSession.setTransform({ x: 0.53, y: 0.48, scale: 0.94, rotationDegrees: 13 });
+    authoringSession.setVectorMaskEnabled(layer.layerId, true);
+    const addPath = authoringSession.addVectorMaskPath(layer.layerId, { operation: 'ADD', initialPoint: { x: 0.15, y: 0.2 } });
+    authoringSession.appendVectorMaskPoint(layer.layerId, addPath.pathId, 0.8, 0.22);
+    authoringSession.appendVectorMaskPoint(layer.layerId, addPath.pathId, 0.72, 0.82);
+    authoringSession.closeVectorMaskPath(layer.layerId, addPath.pathId);
+    authoringSession.setVectorMaskSegmentType(layer.layerId, addPath.pathId, addPath.points[0].pointId, 'CUBIC_BEZIER');
+    const subtractPath = authoringSession.addVectorMaskPath(layer.layerId, { operation: 'SUBTRACT', initialPoint: { x: 0.4, y: 0.4 } });
+    authoringSession.appendVectorMaskPoint(layer.layerId, subtractPath.pathId, 0.6, 0.4);
+    authoringSession.appendVectorMaskPoint(layer.layerId, subtractPath.pathId, 0.5, 0.62);
+    authoringSession.closeVectorMaskPath(layer.layerId, subtractPath.pathId);
+    state.authoring.maskEditor.selectedPathId = addPath.pathId;
+    state.authoring.maskEditor.selectedPointId = addPath.points[0].pointId;
+    state.authoring.maskEditor.selectedSegmentStartPointId = addPath.points[0].pointId;
+    syncSelectedAuthoringRuntime();
+    syncAuthoringUi();
+
+    const cameraBeforeEdit = snapshotSiteCameraRuntime();
+    const entered = enterVectorMaskEdit();
+    const editorVisible = entered && authoringOverlay.classList.contains('mask-editing') &&
+      vectorMaskOverlay.querySelectorAll('.vector-mask-path').length === 2 &&
+      vectorMaskOverlay.querySelectorAll('.vector-mask-anchor').length === 6 &&
+      vectorMaskOverlay.getAttribute('data-coordinate-space') === VECTOR_MASK_COORDINATE_SPACE;
+    const editorFrame = authoringFrameRect();
+    const marqueeSelected = selectVectorMaskPointsInOverlayRect(
+      { x: -1, y: -1 },
+      { x: editorFrame.width + 1, y: editorFrame.height + 1 }
+    );
+    const positionsBeforeGroupMove = marqueeSelected.map((reference) => {
+      const pathValue = vectorMaskPath(layer.vectorMask, reference.pathId);
+      const pointValue = vectorMaskPoint(pathValue, reference.pointId);
+      return { pathId: reference.pathId, pointId: reference.pointId, x: pointValue.x, y: pointValue.y };
+    });
+    const groupMoveApplied = authoringSession.translateVectorMaskPoints(layer.layerId, marqueeSelected, 0.01, 0.01);
+    const groupMoveExact = groupMoveApplied && positionsBeforeGroupMove.every((before) => {
+      const pointValue = vectorMaskPoint(vectorMaskPath(layer.vectorMask, before.pathId), before.pointId);
+      return Math.abs(pointValue.x - before.x - 0.01) < 1e-10 && Math.abs(pointValue.y - before.y - 0.01) < 1e-10;
+    });
+    const closeGesturePath = authoringSession.addVectorMaskPath(layer.layerId, {
+      operation: 'ADD',
+      initialPoint: { x: 0.2, y: 0.3 }
+    });
+    authoringSession.appendVectorMaskPoint(layer.layerId, closeGesturePath.pathId, 0.3, 0.5);
+    authoringSession.appendVectorMaskPoint(layer.layerId, closeGesturePath.pathId, 0.4, 0.3);
+    setVectorMaskPointSelection([{
+      pathId: closeGesturePath.pathId,
+      pointId: closeGesturePath.points.at(-1).pointId
+    }], {
+      pathId: closeGesturePath.pathId,
+      pointId: closeGesturePath.points.at(-1).pointId
+    });
+    const closeByFirstAnchor = tryCloseVectorMaskAtFirstPoint(closeGesturePath, closeGesturePath.points[0].pointId) &&
+      closeGesturePath.closed;
+    const interlock = authoringCameraInterlock.maskEditing && authoringCameraInterlock.forcedLocked &&
+      authoringCameraInterlock.cameraLocked && !authoringCameraInterlock.controlsEnabled &&
+      authoringCameraInterlock.displayState === 'MASK INTERLOCK';
+    const closedPathCountBeforeBlankClick = layer.vectorMask.paths.length;
+    const singleClickResult = appendVectorMaskPointAtUv({ x: 0.94, y: 0.94, inside: true });
+    const singleClickNewPathBlocked = singleClickResult === null && layer.vectorMask.paths.length === closedPathCountBeforeBlankClick;
+    const explicitNewPathPoint = appendVectorMaskPointAtUv({ x: 0.92, y: 0.92, inside: true }, { createPath: true });
+    const explicitNewPathWorks = Boolean(explicitNewPathPoint) && layer.vectorMask.paths.length === closedPathCountBeforeBlankClick + 1 &&
+      layer.vectorMask.paths.at(-1).closed === false;
+    const switchedToLayout = enterLayoutEdit() === true && authoringCameraInterlock.layoutEditing && !authoringCameraInterlock.maskEditing;
+    const switchedBackToMask = enterVectorMaskEdit() === true && authoringCameraInterlock.maskEditing && !authoringCameraInterlock.layoutEditing;
+    const layoutMutualExclusion = switchedToLayout && switchedBackToMask;
+    const manualUnlockRefused = authoringCameraInterlock.requestManualLock(false) === false;
+    const exited = exitVectorMaskEdit();
+    const cameraAfterEdit = snapshotSiteCameraRuntime();
+    const mask = layer.vectorMask;
+
+    const rasterCanvas = document.createElement('canvas');
+    rasterCanvas.width = 100;
+    rasterCanvas.height = 100;
+    const rectangle = (pathId, operation, left, top, right, bottom, closed = true) => ({
+      pathId,
+      enabled: true,
+      operation,
+      closed,
+      points: [
+        { pointId: `${pathId}-1`, x: left, y: top, inHandle: { x: left, y: top }, outHandle: { x: left, y: top }, segmentTypeToNext: 'LINEAR' },
+        { pointId: `${pathId}-2`, x: right, y: top, inHandle: { x: right, y: top }, outHandle: { x: right, y: top }, segmentTypeToNext: 'LINEAR' },
+        { pointId: `${pathId}-3`, x: right, y: bottom, inHandle: { x: right, y: bottom }, outHandle: { x: right, y: bottom }, segmentTypeToNext: 'LINEAR' },
+        { pointId: `${pathId}-4`, x: left, y: bottom, inHandle: { x: left, y: bottom }, outHandle: { x: left, y: bottom }, segmentTypeToNext: 'LINEAR' }
+      ]
+    });
+    const rasterMask = {
+      enabled: true,
+      invert: false,
+      paths: [
+        rectangle('add-outer', 'ADD', 0.1, 0.1, 0.9, 0.9),
+        rectangle('subtract-hole', 'SUBTRACT', 0.3, 0.3, 0.7, 0.7),
+        rectangle('add-island', 'ADD', 0.45, 0.45, 0.55, 0.55),
+        rectangle('open-ignored', 'ADD', 0, 0, 1, 1, false)
+      ]
+    };
+    const rasterContext = rasterCanvas.getContext('2d', { alpha: true, willReadFrequently: true });
+    const rasterResult = rasterizeVectorMask(rasterContext, rasterMask, rasterCanvas.width, rasterCanvas.height);
+    const alphaAt = (x, y) => rasterContext.getImageData(x, y, 1, 1).data[3];
+    const normalRasterPixels = {
+      outside: alphaAt(5, 5),
+      included: alphaAt(20, 20),
+      subtracted: alphaAt(35, 35),
+      island: alphaAt(50, 50)
+    };
+    rasterMask.invert = true;
+    const invertedRasterResult = rasterizeVectorMask(rasterContext, rasterMask, rasterCanvas.width, rasterCanvas.height);
+    const invertedRasterPixels = {
+      outside: alphaAt(5, 5),
+      included: alphaAt(20, 20),
+      subtracted: alphaAt(35, 35),
+      island: alphaAt(50, 50)
+    };
+    rasterMask.invert = false;
+    const canvasRasterComposition = rasterResult.mode === 'COMBINE' && rasterResult.contributingPathCount === 3 &&
+      JSON.stringify(normalRasterPixels) === JSON.stringify({ outside: 0, included: 255, subtracted: 0, island: 255 }) &&
+      invertedRasterResult.mode === 'COMBINE_INVERTED' &&
+      JSON.stringify(invertedRasterPixels) === JSON.stringify({ outside: 255, included: 0, subtracted: 255, island: 0 });
+
+    drawAuthoringCoveragePreview(authoringFrameRect());
+    const previewPixels = authoringVectorMaskedSource.getContext('2d', { alpha: true, willReadFrequently: true })
+      .getImageData(0, 0, authoringVectorMaskedSource.width, authoringVectorMaskedSource.height).data;
+    let previewTransparent = false;
+    let previewOpaque = false;
+    for (let index = 3; index < previewPixels.length; index += 388) {
+      previewTransparent ||= previewPixels[index] === 0;
+      previewOpaque ||= previewPixels[index] > 0;
+      if (previewTransparent && previewOpaque) break;
+    }
+    const previewMaskApplied = authoringVectorMaskedSource.width > 1 && previewTransparent && previewOpaque;
+
+    const pixelRevisionBeforeOpacity = layer.pixelRevision;
+    const metadataRevisionBeforeOpacity = layer.metadataRevision;
+    authoringSession.setLayerOpacity(layer.layerId, 0.45);
+    const opacityMetadataOnly = layer.opacity === 0.45 && layer.pixelRevision === pixelRevisionBeforeOpacity &&
+      layer.metadataRevision === metadataRevisionBeforeOpacity + 1;
+    authoringSession.setVectorMaskEnabled(layer.layerId, false);
+    const passThroughBake = await runProjectionBake({ repetitions: 1, maskMode: 'full-white' });
+    authoringSession.setVectorMaskEnabled(layer.layerId, true);
+    const maskedBake = await runProjectionBake({ repetitions: 1, maskMode: 'full-white' });
+    const bakeMaskApplied = passThroughBake.authoring.vectorMask.applied === false &&
+      passThroughBake.authoring.vectorMask.contributionMode === 'PASS_THROUGH' &&
+      maskedBake.authoring.vectorMask.applied === true &&
+      maskedBake.authoring.vectorMask.width === runtime.width &&
+      maskedBake.authoring.vectorMask.height === runtime.height &&
+      maskedBake.authoring.vectorMask.temporaryTextureDisposed === true &&
+      maskedBake.resourcePolicy.permanentPerLayerVectorMaskTextures === 0 &&
+      maskedBake.validCanonicalPixelCount < passThroughBake.validCanonicalPixelCount;
+
+    state.site.anamorphicFamily = 'back';
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    authoringSession.activateFamily(ANAMORPHIC_FAMILY_IDS.BACK);
+    applySiteSurfaceSelection();
+    const backRuntime = { ...runtime, id: `${runtime.id}-back`, filename: `BACK_${runtime.filename}`, name: `BACK_${runtime.name}` };
+    const backLayer = authoringSession.addLayer(backRuntime, ANAMORPHIC_FAMILY_IDS.BACK, backRuntime);
+    authoringSession.setVectorMaskEnabled(backLayer.layerId, true);
+    const backPath = authoringSession.addVectorMaskPath(backLayer.layerId, { operation: 'ADD', initialPoint: { x: 0.18, y: 0.18 } });
+    authoringSession.appendVectorMaskPoint(backLayer.layerId, backPath.pathId, 0.82, 0.18);
+    authoringSession.appendVectorMaskPoint(backLayer.layerId, backPath.pathId, 0.82, 0.82);
+    authoringSession.appendVectorMaskPoint(backLayer.layerId, backPath.pathId, 0.18, 0.82);
+    authoringSession.closeVectorMaskPath(backLayer.layerId, backPath.pathId);
+    syncSelectedAuthoringRuntime();
+    const backMaskedBake = await runProjectionBake({ repetitions: 1, maskMode: 'full-white' });
+    const frontBackBake = maskedBake.familyId === ANAMORPHIC_FAMILY_IDS.FRONT_75F && maskedBake.authoring.vectorMask.applied === true &&
+      backMaskedBake.familyId === ANAMORPHIC_FAMILY_IDS.BACK && backMaskedBake.authoring.vectorMask.applied === true &&
+      backMaskedBake.authoring.vectorMask.temporaryTextureDisposed === true && backMaskedBake.validCanonicalPixelCount > 0;
+    const familyIndependence = layer.vectorMask.paths.length === 4 && backLayer.vectorMask.paths.length === 1 &&
+      !layer.vectorMask.paths.some((pathValue) => pathValue.pathId === backPath.pathId);
+    const report = {
+      block: '8E-2',
+      implementation: 'LAYER_LOCAL_MULTI_PATH_VECTOR_MASK_RASTER',
+      automatedStatus: 'EDITOR / PREVIEW / BAKE TECHNICAL PASS',
+      userValidation: 'PASS_CLOSED',
+      rasterBakeIntegration: 'IMPLEMENTED',
+      coordinateSpace: VECTOR_MASK_COORDINATE_SPACE,
+      editorEntered: entered,
+      editorVisible,
+      interlock,
+      layoutMutualExclusion,
+      directModeSwitch: layoutMutualExclusion,
+      singleClickNewPathBlocked,
+      explicitNewPathWorks,
+      manualUnlockRefused,
+      editorExited: exited && !authoringCameraInterlock.maskEditing,
+      cameraRestored: JSON.stringify(cameraBeforeEdit) === JSON.stringify(cameraAfterEdit),
+      layerLocal: mask.enabled === true && mask.paths.length === 4,
+      multiPathOperations: mask.paths[0].operation === 'ADD' && mask.paths[1].operation === 'SUBTRACT',
+      explicitClosedPaths: mask.paths.slice(0, 3).every((pathValue) => pathValue.closed && pathValue.points.length === 3) &&
+        mask.paths[3].closed === false,
+      cubicSegment: mask.paths[0].points[0].segmentTypeToNext === 'CUBIC_BEZIER',
+      marqueeSelection: marqueeSelected.length === 6,
+      groupMoveExact,
+      closeByFirstAnchor,
+      stableIds: new Set(mask.paths.flatMap((pathValue) => [pathValue.pathId, ...pathValue.points.map((pointValue) => pointValue.pointId)])).size ===
+        mask.paths.reduce((sum, pathValue) => sum + pathValue.points.length + 1, 0),
+      canvasRasterComposition,
+      normalRasterPixels,
+      invertedRasterPixels,
+      previewMaskApplied,
+      bakeMaskApplied,
+      frontBackBake,
+      familyIndependence,
+      passThroughCanonicalPixels: passThroughBake.validCanonicalPixelCount,
+      maskedCanonicalPixels: maskedBake.validCanonicalPixelCount,
+      sourceResolutionTemporaryMask: maskedBake.authoring.vectorMask.sourceResolutionRaster === true,
+      temporaryMaskDisposed: maskedBake.authoring.vectorMask.temporaryTextureDisposed === true,
+      noPermanentPerLayerMaskTexture: maskedBake.resourcePolicy.permanentPerLayerVectorMaskTextures === 0,
+      opacityMetadataOnly: opacityMetadataOnly && maskedBake.authoring.blendMode === 'NORMAL',
+      photoshopMutationCount: state.reverseBake.nextJobId - photoshopBefore.nextJobId,
+      photoshopLastAppliedUnchanged: state.reverseBake.lastApplied === photoshopBefore.lastApplied,
+      contextLossCount: state.contextLossCount - contextLossBefore
+    };
+    report.technicalPass = report.editorEntered && report.editorVisible && report.interlock &&
+      report.layoutMutualExclusion && report.directModeSwitch && report.singleClickNewPathBlocked &&
+      report.explicitNewPathWorks && report.manualUnlockRefused && report.editorExited &&
+      report.cameraRestored && report.layerLocal && report.multiPathOperations &&
+      report.explicitClosedPaths && report.cubicSegment && report.marqueeSelection &&
+      report.groupMoveExact && report.closeByFirstAnchor && report.stableIds &&
+      report.canvasRasterComposition && report.previewMaskApplied && report.bakeMaskApplied &&
+      report.frontBackBake && report.familyIndependence &&
+      report.sourceResolutionTemporaryMask && report.temporaryMaskDisposed &&
+      report.noPermanentPerLayerMaskTexture && report.opacityMetadataOnly &&
+      report.photoshopMutationCount === 0 && report.photoshopLastAppliedUnchanged &&
+      report.contextLossCount === 0;
+    window.block8EFoundationDiagnostics = structuredClone(report);
+    return report;
+  } finally {
+    if (authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
+    if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
+    authoringSession.restore(previous.authoringStack);
+    syncSelectedAuthoringRuntime();
+    resetVectorMaskEditorSelection();
+    authoringCameraInterlock.layoutEditing = previous.layoutEditing;
+    authoringCameraInterlock.maskEditing = previous.maskEditing;
+    authoringCameraInterlock.manualLocked = previous.manualLocked;
+    authoringCameraInterlock.previousManualLocked = previous.previousManualLocked;
+    state.projectionBake.status = previous.projectionStatus;
+    state.projectionBake.result = previous.projectionResult;
+    state.projectionBake.error = previous.projectionError;
+    state.site.world = previous.world;
+    state.site.mappingMode = previous.mappingMode;
+    state.site.anamorphicFamily = previous.family;
+    state.site.anamorphicCameraMode = previous.cameraMode;
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    setActiveView(previous.activeView);
+    applySiteSurfaceSelection({ resetCamera: false });
+    restoreSiteCameraRuntime(previous.camera);
+    syncSiteCameraControls();
+    syncProjectionPocUi();
+    syncAuthoringUi();
+    updateDiagnostics();
   }
 };
 window.getBlock6APreviewArtifacts = () => projectionBakeRuntime.previewDataUrls(projectionPreviewCanvases);

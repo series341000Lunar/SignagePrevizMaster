@@ -304,6 +304,7 @@ async function runSmokeTest(window) {
     const block8b = await window.webContents.executeJavaScript('window.runBlock8BLayerStackSmoke()', true);
     const block8c = await window.webContents.executeJavaScript('window.runBlock8CCompositeSmoke()', true);
     const block8d = await window.webContents.executeJavaScript('window.runBlock8DProjectSmoke()', true);
+    const block8e = await window.webContents.executeJavaScript('window.runBlock8EFoundationSmoke()', true);
     const bakeVisibilityArtifacts = {
       front: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_VisibilityDiagnostic.png'),
       back: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_VisibilityDiagnostic.png'),
@@ -427,7 +428,7 @@ async function runSmokeTest(window) {
       block8c.photoshopLastAppliedUnchanged === true && block8c.contextLossCount === 0 &&
       block8c.projectionRuntimeCount === 1 &&
       block8d.technicalPass === true && block8d.userValidation === 'PENDING' &&
-      block8d.schemaVersion === 1 && block8d.folderProject === true &&
+      block8d.schemaVersion === 2 && block8d.folderProject === true &&
       block8d.frontLayerCount === 3 && block8d.backLayerCount === 2 &&
       block8d.roundTripExact === true && block8d.stableLayerIds === true &&
       block8d.safeSequenceAfterLoad === true && block8d.loadedNeedsBake === true &&
@@ -438,6 +439,24 @@ async function runSmokeTest(window) {
       block8d.cameraUnchanged === true && block8d.currentAuthoringSessionUnchanged === true &&
       block8d.targetRegistryUnchanged === true && block8d.layoutInterlockUnchanged === true &&
       block8d.quickRailUnchanged === true && block8d.contextLossCount === 0 &&
+      block8e.technicalPass === true && block8e.userValidation === 'PASS_CLOSED' &&
+      block8e.rasterBakeIntegration === 'IMPLEMENTED' &&
+      block8e.coordinateSpace === 'SOURCE_NORMALIZED_TOP_LEFT' &&
+      block8e.editorEntered === true && block8e.editorVisible === true &&
+      block8e.interlock === true && block8e.layoutMutualExclusion === true && block8e.directModeSwitch === true &&
+      block8e.singleClickNewPathBlocked === true && block8e.explicitNewPathWorks === true &&
+      block8e.manualUnlockRefused === true && block8e.editorExited === true &&
+      block8e.cameraRestored === true && block8e.layerLocal === true &&
+      block8e.multiPathOperations === true && block8e.explicitClosedPaths === true &&
+      block8e.cubicSegment === true && block8e.marqueeSelection === true &&
+      block8e.groupMoveExact === true && block8e.closeByFirstAnchor === true &&
+      block8e.stableIds === true && block8e.canvasRasterComposition === true &&
+      block8e.previewMaskApplied === true && block8e.bakeMaskApplied === true &&
+      block8e.frontBackBake === true && block8e.familyIndependence === true &&
+      block8e.sourceResolutionTemporaryMask === true && block8e.temporaryMaskDisposed === true &&
+      block8e.noPermanentPerLayerMaskTexture === true && block8e.opacityMetadataOnly === true &&
+      block8e.photoshopMutationCount === 0 && block8e.photoshopLastAppliedUnchanged === true &&
+      block8e.contextLossCount === 0 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -474,6 +493,7 @@ async function runSmokeTest(window) {
       block8b,
       block8c,
       block8d,
+      block8e,
       screenshotPath
     };
     writeJson(reportPath, report);

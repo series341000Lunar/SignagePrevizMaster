@@ -1,3 +1,17 @@
+import {
+  cloneVectorMask,
+  closeVectorMaskPath,
+  createEmptyVectorMask,
+  createVectorMaskPath,
+  createVectorMaskPoint,
+  deleteVectorMaskPoint,
+  setVectorMaskSegmentType,
+  splitVectorMaskSegment,
+  translateVectorMaskPoints,
+  updateVectorMaskPoint,
+  vectorMaskPath
+} from './vector-mask-model.js';
+
 const SUPPORTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg']);
 const SUPPORTED_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
 
@@ -97,6 +111,25 @@ export function screenPointToSourceUv(point, source, frameAspect, transform = DE
   return Object.freeze({ u, v, inside: u >= 0 && u <= 1 && v >= 0 && v <= 1 });
 }
 
+export function sourceUvToScreenPoint(uv, source, frameAspect, transform = DEFAULT_AUTHORING_TRANSFORM) {
+  const current = normalizeAuthoringTransform(transform);
+  const size = computeNormalizedImageSize({
+    sourceWidth: source.width,
+    sourceHeight: source.height,
+    frameAspect,
+    scale: current.scale
+  });
+  const localX = (finite(uv.u, 0) - 0.5) * size.width;
+  const localY = (finite(uv.v, 0) - 0.5) * size.height;
+  const radians = current.rotationDegrees * Math.PI / 180;
+  const cosine = Math.cos(radians);
+  const sine = Math.sin(radians);
+  return Object.freeze({
+    x: current.x + cosine * localX - sine * localY,
+    y: current.y + sine * localX + cosine * localY
+  });
+}
+
 export function transformToViewportRect(transform, source, frameAspect, viewport) {
   const current = normalizeAuthoringTransform(transform);
   const size = computeNormalizedImageSize({ sourceWidth: source.width, sourceHeight: source.height, frameAspect, scale: current.scale });
@@ -113,17 +146,18 @@ export class LayoutCameraInterlock {
   constructor(manualLocked = false) {
     this.manualLocked = Boolean(manualLocked);
     this.layoutEditing = false;
+    this.maskEditing = false;
     this.previousManualLocked = this.manualLocked;
   }
 
   requestManualLock(locked) {
-    if (this.layoutEditing) return false;
+    if (this.forcedLocked) return false;
     this.manualLocked = Boolean(locked);
     return true;
   }
 
   enterLayout() {
-    if (this.layoutEditing) return false;
+    if (this.forcedLocked) return false;
     this.previousManualLocked = this.manualLocked;
     this.layoutEditing = true;
     return true;
@@ -136,10 +170,28 @@ export class LayoutCameraInterlock {
     return true;
   }
 
-  get forcedLocked() { return this.layoutEditing; }
-  get cameraLocked() { return this.layoutEditing || this.manualLocked; }
+  enterMask() {
+    if (this.forcedLocked) return false;
+    this.previousManualLocked = this.manualLocked;
+    this.maskEditing = true;
+    return true;
+  }
+
+  exitMask() {
+    if (!this.maskEditing) return false;
+    this.maskEditing = false;
+    this.manualLocked = this.previousManualLocked;
+    return true;
+  }
+
+  get forcedLocked() { return this.layoutEditing || this.maskEditing; }
+  get cameraLocked() { return this.forcedLocked || this.manualLocked; }
   get controlsEnabled() { return !this.cameraLocked; }
-  get displayState() { return this.layoutEditing ? 'LAYOUT INTERLOCK' : (this.manualLocked ? 'LOCKED' : 'FREE'); }
+  get displayState() {
+    if (this.layoutEditing) return 'LAYOUT INTERLOCK';
+    if (this.maskEditing) return 'MASK INTERLOCK';
+    return this.manualLocked ? 'LOCKED' : 'FREE';
+  }
 }
 
 export class AuthoringPointerSession {
@@ -210,6 +262,8 @@ export class ScreenImageLayerStack {
     this.selectedByFamily = new Map();
     this.revision = 0;
     this.sequence = 0;
+    this.maskPathSequence = 0;
+    this.maskPointSequence = 0;
     this.idPrefix = String(idPrefix);
     this.disposeRuntime = typeof disposeRuntime === 'function' ? disposeRuntime : () => {};
   }
@@ -237,6 +291,29 @@ export class ScreenImageLayerStack {
     do {
       this.sequence += 1;
       candidate = `${this.idPrefix}-${this.sequence.toString(36).padStart(4, '0')}`;
+    } while (existing.has(candidate));
+    return candidate;
+  }
+
+  nextMaskPathId() {
+    const existing = new Set([...this.stacks.values()].flatMap((layers) => layers.flatMap((layer) => layer.vectorMask?.paths || []))
+      .map((pathValue) => pathValue.pathId));
+    let candidate;
+    do {
+      this.maskPathSequence += 1;
+      candidate = `mask-path-${String(this.maskPathSequence).padStart(4, '0')}`;
+    } while (existing.has(candidate));
+    return candidate;
+  }
+
+  nextMaskPointId() {
+    const existing = new Set([...this.stacks.values()].flatMap((layers) => layers.flatMap((layer) =>
+      (layer.vectorMask?.paths || []).flatMap((pathValue) => pathValue.points || [])))
+      .map((pointValue) => pointValue.pointId));
+    let candidate;
+    do {
+      this.maskPointSequence += 1;
+      candidate = `mask-point-${String(this.maskPointSequence).padStart(4, '0')}`;
     } while (existing.has(candidate));
     return candidate;
   }
@@ -272,6 +349,7 @@ export class ScreenImageLayerStack {
       visible: true,
       opacity: 1,
       blendMode: AUTHORING_BLEND_MODE,
+      vectorMask: createEmptyVectorMask(),
       order: 0,
       familyId: key,
       mappingMode: 'SCREEN_PROJECTED',
@@ -373,6 +451,133 @@ export class ScreenImageLayerStack {
     return true;
   }
 
+  mutateVectorMask(layerId, mutation) {
+    const layer = [...this.stacks.values()].flat().find((candidate) => candidate.layerId === String(layerId));
+    if (!layer) return false;
+    const changed = mutation(layer.vectorMask);
+    if (!changed) return false;
+    this.invalidatePixel(layer);
+    return true;
+  }
+
+  setVectorMaskEnabled(layerId, enabled) {
+    return this.mutateVectorMask(layerId, (mask) => {
+      const next = Boolean(enabled);
+      if (mask.enabled === next) return false;
+      mask.enabled = next;
+      return true;
+    });
+  }
+
+  setVectorMaskInvert(layerId, invert) {
+    return this.mutateVectorMask(layerId, (mask) => {
+      const next = Boolean(invert);
+      if (mask.invert === next) return false;
+      mask.invert = next;
+      return true;
+    });
+  }
+
+  addVectorMaskPath(layerId, { operation = 'ADD', initialPoint = null } = {}) {
+    let created = null;
+    this.mutateVectorMask(layerId, (mask) => {
+      created = createVectorMaskPath(this.nextMaskPathId(), operation);
+      if (initialPoint) created.points.push(createVectorMaskPoint(this.nextMaskPointId(), initialPoint.x, initialPoint.y));
+      mask.paths.push(created);
+      return true;
+    });
+    return created;
+  }
+
+  deleteVectorMaskPath(layerId, pathId) {
+    let removed = null;
+    this.mutateVectorMask(layerId, (mask) => {
+      const index = mask.paths.findIndex((candidate) => candidate.pathId === pathId);
+      if (index < 0) return false;
+      [removed] = mask.paths.splice(index, 1);
+      return true;
+    });
+    return removed;
+  }
+
+  clearVectorMask(layerId) {
+    return this.mutateVectorMask(layerId, (mask) => {
+      if (!mask.paths.length && !mask.enabled && !mask.invert) return false;
+      mask.enabled = false;
+      mask.invert = false;
+      mask.paths = [];
+      return true;
+    });
+  }
+
+  setVectorMaskPathEnabled(layerId, pathId, enabled) {
+    return this.mutateVectorMask(layerId, (mask) => {
+      const pathValue = vectorMaskPath(mask, pathId);
+      const next = Boolean(enabled);
+      if (!pathValue || pathValue.enabled === next) return false;
+      pathValue.enabled = next;
+      return true;
+    });
+  }
+
+  setVectorMaskPathOperation(layerId, pathId, operation) {
+    return this.mutateVectorMask(layerId, (mask) => {
+      const pathValue = vectorMaskPath(mask, pathId);
+      const next = String(operation).toUpperCase();
+      if (!pathValue || !['ADD', 'SUBTRACT'].includes(next) || pathValue.operation === next) return false;
+      pathValue.operation = next;
+      return true;
+    });
+  }
+
+  appendVectorMaskPoint(layerId, pathId, x, y) {
+    let created = null;
+    this.mutateVectorMask(layerId, (mask) => {
+      const pathValue = vectorMaskPath(mask, pathId);
+      if (!pathValue || pathValue.closed) return false;
+      created = createVectorMaskPoint(this.nextMaskPointId(), x, y);
+      pathValue.points.push(created);
+      return true;
+    });
+    return created;
+  }
+
+  closeVectorMaskPath(layerId, pathId) {
+    return this.mutateVectorMask(layerId, (mask) => closeVectorMaskPath(vectorMaskPath(mask, pathId)));
+  }
+
+  setVectorMaskSegmentType(layerId, pathId, pointId, segmentType) {
+    return this.mutateVectorMask(layerId, (mask) => setVectorMaskSegmentType(vectorMaskPath(mask, pathId), pointId, segmentType));
+  }
+
+  insertVectorMaskPoint(layerId, pathId, startPointId, t) {
+    let created = null;
+    this.mutateVectorMask(layerId, (mask) => {
+      created = splitVectorMaskSegment(vectorMaskPath(mask, pathId), startPointId, this.nextMaskPointId(), t);
+      return Boolean(created);
+    });
+    return created;
+  }
+
+  updateVectorMaskPoint(layerId, pathId, pointId, update) {
+    return this.mutateVectorMask(layerId, (mask) => updateVectorMaskPoint(vectorMaskPath(mask, pathId), pointId, update));
+  }
+
+  translateVectorMaskPoints(layerId, pointReferences, deltaX, deltaY) {
+    return this.mutateVectorMask(layerId, (mask) =>
+      translateVectorMaskPoints(mask, pointReferences, deltaX, deltaY) > 0
+    );
+  }
+
+  deleteVectorMaskPoint(layerId, pathId, pointId) {
+    let removed = null;
+    this.mutateVectorMask(layerId, (mask) => {
+      removed = deleteVectorMaskPoint(vectorMaskPath(mask, pathId), pointId);
+      return Boolean(removed);
+    });
+    return removed;
+  }
+
   setTransform(partial) {
     const layer = this.selectedLayer;
     if (!layer) return false;
@@ -411,6 +616,8 @@ export class ScreenImageLayerStack {
     this.selectedByFamily = new Map();
     this.activeFamilyId = null;
     this.revision = 0;
+    this.maskPathSequence = 0;
+    this.maskPointSequence = 0;
   }
 
   snapshot() {
@@ -418,8 +625,14 @@ export class ScreenImageLayerStack {
       activeFamilyId: this.activeFamilyId,
       revision: this.revision,
       sequence: this.sequence,
+      maskPathSequence: this.maskPathSequence,
+      maskPointSequence: this.maskPointSequence,
       selectedByFamily: [...this.selectedByFamily.entries()],
-      stacks: [...this.stacks.entries()].map(([familyId, layers]) => [familyId, layers.map((layer) => ({ ...layer, transform: { ...layer.transform } }))])
+      stacks: [...this.stacks.entries()].map(([familyId, layers]) => [familyId, layers.map((layer) => ({
+        ...layer,
+        transform: { ...layer.transform },
+        vectorMask: cloneVectorMask(layer.vectorMask)
+      }))])
     };
   }
 
@@ -429,12 +642,15 @@ export class ScreenImageLayerStack {
     this.activeFamilyId = snapshot.activeFamilyId;
     this.revision = snapshot.revision;
     this.sequence = Number.isSafeInteger(snapshot.sequence) && snapshot.sequence >= 0 ? snapshot.sequence : 0;
+    this.maskPathSequence = Number.isSafeInteger(snapshot.maskPathSequence) && snapshot.maskPathSequence >= 0 ? snapshot.maskPathSequence : 0;
+    this.maskPointSequence = Number.isSafeInteger(snapshot.maskPointSequence) && snapshot.maskPointSequence >= 0 ? snapshot.maskPointSequence : 0;
     this.selectedByFamily = new Map(snapshot.selectedByFamily);
     this.stacks = new Map(snapshot.stacks.map(([familyId, layers]) => [familyId, layers.map((layer) => ({
       ...layer,
       source: normalizeSource(layer.source),
       opacity: clamp(finite(layer.opacity, 1), 0, 1),
       blendMode: AUTHORING_BLEND_MODES.includes(layer.blendMode) ? layer.blendMode : AUTHORING_BLEND_MODE,
+      vectorMask: cloneVectorMask(layer.vectorMask || createEmptyVectorMask()),
       pixelRevision: Number.isSafeInteger(layer.pixelRevision) ? layer.pixelRevision : 1,
       bakedPixelRevision: layer.bakedPixelRevision ?? null,
       metadataRevision: Number.isSafeInteger(layer.metadataRevision) ? layer.metadataRevision : 1,
@@ -445,11 +661,21 @@ export class ScreenImageLayerStack {
     const prefix = `${this.idPrefix}-`;
     for (const layers of this.stacks.values()) {
       for (const layer of layers) {
-        if (!layer.layerId.startsWith(prefix)) continue;
-        const suffix = layer.layerId.slice(prefix.length);
-        if (!/^[0-9a-z]+$/i.test(suffix)) continue;
-        const sequence = Number.parseInt(suffix, 36);
-        if (Number.isSafeInteger(sequence)) this.sequence = Math.max(this.sequence, sequence);
+        if (layer.layerId.startsWith(prefix)) {
+          const suffix = layer.layerId.slice(prefix.length);
+          if (/^[0-9a-z]+$/i.test(suffix)) {
+            const sequence = Number.parseInt(suffix, 36);
+            if (Number.isSafeInteger(sequence)) this.sequence = Math.max(this.sequence, sequence);
+          }
+        }
+        for (const pathValue of layer.vectorMask.paths) {
+          const pathMatch = /^mask-path-(\d+)$/.exec(pathValue.pathId);
+          if (pathMatch) this.maskPathSequence = Math.max(this.maskPathSequence, Number(pathMatch[1]));
+          for (const pointValue of pathValue.points) {
+            const pointMatch = /^mask-point-(\d+)$/.exec(pointValue.pointId);
+            if (pointMatch) this.maskPointSequence = Math.max(this.maskPointSequence, Number(pointMatch[1]));
+          }
+        }
       }
     }
   }

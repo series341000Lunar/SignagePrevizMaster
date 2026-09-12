@@ -10,10 +10,15 @@ const mainSource = await readFile(path.join(appRoot, 'src', 'main.cjs'), 'utf8')
 const brokerSource = await readFile(path.join(appRoot, 'src', 'live-link-broker.cjs'), 'utf8');
 const liveLinkConfig = JSON.parse(await readFile(path.join(appRoot, 'src', 'live-link-config.json'), 'utf8'));
 const rendererSource = await readFile(path.join(appRoot, 'src', 'renderer.js'), 'utf8');
+const liveFrameInstallSource = rendererSource.slice(
+  rendererSource.indexOf('async function installLiveFrame('),
+  rendererSource.indexOf('function updateLinkStatus(')
+);
 const projectionBakeRuntimeSource = await readFile(path.join(appRoot, 'src', 'projection-bake-runtime.js'), 'utf8');
 const screenImageAuthoringSource = await readFile(path.join(appRoot, 'src', 'screen-image-authoring.js'), 'utf8');
 const authoringViewSettingsSource = await readFile(path.join(appRoot, 'src', 'authoring-view-settings.js'), 'utf8');
 const projectPersistenceSource = await readFile(path.join(appRoot, 'src', 'project-persistence.js'), 'utf8');
+const vectorMaskModelSource = await readFile(path.join(appRoot, 'src', 'vector-mask-model.js'), 'utf8');
 const projectStorageSource = await readFile(path.join(appRoot, 'src', 'project-storage.cjs'), 'utf8');
 const projectPreloadSource = await readFile(path.join(appRoot, 'src', 'project-preload.cjs'), 'utf8');
 const coordinateSource = await readFile(path.join(appRoot, 'src', 'canonical-coordinate.js'), 'utf8');
@@ -55,7 +60,7 @@ assert(
   'Renderer contains a remote runtime reference.'
 );
 assert(!/unpkg\.com|cdn\.jsdelivr\.net/i.test(`${rendererSource}\n${htmlSource}\n${builtRenderer}`), 'Renderer contains a CDN dependency.');
-assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
+assert(!/createElement\(['"]canvas/i.test(liveFrameInstallSource), 'Live frame installation creates an intermediate canvas.');
 assert(!/_TestSource/i.test(`${mainSource}\n${rendererSource}\n${htmlSource}`), 'Runtime references _TestSource.');
 assert(/DEFAULT_OUTSIDE_SIGNAGE_OPACITY = 0\.5/.test(authoringViewSettingsSource), 'Outside Signage Preview must default to 0.5 at View level.');
 assert(/class AuthoringViewSettings/.test(authoringViewSettingsSource), 'Outside Signage Preview must be owned by AuthoringViewSettings.');
@@ -65,7 +70,7 @@ assert(/id="authoring-coverage-mask"/.test(htmlSource) && /id="authoring-coverag
 assert(/window\.runOutsideSignagePreviewSmoke/.test(rendererSource), 'Outside Signage Preview runtime smoke must be exposed.');
 assert(/runOutsideSignagePreviewSmoke/.test(mainSource), 'Outside Signage Preview runtime smoke must be included in the desktop report.');
 assert(packageJson.packageManager === 'npm@12.0.2', 'packageManager must record the active npm version.');
-assert(packageJson.version === '0.8.4-block8d', 'Package version must identify the Block 8D project persistence foundation.');
+assert(packageJson.version === '0.8.5-block8e2', 'Package version must identify Block 8E-2 vector mask raster integration.');
 assert(packageJson.dependencies.ws === '8.21.3', 'ws must be pinned as a production dependency.');
 assert(packageJson.build.win.target[0].target === 'portable', 'Windows target must be portable.');
 assert(packageJson.build.win.target[0].arch.includes('x64'), 'Windows target must include x64.');
@@ -73,13 +78,36 @@ assert(packageJson.build.files.includes('src/live-link-broker.cjs'), 'Packaged a
 assert(packageJson.build.files.includes('src/live-link-config.json'), 'Packaged app must include live-link config.');
 assert(packageJson.build.files.includes('src/project-preload.cjs') &&
   packageJson.build.files.includes('src/project-storage.cjs') &&
-  packageJson.build.files.includes('src/project-persistence.js'),
+  packageJson.build.files.includes('src/project-persistence.js') &&
+  packageJson.build.files.includes('src/vector-mask-model.js'),
   'Packaged app must include the narrow Block 8D project persistence boundary.');
-assert(/PROJECT_SCHEMA_VERSION = 1/.test(projectPersistenceSource) &&
+assert(/PROJECT_SCHEMA_VERSION = 2/.test(projectPersistenceSource) &&
+  /PROJECT_SUPPORTED_SCHEMA_VERSIONS = Object\.freeze\(\[1, 2\]\)/.test(projectPersistenceSource) &&
   /PROJECT_SCHEMA_UNSUPPORTED/.test(projectPersistenceSource) &&
   /PROJECT_ASSET_PATH_INVALID/.test(projectPersistenceSource) &&
   /prepareProjectLoad/.test(projectPersistenceSource),
   'Block 8D must validate schema, paths, and transactional Load preparation.');
+assert(/SOURCE_NORMALIZED_TOP_LEFT/.test(vectorMaskModelSource) &&
+  /CUBIC_BEZIER/.test(vectorMaskModelSource) && /splitVectorMaskSegment/.test(vectorMaskModelSource) &&
+  /createEmptyVectorMask/.test(vectorMaskModelSource),
+  'Block 8E must provide a layer-local multi-path vector mask model.');
+assert(/id="vector-mask-edit"/.test(htmlSource) && /id="vector-mask-overlay"/.test(htmlSource) &&
+  /enterVectorMaskEdit/.test(rendererSource) && /beginVectorMaskSegmentInsert/.test(rendererSource),
+  'Block 8E must expose the mask editor and source-coordinate overlay interactions.');
+assert(/beginVectorMaskMarquee/.test(rendererSource) && /selectVectorMaskPointsInOverlayRect/.test(rendererSource) &&
+  /translateVectorMaskPoints/.test(screenImageAuthoringSource) && /tryCloseVectorMaskAtFirstPoint/.test(rendererSource),
+  'Block 8E must support marquee-selected anchor movement and first-anchor close gesture.');
+assert(/rasterizeVectorMask/.test(vectorMaskModelSource) &&
+  /rasterizeVectorMask/.test(rendererSource) && /authoringVectorMaskScratch/.test(rendererSource) &&
+  /makeTemporaryVectorMaskTexture/.test(projectionBakeRuntimeSource) &&
+  /source\.a \*= texture2D\(vectorMaskTexture, textureUv\)\.a/.test(projectionBakeRuntimeSource) &&
+  /temporaryVectorMask\?\.dispose\(\)/.test(projectionBakeRuntimeSource) &&
+  /permanentPerLayerVectorMaskTextures: 0/.test(projectionBakeRuntimeSource),
+  'Block 8E-2 Preview and Bake must share hard-edge paths and dispose the selected-layer source-resolution mask texture.');
+assert(/createVectorMaskPathByDoubleClick/.test(rendererSource) && /\+ NEW PATH/.test(htmlSource) &&
+  /authoringCameraInterlock\.maskEditing && !exitVectorMaskEdit\(\)/.test(rendererSource) &&
+  /authoringCameraInterlock\.layoutEditing && !exitLayoutEdit\(\)/.test(rendererSource),
+  'Block 8E editor must prevent single-click path creation and switch directly between Layout and Mask edit modes.');
 assert(/\.project\.json\.tmp-/.test(projectStorageSource) &&
   /before-manifest-commit/.test(projectStorageSource) &&
   /PROJECT_ASSET_MISSING/.test(projectStorageSource),
@@ -97,6 +125,9 @@ assert(/preload:\s*path\.join\(__dirname, 'project-preload\.cjs'\)/.test(mainSou
   'The secure BrowserWindow must install the project-specific preload bridge.');
 assert(/window\.runBlock8DProjectSmoke/.test(rendererSource) && /block8d\.technicalPass === true/.test(mainSource),
   'Block 8D runtime smoke must be part of integrated Electron acceptance.');
+assert(/window\.runBlock8EFoundationSmoke/.test(rendererSource) && /block8e\.technicalPass === true/.test(mainSource) &&
+  /rasterBakeIntegration:\s*'IMPLEMENTED'/.test(rendererSource),
+  'Block 8E-2 editor and raster smoke must be integrated and retain the recorded user closure state.');
 assert(/id="authoring-project-save-as"/.test(htmlSource) && /id="authoring-project-save"/.test(htmlSource) &&
   /id="authoring-project-open"/.test(htmlSource), 'Block 8D must expose minimal Save As, Save, and Open controls.');
 assert(/DROP project\.json HERE TO OPEN/.test(htmlSource) && /addEventListener\('drop'/.test(rendererSource),
@@ -152,7 +183,7 @@ assert(/if\s*\(!replacingLiveTexture\)\s*applyFit\(\)/.test(rendererSource), 'Li
 assert(/THREE\.RGBFormat/.test(rendererSource) && /THREE\.RGBAFormat/.test(rendererSource), 'Renderer must preserve RGB and RGBA layouts.');
 assert(/texture\.internalFormat\s*=\s*sourceIsSrgb\s*\?\s*'SRGB8'\s*:\s*'RGB8'/.test(rendererSource), 'RGB DataTexture must use a WebGL2 sized internal format without RGB-to-RGBA expansion.');
 assert(/metadata\.colorProfile\s*\|\|\s*metadata\.requestedColorProfile\s*\|\|\s*metadata\.documentColorProfile/.test(rendererSource), 'Live sRGB detection must retain the requested capture profile when ImageData omits its profile.');
-assert(!/createElement\(['"]canvas/i.test(rendererSource), 'Renderer creates an intermediate canvas.');
+assert(!/createElement\(['"]canvas/i.test(liveFrameInstallSource), 'Live frame installation creates an intermediate canvas.');
 assert(/new Uint8Array\(metadata\.totalBytes\)/.test(rendererSource), 'Renderer must preallocate the exact declared frame size.');
 assert(/uv\.setY\(index,\s*1\s*-\s*uv\.getY\(index\)\)/.test(rendererSource), 'Live orientation must be corrected without flipping the full pixel buffer.');
 assert(htmlSource.includes(`connect-src 'self' file: ${liveLinkConfig.endpoint}`), 'Renderer CSP must permit only the configured loopback WebSocket endpoint.');

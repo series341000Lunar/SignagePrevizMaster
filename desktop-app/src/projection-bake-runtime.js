@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { computeNormalizedImageSize, normalizeAuthoringTransform } from './screen-image-authoring.js';
+import { rasterizeVectorMask, vectorMaskContributionMode } from './vector-mask-model.js';
 
 const PREVIEW_WIDTH = 320;
 const SAMPLE_STRIDE = 2;
@@ -20,8 +21,10 @@ precision highp float;
 varying vec2 vCanonicalUv;
 varying vec4 vCameraClip;
 uniform sampler2D sourceTexture;
+uniform sampler2D vectorMaskTexture;
 uniform sampler2D validityMask;
 uniform float maskInvert;
+uniform float vectorMaskEnabled;
 uniform float authoringEnabled;
 uniform vec2 authoringCenter;
 uniform vec2 authoringSize;
@@ -34,7 +37,10 @@ vec4 sampleScreenSource(vec2 screenUv) {
   vec2 local = vec2(cosine * delta.x + sine * delta.y, -sine * delta.x + cosine * delta.y);
   vec2 sourceUv = local / authoringSize + 0.5;
   if (sourceUv.x < 0.0 || sourceUv.x > 1.0 || sourceUv.y < 0.0 || sourceUv.y > 1.0) return vec4(0.0);
-  return texture2D(sourceTexture, vec2(sourceUv.x, 1.0 - sourceUv.y));
+  vec2 textureUv = vec2(sourceUv.x, 1.0 - sourceUv.y);
+  vec4 source = texture2D(sourceTexture, textureUv);
+  if (vectorMaskEnabled > 0.5) source.a *= texture2D(vectorMaskTexture, textureUv).a;
+  return source;
 }
 void main() {
   if (vCameraClip.w <= 0.0) discard;
@@ -76,9 +82,11 @@ precision highp float;
 varying vec2 vCanonicalUv;
 varying vec4 vCameraClip;
 uniform sampler2D sourceTexture;
+uniform sampler2D vectorMaskTexture;
 uniform sampler2D visibilityDepth;
 uniform sampler2D validityMask;
 uniform float maskInvert;
+uniform float vectorMaskEnabled;
 uniform float visibilityDepthEpsilon;
 uniform float authoringEnabled;
 uniform vec2 authoringCenter;
@@ -92,7 +100,10 @@ vec4 sampleScreenSource(vec2 screenUv) {
   vec2 local = vec2(cosine * delta.x + sine * delta.y, -sine * delta.x + cosine * delta.y);
   vec2 sourceUv = local / authoringSize + 0.5;
   if (sourceUv.x < 0.0 || sourceUv.x > 1.0 || sourceUv.y < 0.0 || sourceUv.y > 1.0) return vec4(0.0);
-  return texture2D(sourceTexture, vec2(sourceUv.x, 1.0 - sourceUv.y));
+  vec2 textureUv = vec2(sourceUv.x, 1.0 - sourceUv.y);
+  vec4 source = texture2D(sourceTexture, textureUv);
+  if (vectorMaskEnabled > 0.5) source.a *= texture2D(vectorMaskTexture, textureUv).a;
+  return source;
 }
 void main() {
   if (vCameraClip.w <= 0.0) discard;
@@ -283,6 +294,38 @@ function makeScalarMaskTexture(name, width, height, values) {
   texture.minFilter = THREE.LinearFilter; texture.magFilter = THREE.LinearFilter;
   texture.wrapS = THREE.ClampToEdgeWrapping; texture.wrapT = THREE.ClampToEdgeWrapping; texture.needsUpdate = true;
   return texture;
+}
+
+function makeTemporaryVectorMaskTexture(mask, width, height) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { alpha: true });
+  const raster = rasterizeVectorMask(context, mask, width, height);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.name = 'BLOCK8E_SELECTED_LAYER_TEMPORARY_VECTOR_MASK';
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.flipY = true;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
+  let disposed = false;
+  return {
+    canvas,
+    texture,
+    raster,
+    get disposed() { return disposed; },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      texture.dispose();
+      canvas.width = 1;
+      canvas.height = 1;
+    }
+  };
 }
 
 function calibrationCamera(profile) {
@@ -529,7 +572,7 @@ export class ProjectionBakeRuntime {
     return this.resources;
   }
 
-  async run({ profile, surfaceMeshes, occluderMeshes, previewCanvases, repetitions = 1, maskMode = 'profile', authoringSource = null, authoringTransform = null }) {
+  async run({ profile, surfaceMeshes, occluderMeshes, previewCanvases, repetitions = 1, maskMode = 'profile', authoringSource = null, authoringTransform = null, authoringVectorMask = null }) {
     if (!Array.isArray(surfaceMeshes) || surfaceMeshes.length === 0) throw new Error('Projection Bake requires at least one bound Surface mesh.');
     for (const mesh of surfaceMeshes) if (!mesh.geometry?.getAttribute('uv')) throw new Error(`Surface ${mesh.name} has no authored TEXCOORD_0.`);
     if (!Array.isArray(occluderMeshes) || occluderMeshes.length === 0) throw new Error('Projection Bake requires the exact building depth occluder mesh.');
@@ -565,10 +608,29 @@ export class ProjectionBakeRuntime {
         scale: transform.scale
       })
       : { width: 1, height: 1 };
+    const vectorMaskMode = authoringSource ? vectorMaskContributionMode(authoringVectorMask) : 'PASS_THROUGH';
+    const temporaryVectorMask = authoringSource && vectorMaskMode !== 'PASS_THROUGH'
+      ? makeTemporaryVectorMaskTexture(authoringVectorMask, authoringSource.width, authoringSource.height)
+      : null;
+    const vectorMaskDiagnostics = {
+      coordinateSpace: 'SOURCE_NORMALIZED_TOP_LEFT',
+      contributionMode: vectorMaskMode,
+      enabled: Boolean(authoringVectorMask?.enabled),
+      invert: Boolean(authoringVectorMask?.invert),
+      applied: Boolean(temporaryVectorMask),
+      width: temporaryVectorMask?.raster.width || null,
+      height: temporaryVectorMask?.raster.height || null,
+      contributingPathCount: temporaryVectorMask?.raster.contributingPathCount || 0,
+      sourceResolutionRaster: Boolean(temporaryVectorMask),
+      temporaryTextureAllocated: Boolean(temporaryVectorMask),
+      temporaryTextureDisposed: !temporaryVectorMask
+    };
     const commonUniforms = {
       sourceTexture: { value: resources.source.texture },
+      vectorMaskTexture: { value: temporaryVectorMask?.texture || resources.fullWhiteMask },
       validityMask: { value: validityMask },
       maskInvert: { value: maskInvert },
+      vectorMaskEnabled: { value: temporaryVectorMask ? 1 : 0 },
       authoringEnabled: { value: authoringSource ? 1 : 0 },
       authoringCenter: { value: new THREE.Vector2(transform.x, transform.y) },
       authoringSize: { value: new THREE.Vector2(authoringSize.width, authoringSize.height) },
@@ -663,6 +725,7 @@ export class ProjectionBakeRuntime {
           transform,
           normalizedSize: authoringSize,
           productionSampling: 'ORIGINAL_FILE_BITMAP_DIRECT_TEXTURE_SAMPLE',
+          vectorMask: vectorMaskDiagnostics,
           blendMode: 'NORMAL'
         } : { enabled: false },
         directProjection: {
@@ -688,12 +751,15 @@ export class ProjectionBakeRuntime {
           centerProbe: { gpuWorldNormalBytes: Array.from(visibilityProbePixels), cpuRaycastUv: probeHit?.uv?.toArray() || null, meshName: probeHit?.object?.name || null } },
         uvPolicy: profile.surfaceBinding.uvPolicy, canonicalOrientation: profile.canonicalOrientation,
         colorPolicy: 'RAW_STRAIGHT_RGBA_NO_TONE_MAPPING_MASK_LINEAR_SCALAR',
-        resourcePolicy: { reusableTargets: true, runCount: this.runCount, disposeCount: this.disposeCount, textureCounts, stableAcrossRuns: Math.max(...textureCounts) - Math.min(...textureCounts) <= 1 },
+        resourcePolicy: { reusableTargets: true, runCount: this.runCount, disposeCount: this.disposeCount, textureCounts, stableAcrossRuns: Math.max(...textureCounts) - Math.min(...textureCounts) <= 1,
+          permanentPerLayerVectorMaskTextures: 0, temporaryVectorMask: vectorMaskDiagnostics },
         ...analyze(profile, resources.source, directPixels, bakePixels, reprojectPixels, visibilityDiagnosticPixels)
       };
     } finally {
       restoreRenderer(this.renderer, rendererState);
       visibilityMaterial.dispose(); occluderDepthMaterial.dispose(); directMaterial.dispose(); bakeMaterial.dispose(); visibilityDiagnosticMaterial.dispose(); reprojectMaterial.dispose();
+      temporaryVectorMask?.dispose();
+      vectorMaskDiagnostics.temporaryTextureDisposed = !temporaryVectorMask || temporaryVectorMask.disposed;
     }
   }
 

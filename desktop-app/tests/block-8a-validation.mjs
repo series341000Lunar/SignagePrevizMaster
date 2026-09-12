@@ -108,7 +108,7 @@ assert.match(rendererSource, /setPointerCapture\(event\.pointerId\)/);
 assert.match(rendererSource, /event\.preventDefault\(\)/);
 assert.match(rendererSource, /event\.stopPropagation\(\)/);
 assert.match(rendererSource, /window\.addEventListener\('blur', cancelAuthoringPointerInteraction\)/);
-assert.match(rendererSource, /siteAnamorphicFamilySelect\.disabled = !familyContext \|\| authoringCameraInterlock\.layoutEditing \|\| authoringPointerSession\.active/);
+assert.match(rendererSource, /siteAnamorphicFamilySelect\.disabled = !familyContext \|\| authoringCameraInterlock\.forcedLocked \|\| authoringPointerSession\.active/);
 assert.match(rendererSource, /controlsSite\.enabled =[\s\S]*!authoringLocked/);
 assert.match(rendererSource, /window\.runBlock8AInterlockSmoke/);
 assert.match(rendererSource, /window\.runBlock8AAuthoringBakeSmoke/);
