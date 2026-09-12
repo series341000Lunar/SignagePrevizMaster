@@ -350,6 +350,19 @@ function canvasToPngBlob(canvas) {
   ));
 }
 
+function applyExportOpacity(canvas, opacity) {
+  const normalized = Math.min(1, Math.max(0, Number.isFinite(Number(opacity)) ? Number(opacity) : 1));
+  if (normalized === 1) return normalized;
+  const context = canvas.getContext('2d', { alpha: true });
+  context.save();
+  context.globalCompositeOperation = 'destination-in';
+  context.globalAlpha = normalized;
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.restore();
+  return normalized;
+}
+
 function compareBuffers({ sourcePixels = null, firstPixels = null, secondPixels, width, height }) {
   let absoluteError = 0; let squaredError = 0; let comparedChannels = 0; let comparedVisibleSampleCount = 0;
   const histogram = new Uint32Array(256);
@@ -746,7 +759,7 @@ export class ProjectionBakeRuntime {
     };
   }
 
-  async exportPng(kind) {
+  async exportPng(kind, { opacity = 1 } = {}) {
     if (!this.hasOutputs()) throw new Error('Run the Projection Bake before exporting PNG files.');
     const profile = this.resources.profile;
     const prefix = this.resources.source.kind === 'ORIGINAL_FILE_BITMAP' ? `Block8A_${profile.familySlug}` : `Block6B_${profile.familySlug}`;
@@ -757,11 +770,17 @@ export class ProjectionBakeRuntime {
       reproject: { fileName: `${prefix}_CanonicalReprojected_${profile.workingResolution.width}x${profile.workingResolution.height}.png`, target: this.resources.reprojectTarget }
     };
     const selected = exports[kind]; if (!selected) throw new Error(`Unknown Projection Bake PNG export: ${kind}`);
-    const canvas = selected.canvas || targetToTopLeftCanvas(this.renderer, selected.target);
+    const canvas = selected.canvas ? document.createElement('canvas') : targetToTopLeftCanvas(this.renderer, selected.target);
+    if (selected.canvas) {
+      canvas.width = selected.canvas.width;
+      canvas.height = selected.canvas.height;
+      canvas.getContext('2d', { alpha: true }).drawImage(selected.canvas, 0, 0);
+    }
+    const appliedOpacity = applyExportOpacity(canvas, opacity);
     try {
       const blob = await canvasToPngBlob(canvas);
-      return { kind, familyId: profile.familyId, fileName: selected.fileName, width: canvas.width, height: canvas.height, mimeType: blob.type, bytes: blob.size, blob };
-    } finally { if (!selected.canvas) { canvas.width = 1; canvas.height = 1; } }
+      return { kind, familyId: profile.familyId, fileName: selected.fileName, width: canvas.width, height: canvas.height, opacity: appliedOpacity, mimeType: blob.type, bytes: blob.size, blob };
+    } finally { canvas.width = 1; canvas.height = 1; }
   }
 
   dispose() {

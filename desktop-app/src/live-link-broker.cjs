@@ -4,6 +4,47 @@ const { WebSocket, WebSocketServer } = require('ws');
 
 const ROLES = new Set(['photoshop', 'renderer']);
 const BAKE_OUTPUT_KINDS = new Set(['CANONICAL', 'DIRECT']);
+const BAKE_BLEND_MODES = new Set(['NORMAL', 'MULTIPLY', 'SCREEN', 'LINEAR_DODGE']);
+const BAKE_OPACITY_TOLERANCE = (0.5 / 255) + 0.000001;
+
+function bakeAckFailure(code, field, expected, actual) {
+  const error = new Error(`${field} expected ${JSON.stringify(expected)} but received ${JSON.stringify(actual)}.`);
+  error.code = code;
+  error.field = field;
+  error.expected = expected;
+  error.actual = actual;
+  return error;
+}
+
+function validateBakeApplyAck(message, metadata, receiveAcknowledged = true) {
+  if (!receiveAcknowledged) throw bakeAckFailure('ACK_STATE_MISMATCH', 'receiveAcknowledged', true, false);
+  if (message.jobId !== metadata.jobId) throw bakeAckFailure('ACK_JOB_ID_MISMATCH', 'jobId', metadata.jobId, message.jobId);
+  if (message.targetId !== metadata.targetId) throw bakeAckFailure('ACK_TARGET_ID_MISMATCH', 'targetId', metadata.targetId, message.targetId);
+  if (message.targetSessionId !== metadata.targetSessionId) throw bakeAckFailure('ACK_TARGET_SESSION_MISMATCH', 'targetSessionId', metadata.targetSessionId, message.targetSessionId);
+  if (message.targetDocumentId !== metadata.targetDocumentId) throw bakeAckFailure('ACK_DOCUMENT_ID_MISMATCH', 'targetDocumentId', metadata.targetDocumentId, message.targetDocumentId);
+
+  const hasAuthoringMetadata = typeof metadata.authoringLayerId === 'string' && metadata.authoringLayerId.length > 0;
+  if (!hasAuthoringMetadata) {
+    if (!Number.isSafeInteger(message.layerId) || message.layerId <= 0) throw bakeAckFailure('ACK_PHOTOSHOP_LAYER_ID_MISMATCH', 'layerId', 'positive integer', message.layerId);
+    return true;
+  }
+
+  if (message.documentId !== metadata.documentId) throw bakeAckFailure('ACK_DOCUMENT_ID_MISMATCH', 'documentId', metadata.documentId, message.documentId);
+  if (message.familyId !== metadata.familyId) throw bakeAckFailure('ACK_FAMILY_ID_MISMATCH', 'familyId', metadata.familyId, message.familyId);
+  if (message.outputKind !== metadata.outputKind) throw bakeAckFailure('ACK_OUTPUT_KIND_MISMATCH', 'outputKind', metadata.outputKind, message.outputKind);
+  if (message.authoringLayerId !== metadata.authoringLayerId) throw bakeAckFailure('ACK_AUTHORING_LAYER_ID_MISMATCH', 'authoringLayerId', metadata.authoringLayerId, message.authoringLayerId);
+  if (!Number.isSafeInteger(message.photoshopLayerId) || message.photoshopLayerId <= 0) throw bakeAckFailure('ACK_PHOTOSHOP_LAYER_ID_MISMATCH', 'photoshopLayerId', 'positive integer', message.photoshopLayerId);
+  if (message.metadataRevision !== metadata.metadataRevision) throw bakeAckFailure('ACK_METADATA_REVISION_MISMATCH', 'metadataRevision', metadata.metadataRevision, message.metadataRevision);
+  if (!Number.isFinite(message.opacity) || Math.abs(message.opacity - metadata.opacity) > BAKE_OPACITY_TOLERANCE) throw bakeAckFailure('ACK_OPACITY_MISMATCH', 'opacity', metadata.opacity, message.opacity);
+  if (message.blendMode !== metadata.blendMode) throw bakeAckFailure('ACK_BLEND_MODE_MISMATCH', 'blendMode', metadata.blendMode, message.blendMode);
+  if (message.visible !== metadata.visible) throw bakeAckFailure('ACK_VISIBILITY_MISMATCH', 'visible', metadata.visible, message.visible);
+  if (message.order !== metadata.order) throw bakeAckFailure('ACK_ORDER_MISMATCH', 'order', metadata.order, message.order);
+  if (!Array.isArray(message.appliedLayers)) throw bakeAckFailure('ACK_APPLIED_LAYERS_MISMATCH', 'appliedLayers', 'array', message.appliedLayers);
+  const selectedApplied = message.appliedLayers.find((layer) => layer?.authoringLayerId === metadata.authoringLayerId);
+  if (!selectedApplied) throw bakeAckFailure('ACK_AUTHORING_LAYER_ID_MISMATCH', 'appliedLayers.authoringLayerId', metadata.authoringLayerId, null);
+  if (selectedApplied.photoshopLayerId !== message.photoshopLayerId) throw bakeAckFailure('ACK_PHOTOSHOP_LAYER_ID_MISMATCH', 'appliedLayers.photoshopLayerId', message.photoshopLayerId, selectedApplied.photoshopLayerId);
+  return true;
+}
 
 function validateBakeMetadata(message, config) {
   const integerFields = ['jobId', 'targetDocumentId', 'width', 'height', 'components', 'componentSize', 'totalBytes', 'chunkSize', 'chunkCount'];
@@ -15,6 +56,25 @@ function validateBakeMetadata(message, config) {
   if (typeof message.outputId !== 'string' || !message.outputId || message.outputId.length > 256) throw new Error('outputId must be a non-empty string of at most 256 characters.');
   if (typeof message.targetId !== 'string' || !message.targetId || message.targetId.length > 128) throw new Error('targetId must be a non-empty string of at most 128 characters.');
   if (typeof message.targetSessionId !== 'string' || !message.targetSessionId || message.targetSessionId.length > 128) throw new Error('targetSessionId must be a non-empty string of at most 128 characters.');
+  const hasAuthoringMetadata = message.authoringLayerId !== undefined || message.authoringStack !== undefined;
+  if (hasAuthoringMetadata) {
+    if (typeof message.authoringLayerId !== 'string' || !message.authoringLayerId || message.authoringLayerId.length > 128) throw new Error('authoringLayerId must be a non-empty string of at most 128 characters.');
+    if (!Array.isArray(message.authoringStack) || message.authoringStack.length > 256) throw new Error('authoringStack must be a bounded array.');
+    const authoringLayerIds = new Set();
+    for (const layer of message.authoringStack) {
+      if (typeof layer.authoringLayerId !== 'string' || !layer.authoringLayerId || authoringLayerIds.has(layer.authoringLayerId)) throw new Error('authoringStack contains an invalid or duplicate layerId.');
+      if (!Number.isSafeInteger(layer.metadataRevision) || layer.metadataRevision <= 0 || !Number.isSafeInteger(layer.order) || layer.order < 0 || !Number.isFinite(layer.opacity) || layer.opacity < 0 || layer.opacity > 1 || !BAKE_BLEND_MODES.has(layer.blendMode) || typeof layer.visible !== 'boolean') {
+        throw new Error('authoringStack composite metadata is invalid.');
+      }
+      authoringLayerIds.add(layer.authoringLayerId);
+    }
+    if (!authoringLayerIds.has(message.authoringLayerId)) throw new Error('authoringLayerId is absent from authoringStack.');
+    const selected = message.authoringStack.find((layer) => layer.authoringLayerId === message.authoringLayerId);
+    if (message.documentId !== message.targetDocumentId) throw new Error('documentId must exactly match targetDocumentId.');
+    if (message.metadataRevision !== selected.metadataRevision || message.opacity !== selected.opacity || message.blendMode !== selected.blendMode || message.visible !== selected.visible || message.order !== selected.order) {
+      throw new Error('Selected authoring metadata must exactly match its authoringStack entry.');
+    }
+  }
   if (message.bindingKey !== `${message.familyId}:${message.outputKind}`) throw new Error('bindingKey must exactly match familyId:outputKind.');
   if (message.components !== 4 || message.componentSize !== 8 || message.pixelFormat !== 'RGBA') throw new Error('Block 7 accepts only RGBA8 output.');
   if (message.alpha !== 'STRAIGHT' || message.orientation !== 'TOP_LEFT') throw new Error('Block 7 requires straight alpha and TOP_LEFT orientation.');
@@ -311,7 +371,13 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
         }, config.ackTimeoutMs)
       };
       sendJson(activeBake.photoshop, activeBake.metadata);
-      emit('bake-begin', { jobId: message.jobId, familyId: message.familyId, outputKind: message.outputKind, targetId: message.targetId, totalBytes: message.totalBytes });
+      if (message.authoringLayerId) console.info('[LUUX][Block8C][BrokerRoute]', JSON.stringify({
+        jobId: message.jobId, targetSessionId: message.targetSessionId, targetId: message.targetId,
+        documentId: message.documentId, familyId: message.familyId, outputKind: message.outputKind,
+        authoringLayerId: message.authoringLayerId, metadataRevision: message.metadataRevision,
+        opacity: message.opacity, blendMode: message.blendMode, visible: message.visible, order: message.order
+      }));
+      emit('bake-begin', { jobId: message.jobId, familyId: message.familyId, outputKind: message.outputKind, targetId: message.targetId, authoringLayerId: message.authoringLayerId || null, metadataRevision: message.metadataRevision || null, totalBytes: message.totalBytes });
     } catch (error) {
       sendJson(socket, { type: 'BAKE_ERROR', jobId: message.jobId ?? null, code: 'INVALID_BAKE_METADATA', message: error.message });
       emit('bake-rejected', { jobId: message.jobId ?? null, code: 'INVALID_BAKE_METADATA', message: error.message });
@@ -378,7 +444,12 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
   }
 
   function handleBakeResponse(socket, message) {
-    if (socket !== clients.photoshop || !activeBake || activeBake.photoshop !== socket || message.jobId !== activeBake.metadata.jobId) {
+    if (socket !== clients.photoshop || !activeBake || activeBake.photoshop !== socket) {
+      sendJson(socket, { type: 'BAKE_ABORT', jobId: message.jobId ?? null, code: 'UNEXPECTED_BAKE_RESPONSE', message: 'Photoshop response does not match the active bake.' });
+      return;
+    }
+    if (message.jobId !== activeBake.metadata.jobId) {
+      if (message.type === 'BAKE_APPLIED') return abortActiveBake('ACK_JOB_ID_MISMATCH', `jobId expected ${activeBake.metadata.jobId} but received ${message.jobId}.`);
       sendJson(socket, { type: 'BAKE_ABORT', jobId: message.jobId ?? null, code: 'UNEXPECTED_BAKE_RESPONSE', message: 'Photoshop response does not match the active bake.' });
       return;
     }
@@ -396,16 +467,21 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       return;
     }
     if (message.type === 'BAKE_APPLIED') {
-      if (!activeBake.receiveAcknowledged ||
-          message.targetId !== activeBake.metadata.targetId ||
-          message.targetSessionId !== activeBake.metadata.targetSessionId ||
-          message.targetDocumentId !== activeBake.metadata.targetDocumentId ||
-          !Number.isSafeInteger(message.layerId) || message.layerId <= 0) {
-        return abortActiveBake('INVALID_BAKE_APPLY_ACK', 'Photoshop apply acknowledgement is invalid.');
+      try {
+        validateBakeApplyAck(message, activeBake.metadata, activeBake.receiveAcknowledged);
+      } catch (error) {
+        return abortActiveBake(error.code || 'ACK_VALIDATION_FAILED', error.message);
       }
       if (activeBake.timer) clearTimeout(activeBake.timer);
       sendJson(activeBake.renderer, message);
-      emit('bake-applied', { jobId: message.jobId, targetId: message.targetId, targetDocumentId: message.targetDocumentId, layerId: message.layerId });
+      if (activeBake.metadata.authoringLayerId) console.info('[LUUX][Block8C][BrokerAckValidated]', JSON.stringify({
+        jobId: message.jobId, targetSessionId: message.targetSessionId, targetId: message.targetId,
+        documentId: message.documentId, familyId: message.familyId, outputKind: message.outputKind,
+        authoringLayerId: message.authoringLayerId, photoshopLayerId: message.photoshopLayerId,
+        metadataRevision: message.metadataRevision, opacity: message.opacity,
+        blendMode: message.blendMode, visible: message.visible, order: message.order
+      }));
+      emit('bake-applied', { jobId: message.jobId, targetId: message.targetId, targetDocumentId: message.targetDocumentId, authoringLayerId: message.authoringLayerId || null, photoshopLayerId: message.photoshopLayerId || message.layerId });
       activeBake = null;
       return;
     }
@@ -657,4 +733,4 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
   };
 }
 
-module.exports = { createLiveLinkBroker, validateBakeMetadata, validateBakeTargetRegistrySnapshot };
+module.exports = { createLiveLinkBroker, validateBakeMetadata, validateBakeTargetRegistrySnapshot, validateBakeApplyAck };

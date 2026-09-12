@@ -149,6 +149,16 @@ const authoringRotateHandle = document.querySelector('#authoring-rotate-handle')
 const outsideSignageOpacity = document.querySelector('#outside-signage-opacity');
 const outsideSignageOpacityValue = document.querySelector('#outside-signage-opacity-value');
 const outsideSignagePresetButtons = [...document.querySelectorAll('[data-outside-signage-preset]')];
+const authoringOpacity = document.querySelector('#authoring-opacity');
+const authoringOpacityValue = document.querySelector('#authoring-opacity-value');
+const authoringBlendMode = document.querySelector('#authoring-blend-mode');
+const authoringMetadataState = document.querySelector('#authoring-metadata-state');
+const authoringQuickRail = document.querySelector('#authoring-quick-rail');
+const authoringQuickToggle = document.querySelector('#authoring-quick-toggle');
+const authoringQuickMenu = document.querySelector('#authoring-quick-menu');
+const quickBakeCurrent = document.querySelector('#quick-bake-current');
+const quickSendDirect = document.querySelector('#quick-send-direct');
+const quickSendDestination = document.querySelector('#quick-send-destination');
 const authoringTransformInputs = {
   x: document.querySelector('#authoring-transform-x'),
   y: document.querySelector('#authoring-transform-y'),
@@ -194,6 +204,12 @@ const oneButton = document.querySelector('#one-button');
 const twoButton = document.querySelector('#two-button');
 const fourButton = document.querySelector('#four-button');
 const DEFAULT_ACTIVE_VIEW = 'site-3d';
+const AUTHORING_CANVAS_BLEND = Object.freeze({
+  NORMAL: 'source-over',
+  MULTIPLY: 'multiply',
+  SCREEN: 'screen',
+  LINEAR_DODGE: 'lighter'
+});
 
 const renderer = new THREE.WebGLRenderer({
   canvas,
@@ -307,6 +323,8 @@ const state = {
     userValidation: 'PASS_CLOSED',
     block8BUserValidation: 'PASS_CLOSED',
     outsidePreviewUserValidation: 'PASS_CLOSED',
+    railExpanded: false,
+    reorderDrag: null,
     coverageCache: {
       key: null,
       canvas: authoringCoverageMask,
@@ -1156,10 +1174,12 @@ function drawAuthoringCoveragePreview(frame) {
       rect.height * pixelRatio
     );
     layerContext.restore();
-    context.globalCompositeOperation = 'source-over';
-    context.globalAlpha = 1;
+    context.globalCompositeOperation = AUTHORING_CANVAS_BLEND[layer.blendMode] || 'source-over';
+    context.globalAlpha = layer.opacity;
     context.drawImage(authoringLayerComposite, 0, 0);
   }
+  context.globalCompositeOperation = 'source-over';
+  context.globalAlpha = 1;
 }
 
 function syncAuthoringOverlay() {
@@ -1212,6 +1232,14 @@ function syncAuthoringLayerList(available) {
     row.setAttribute('role', 'option');
     row.setAttribute('aria-selected', String(layer.layerId === authoringSession.selectedLayerId));
     row.dataset.layerId = layer.layerId;
+    const drag = document.createElement('button');
+    drag.type = 'button';
+    drag.className = 'authoring-layer-drag';
+    drag.textContent = '⠿';
+    drag.title = 'Drag to reorder';
+    drag.setAttribute('aria-label', `Reorder ${layer.source.filename}`);
+    drag.disabled = !available;
+    drag.addEventListener('pointerdown', (event) => beginLayerReorderDrag(event, layer.layerId));
     const visibility = document.createElement('button');
     visibility.type = 'button';
     visibility.className = 'authoring-layer-visibility';
@@ -1234,9 +1262,91 @@ function syncAuthoringLayerList(available) {
       event.preventDefault(); event.stopPropagation();
       selectAuthoringLayer(layer.layerId);
     });
-    row.append(visibility, select);
+    row.append(drag, visibility, select);
     authoringLayerList.append(row);
   }
+}
+
+function clearLayerReorderIndicators() {
+  for (const row of authoringLayerList.querySelectorAll('.authoring-layer-row')) {
+    row.classList.remove('dragging', 'insert-before', 'insert-after');
+  }
+}
+
+function updateLayerReorderDrag(event) {
+  const drag = state.authoring.reorderDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const rows = [...authoringLayerList.querySelectorAll('.authoring-layer-row')];
+  const sourceIndex = rows.findIndex((row) => row.dataset.layerId === drag.layerId);
+  let slot = rows.findIndex((row) => event.clientY < row.getBoundingClientRect().top + row.getBoundingClientRect().height * 0.5);
+  if (slot < 0) slot = rows.length;
+  drag.targetIndex = Math.max(0, Math.min(rows.length - 1, slot > sourceIndex ? slot - 1 : slot));
+  clearLayerReorderIndicators();
+  rows[sourceIndex]?.classList.add('dragging');
+  if (slot >= rows.length) rows.at(-1)?.classList.add('insert-after');
+  else rows[slot]?.classList.add('insert-before');
+}
+
+function finishLayerReorderDrag(event, cancelled = false) {
+  const drag = state.authoring.reorderDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  event.stopPropagation();
+  drag.handle.releasePointerCapture?.(event.pointerId);
+  drag.handle.removeEventListener('pointermove', updateLayerReorderDrag);
+  drag.handle.removeEventListener('pointerup', finishLayerReorderDrag);
+  drag.handle.removeEventListener('pointercancel', cancelLayerReorderDrag);
+  state.authoring.reorderDrag = null;
+  clearLayerReorderIndicators();
+  if (!cancelled) reorderAuthoringLayer(drag.layerId, drag.targetIndex, 'drag');
+}
+
+function cancelLayerReorderDrag(event) { finishLayerReorderDrag(event, true); }
+
+function beginLayerReorderDrag(event, layerId) {
+  if (state.authoring.reorderDrag || !isProjectionAuthoringContext()) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const handle = event.currentTarget;
+  const sourceIndex = authoringSession.layers.findIndex((layer) => layer.layerId === layerId);
+  state.authoring.reorderDrag = { pointerId: event.pointerId, layerId, targetIndex: sourceIndex, handle };
+  handle.setPointerCapture?.(event.pointerId);
+  handle.addEventListener('pointermove', updateLayerReorderDrag);
+  handle.addEventListener('pointerup', finishLayerReorderDrag);
+  handle.addEventListener('pointercancel', cancelLayerReorderDrag);
+  clearLayerReorderIndicators();
+  authoringLayerList.querySelector(`[data-layer-id="${layerId}"]`)?.classList.add('dragging');
+}
+
+function selectedProjectionResultReady(profile = currentProjectionBakeProfile()) {
+  return Boolean(profile && authoringSession.selectedLayer?.visible &&
+    projectionBakeRuntime.hasOutputs() &&
+    projectionBakeRuntime.resources?.profileId === profile.id &&
+    state.projectionBake.result?.authoringLayerId === authoringSession.selectedLayerId &&
+    !authoringSession.pixelDirty);
+}
+
+function syncAuthoringQuickRail(available) {
+  const profile = currentProjectionBakeProfile();
+  const visible = Boolean(available && state.activeView === 'site-3d');
+  authoringQuickRail.hidden = !visible;
+  if (!visible) state.authoring.railExpanded = false;
+  authoringQuickToggle.setAttribute('aria-expanded', String(state.authoring.railExpanded));
+  authoringQuickMenu.hidden = !state.authoring.railExpanded;
+  const busy = state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  quickBakeCurrent.disabled = !visible || !authoringSession.selectedLayer?.visible || busy;
+  const destination = profile ? resolveReverseBakeTarget(profile.familyId, 'DIRECT') : { target: null };
+  const resolution = expectedProjectionOutputResolution(profile, 'DIRECT');
+  const target = destination.target;
+  const targetReady = Boolean(target && target.status === 'READY' && target.width === resolution?.width &&
+    target.height === resolution?.height && target.documentMode === 'RGB' && target.documentDepth === 8);
+  quickSendDirect.disabled = !visible || !selectedProjectionResultReady(profile) || !state.link.rendererHandshake ||
+    !state.link.photoshopConnected || !targetReady || busy;
+  quickSendDestination.textContent = target
+    ? `${target.documentName} · ${target.width} × ${target.height} · ${target.status}`
+    : 'NO DIRECT TARGET';
 }
 
 function syncAuthoringUi() {
@@ -1252,6 +1362,12 @@ function syncAuthoringUi() {
   authoringSourceMeta.textContent = source
     ? `${source.width} × ${source.height} · ${source.mimeType === 'image/png' ? 'PNG' : 'JPEG'} · Alpha ${source.hasAlpha ? 'YES' : 'NO'}`
     : 'PNG / JPG · original bitmap';
+  authoringOpacity.value = String(selectedLayer?.opacity ?? 1);
+  authoringOpacityValue.value = `${Math.round((selectedLayer?.opacity ?? 1) * 100)}%`;
+  authoringBlendMode.value = selectedLayer?.blendMode || 'NORMAL';
+  authoringOpacity.disabled = !available || !selectedLayer;
+  authoringBlendMode.disabled = !available || !selectedLayer;
+  authoringMetadataState.textContent = authoringSession.compositeStatus;
   outsideSignageOpacity.value = String(authoringViewSettings.outsideSignageOpacity);
   outsideSignageOpacityValue.value = authoringViewSettings.outsideSignageOpacity.toFixed(2);
   outsideSignageOpacity.disabled = !available || !source;
@@ -1286,6 +1402,7 @@ function syncAuthoringUi() {
   authoringCameraLock.classList.toggle('unlocked', !layoutEditing && !authoringCameraInterlock.manualLocked);
   syncAuthoringLayerList(available);
   syncAuthoringOverlay();
+  syncAuthoringQuickRail(available);
 }
 
 function toggleAuthoringCameraLock() {
@@ -1366,9 +1483,9 @@ function commitAuthoringTransform(partial, reason = 'authoring-transform-change'
 function selectAuthoringLayer(layerId) {
   if (!authoringSession.selectLayer(layerId)) return false;
   cancelAuthoringPointerInteraction();
-  invalidateAuthoringOutputs('authoring-layer-selection-change');
   authoringMessage.className = 'projection-poc-message';
   authoringMessage.textContent = `Selected ${authoringSession.source.filename}. Bake and transforms now target this layer only.`;
+  syncAuthoringUi();
   return true;
 }
 
@@ -1376,17 +1493,40 @@ function toggleAuthoringLayerVisibility(layerId) {
   const layer = authoringSession.layers.find((candidate) => candidate.layerId === layerId);
   if (!layer || !authoringSession.setLayerVisibility(layerId, !layer.visible)) return false;
   cancelAuthoringPointerInteraction();
-  invalidateAuthoringOutputs('authoring-layer-visibility-change');
   authoringMessage.className = 'projection-poc-message';
-  authoringMessage.textContent = `${layer.source.filename} visibility ${layer.visible ? 'ON' : 'OFF'}.`;
+  authoringMessage.textContent = `${layer.source.filename} visibility ${layer.visible ? 'ON' : 'OFF'}; pixels remain valid and metadata will sync on explicit Send.`;
+  syncAuthoringUi();
+  return true;
+}
+
+function reorderAuthoringLayer(layerId, targetIndex, source = 'button') {
+  if (!authoringSession.reorderLayer(layerId, targetIndex)) return false;
+  authoringMessage.className = 'projection-poc-message';
+  authoringMessage.textContent = `${authoringSession.source.filename} reordered by ${source}; pixel bake remains valid, metadata is dirty.`;
+  syncAuthoringUi();
   return true;
 }
 
 function moveSelectedAuthoringLayer(direction) {
-  if (!authoringSession.moveLayer(authoringSession.selectedLayerId, direction)) return false;
-  invalidateAuthoringOutputs(`authoring-layer-move-${direction}`);
+  const index = authoringSession.layers.findIndex((layer) => layer.layerId === authoringSession.selectedLayerId);
+  return reorderAuthoringLayer(authoringSession.selectedLayerId, index + (direction === 'up' ? -1 : 1), 'button');
+}
+
+function commitAuthoringOpacity(value) {
+  const layer = authoringSession.selectedLayer;
+  if (!layer || !authoringSession.setLayerOpacity(layer.layerId, value)) return false;
   authoringMessage.className = 'projection-poc-message';
-  authoringMessage.textContent = `${authoringSession.source.filename} moved ${direction.toUpperCase()}.`;
+  authoringMessage.textContent = `${layer.source.filename} opacity ${Math.round(layer.opacity * 100)}%; pixel bake remains valid.`;
+  syncAuthoringUi();
+  return true;
+}
+
+function commitAuthoringBlendMode(value) {
+  const layer = authoringSession.selectedLayer;
+  if (!layer || !authoringSession.setLayerBlendMode(layer.layerId, value)) return false;
+  authoringMessage.className = 'projection-poc-message';
+  authoringMessage.textContent = `${layer.source.filename} blend ${layer.blendMode}; Photoshop remains final composite authority.`;
+  syncAuthoringUi();
   return true;
 }
 
@@ -1511,8 +1651,7 @@ function syncProjectionPocUi() {
   const available = isProjectionPocContext();
   const profile = currentProjectionBakeProfile();
   const maskEnabled = isProjectionMaskEnabled(profile);
-  const hasOutputs = available && projectionBakeRuntime.hasOutputs() &&
-    projectionBakeRuntime.resources?.profileId === profile?.id;
+  const hasOutputs = available && selectedProjectionResultReady(profile);
   projectionPocTitle.textContent = `PROJECTION POC — ${profile?.label || 'CURRENT FAMILY'}`;
   projectionSelectedLayer.textContent = `Layer: ${authoringSession.source?.filename || '—'} · Family: ${profile?.label || '—'} · Output: CANONICAL`;
   projectionPoc.hidden = !available;
@@ -1554,7 +1693,7 @@ function syncProjectionPocUi() {
     ? `${state.reverseBake.targetRegistry.targets.length} targets · UXP SESSION`
     : 'No UXP session registry';
   if (projectionPhotoshopState) projectionPhotoshopState.textContent = state.reverseBake.lastError ||
-    (state.reverseBake.lastApplied ? `PHOTOSHOP APPLY COMPLETE · Job ${state.reverseBake.lastApplied.jobId} · Layer ${state.reverseBake.lastApplied.layerId}` : state.reverseBake.state);
+    (state.reverseBake.lastApplied ? `PHOTOSHOP APPLY COMPLETE · Job ${state.reverseBake.lastApplied.jobId} · Layer ${state.reverseBake.lastApplied.photoshopLayerId || state.reverseBake.lastApplied.layerId}` : state.reverseBake.state);
   const busy = state.projectionBake.running || projectionPngExporting || reverseBusy;
   projectionPocState.textContent = projectionPngExporting ? 'EXPORTING' : (state.projectionBake.running ? 'RUNNING' : state.projectionBake.status);
   projectionPocState.className = `projection-poc-state${busy ? ' running' : ''}${state.projectionBake.status === 'ERROR' ? ' fail' : ''}`;
@@ -1572,6 +1711,56 @@ function waitForPhotoshopBakeApply(jobId) {
   });
 }
 
+function bakeAckError(code, field, expected, actual) {
+  return new Error(`${code}: ${field} expected ${JSON.stringify(expected)} but received ${JSON.stringify(actual)}.`);
+}
+
+function validateRendererBakeApplyAck(metadata, applied) {
+  const opacityTolerance = (0.5 / 255) + 0.000001;
+  const exact = (code, field, expected, actual) => {
+    if (actual !== expected) throw bakeAckError(code, field, expected, actual);
+  };
+  exact('ACK_JOB_ID_MISMATCH', 'jobId', metadata.jobId, applied.jobId);
+  exact('ACK_TARGET_SESSION_MISMATCH', 'targetSessionId', metadata.targetSessionId, applied.targetSessionId);
+  exact('ACK_TARGET_ID_MISMATCH', 'targetId', metadata.targetId, applied.targetId);
+  exact('ACK_DOCUMENT_ID_MISMATCH', 'documentId', metadata.documentId, applied.documentId);
+  exact('ACK_DOCUMENT_ID_MISMATCH', 'targetDocumentId', metadata.targetDocumentId, applied.targetDocumentId);
+  exact('ACK_FAMILY_ID_MISMATCH', 'familyId', metadata.familyId, applied.familyId);
+  exact('ACK_OUTPUT_KIND_MISMATCH', 'outputKind', metadata.outputKind, applied.outputKind);
+  exact('ACK_AUTHORING_LAYER_ID_MISMATCH', 'authoringLayerId', metadata.authoringLayerId, applied.authoringLayerId);
+  if (!Number.isSafeInteger(applied.photoshopLayerId) || applied.photoshopLayerId <= 0) {
+    throw bakeAckError('ACK_PHOTOSHOP_LAYER_ID_MISMATCH', 'photoshopLayerId', 'positive integer', applied.photoshopLayerId);
+  }
+  exact('ACK_METADATA_REVISION_MISMATCH', 'metadataRevision', metadata.metadataRevision, applied.metadataRevision);
+  if (!Number.isFinite(applied.opacity) || Math.abs(applied.opacity - metadata.opacity) > opacityTolerance) {
+    throw bakeAckError('ACK_OPACITY_MISMATCH', 'opacity', metadata.opacity, applied.opacity);
+  }
+  exact('ACK_BLEND_MODE_MISMATCH', 'blendMode', metadata.blendMode, applied.blendMode);
+  exact('ACK_VISIBILITY_MISMATCH', 'visible', metadata.visible, applied.visible);
+  exact('ACK_ORDER_MISMATCH', 'order', metadata.order, applied.order);
+  if (!Array.isArray(applied.appliedLayers)) throw bakeAckError('ACK_APPLIED_LAYERS_MISMATCH', 'appliedLayers', 'array', applied.appliedLayers);
+
+  const expectedById = new Map(metadata.authoringStack.map((layer) => [layer.authoringLayerId, layer]));
+  const validatedLayerIds = [];
+  const seen = new Set();
+  for (const actual of applied.appliedLayers) {
+    const expected = expectedById.get(actual?.authoringLayerId);
+    if (!expected || seen.has(actual.authoringLayerId)) throw bakeAckError('ACK_AUTHORING_LAYER_ID_MISMATCH', 'appliedLayers.authoringLayerId', 'unique outbound authoringLayerId', actual?.authoringLayerId);
+    seen.add(actual.authoringLayerId);
+    if (!Number.isSafeInteger(actual.photoshopLayerId) || actual.photoshopLayerId <= 0) throw bakeAckError('ACK_PHOTOSHOP_LAYER_ID_MISMATCH', `${actual.authoringLayerId}.photoshopLayerId`, 'positive integer', actual.photoshopLayerId);
+    exact('ACK_METADATA_REVISION_MISMATCH', `${actual.authoringLayerId}.metadataRevision`, expected.metadataRevision, actual.metadataRevision);
+    if (!Number.isFinite(actual.opacity) || Math.abs(actual.opacity - expected.opacity) > opacityTolerance) throw bakeAckError('ACK_OPACITY_MISMATCH', `${actual.authoringLayerId}.opacity`, expected.opacity, actual.opacity);
+    exact('ACK_BLEND_MODE_MISMATCH', `${actual.authoringLayerId}.blendMode`, expected.blendMode, actual.blendMode);
+    exact('ACK_VISIBILITY_MISMATCH', `${actual.authoringLayerId}.visible`, expected.visible, actual.visible);
+    exact('ACK_ORDER_MISMATCH', `${actual.authoringLayerId}.order`, expected.order, actual.order);
+    validatedLayerIds.push(actual.authoringLayerId);
+  }
+  if (!seen.has(metadata.authoringLayerId)) throw bakeAckError('ACK_AUTHORING_LAYER_ID_MISMATCH', 'appliedLayers.authoringLayerId', metadata.authoringLayerId, null);
+  const selectedApplied = applied.appliedLayers.find((layer) => layer.authoringLayerId === metadata.authoringLayerId);
+  exact('ACK_PHOTOSHOP_LAYER_ID_MISMATCH', 'selected photoshopLayerId', applied.photoshopLayerId, selectedApplied.photoshopLayerId);
+  return validatedLayerIds;
+}
+
 async function waitForLinkBackpressure(limit) {
   while (state.link.socket?.readyState === WebSocket.OPEN && state.link.socket.bufferedAmount > limit) {
     await new Promise((resolve) => window.setTimeout(resolve, 12));
@@ -1582,6 +1771,9 @@ async function waitForLinkBackpressure(limit) {
 async function sendProjectionToPhotoshop(outputKind) {
   if (state.reverseBake.activeJobId !== null) throw new Error('BAKE_BUSY: A full-image Photoshop write is already in progress.');
   if (!state.link.rendererHandshake || !state.link.photoshopConnected) throw new Error('UXP_DISCONNECTED: Photoshop UXP is not connected.');
+  const selectedLayer = authoringSession.selectedLayer;
+  if (!selectedLayer?.visible) throw new Error('AUTHORING_LAYER_REQUIRED: Select a visible layer before Send.');
+  if (!selectedProjectionResultReady()) throw new Error('PIXEL_RESULT_NOT_READY: Bake the selected layer before Send.');
   const output = projectionBakeRuntime.readOutputRgba(outputKind);
   const registry = state.reverseBake.targetRegistry;
   const destination = resolveReverseBakeTarget(output.familyId, output.outputKind);
@@ -1603,9 +1795,25 @@ async function sendProjectionToPhotoshop(outputKind) {
     bindingKey: destination.bindingKey,
     targetId: target.targetId,
     targetSessionId: registry.sessionId,
+    documentId: target.documentId,
     targetDocumentId: target.documentId,
     width: output.width, height: output.height, components: output.components, componentSize: output.componentSize,
     pixelFormat: output.pixelFormat, colorSpace: output.colorSpace, alpha: output.alpha, orientation: output.orientation,
+    authoringLayerId: selectedLayer.layerId,
+    authoringLayerName: selectedLayer.source.filename,
+    metadataRevision: selectedLayer.metadataRevision,
+    opacity: selectedLayer.opacity,
+    blendMode: selectedLayer.blendMode,
+    visible: selectedLayer.visible,
+    order: selectedLayer.order,
+    authoringStack: authoringSession.layers.map((layer) => ({
+      authoringLayerId: layer.layerId,
+      metadataRevision: layer.metadataRevision,
+      order: layer.order,
+      opacity: layer.opacity,
+      blendMode: layer.blendMode,
+      visible: layer.visible
+    })),
     totalBytes: output.bytes.byteLength, chunkSize, chunkCount, requestedAtEpochMs: Date.now()
   };
   state.reverseBake.activeJobId = jobId;
@@ -1616,6 +1824,12 @@ async function sendProjectionToPhotoshop(outputKind) {
   syncProjectionPocUi();
   const completion = waitForPhotoshopBakeApply(jobId);
   try {
+    console.info('[LUUX][Block8C][RendererOutbound]', JSON.stringify({
+      jobId: metadata.jobId, targetSessionId: metadata.targetSessionId, targetId: metadata.targetId,
+      documentId: metadata.documentId, familyId: metadata.familyId, outputKind: metadata.outputKind,
+      authoringLayerId: metadata.authoringLayerId, metadataRevision: metadata.metadataRevision,
+      opacity: metadata.opacity, blendMode: metadata.blendMode, visible: metadata.visible, order: metadata.order
+    }));
     if (!sendLinkMessage(metadata)) throw new Error('BROKER_DISCONNECTED: Could not begin Photoshop bake.');
     state.reverseBake.state = 'TRANSFERRING';
     for (let chunkIndex = 0, offset = 0; offset < output.bytes.byteLength; chunkIndex += 1, offset += chunkSize) {
@@ -1627,14 +1841,19 @@ async function sendProjectionToPhotoshop(outputKind) {
     await waitForLinkBackpressure(chunkSize);
     sendLinkMessage({ type: 'BAKE_END', jobId, receivedBytes: output.bytes.byteLength, receivedChunks: chunkCount });
     const applied = await completion;
-    if (applied.targetId !== metadata.targetId || applied.targetSessionId !== metadata.targetSessionId ||
-        applied.targetDocumentId !== metadata.targetDocumentId) {
-      throw new Error('TARGET_APPLY_ACK_MISMATCH: Photoshop applied to an unexpected Target.');
-    }
+    const validatedLayerIds = validateRendererBakeApplyAck(metadata, applied);
+    console.info('[LUUX][Block8C][RendererAckValidated]', JSON.stringify({
+      jobId: applied.jobId, targetSessionId: applied.targetSessionId, targetId: applied.targetId,
+      documentId: applied.documentId, familyId: applied.familyId, outputKind: applied.outputKind,
+      authoringLayerId: applied.authoringLayerId, photoshopLayerId: applied.photoshopLayerId,
+      metadataRevision: applied.metadataRevision, opacity: applied.opacity, blendMode: applied.blendMode,
+      visible: applied.visible, order: applied.order
+    }));
     state.reverseBake.lastApplied = applied;
+    authoringSession.markMetadataSynced(validatedLayerIds);
     state.reverseBake.state = 'APPLIED';
     projectionPocMessage.className = 'projection-poc-message pass';
-    projectionPocMessage.textContent = `PHOTOSHOP APPLY COMPLETE · ${output.outputKind} · ${output.width} × ${output.height} · Layer ${applied.layerId}.`;
+    projectionPocMessage.textContent = `PHOTOSHOP APPLY COMPLETE · ${output.outputKind} · ${output.width} × ${output.height} · Layer ${applied.photoshopLayerId}.`;
     return { metadata, applied };
   } catch (error) {
     if (state.reverseBake.pending?.jobId === jobId) {
@@ -1649,6 +1868,7 @@ async function sendProjectionToPhotoshop(outputKind) {
   } finally {
     state.reverseBake.activeJobId = null;
     syncProjectionPocUi();
+    syncAuthoringUi();
     updateDiagnostics();
   }
 }
@@ -1669,10 +1889,12 @@ async function saveProjectionPng(kind) {
   projectionPocMessage.textContent = `Encoding full-resolution ${kind.toUpperCase()} PNG. This may take a moment.`;
   syncProjectionPocUi();
   try {
-    const exported = await projectionBakeRuntime.exportPng(kind);
+    const selectedLayer = authoringSession.selectedLayer;
+    const exportOpacity = selectedLayer?.opacity ?? 1;
+    const exported = await projectionBakeRuntime.exportPng(kind, { opacity: exportOpacity });
     downloadBlob(exported.blob, exported.fileName);
     projectionPocMessage.className = 'projection-poc-message pass';
-    projectionPocMessage.textContent = `${exported.fileName} (${exported.width} × ${exported.height}) download started.`;
+    projectionPocMessage.textContent = `${exported.fileName} (${exported.width} × ${exported.height}) · Opacity ${Math.round(exported.opacity * 100)}% download started.`;
     return exported;
   } catch (error) {
     projectionPocMessage.className = 'projection-poc-message fail';
@@ -3976,12 +4198,36 @@ outsideSignageOpacity.addEventListener('input', (event) => {
   commitOutsideSignageOpacity(event.currentTarget.value);
 });
 outsideSignageOpacity.addEventListener('pointerdown', (event) => event.stopPropagation());
+authoringOpacity.addEventListener('input', (event) => commitAuthoringOpacity(event.currentTarget.value));
+authoringBlendMode.addEventListener('change', (event) => commitAuthoringBlendMode(event.currentTarget.value));
+authoringQuickToggle.addEventListener('click', () => {
+  state.authoring.railExpanded = !state.authoring.railExpanded;
+  syncAuthoringUi();
+});
+quickBakeCurrent.addEventListener('click', () => {
+  void runProjectionBake().catch((error) => console.error(error));
+});
+quickSendDirect.addEventListener('click', () => {
+  void sendProjectionToPhotoshop('DIRECT').catch((error) => console.error(error));
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && state.authoring.railExpanded) {
+    state.authoring.railExpanded = false;
+    syncAuthoringUi();
+  }
+});
 for (const button of outsideSignagePresetButtons) {
   button.addEventListener('click', () => commitOutsideSignageOpacity(OUTSIDE_SIGNAGE_PRESETS[button.dataset.outsideSignagePreset]));
   button.addEventListener('pointerdown', (event) => event.stopPropagation());
 }
 for (const element of [projectionAuthoring, authoringImageButton, authoringReplaceButton, authoringMoveUp, authoringMoveDown, authoringDeleteLayer, authoringLayerList, authoringTransformFields, authoringResetTransform]) {
   element.addEventListener('pointerdown', (event) => event.stopPropagation());
+  element.addEventListener('wheel', (event) => event.stopPropagation(), { passive: true });
+}
+for (const element of [authoringOpacity, authoringBlendMode, authoringQuickRail]) {
+  element.addEventListener('pointerdown', (event) => event.stopPropagation());
+  element.addEventListener('pointermove', (event) => event.stopPropagation());
+  element.addEventListener('pointerup', (event) => event.stopPropagation());
   element.addEventListener('wheel', (event) => event.stopPropagation(), { passive: true });
 }
 authoringImageLayer.addEventListener('pointerdown', (event) => beginAuthoringPointerInteraction(event, 'move'));
@@ -5205,6 +5451,200 @@ window.runBlock8BLayerStackSmoke = async () => {
     authoringCameraInterlock.manualLocked = previous.manualLocked;
     authoringCameraInterlock.previousManualLocked = previous.previousManualLocked;
     authoringViewSettings.setOutsideSignageOpacity(previous.outsideSignageOpacity);
+    state.projectionBake.status = previous.projectionStatus;
+    state.projectionBake.result = previous.projectionResult;
+    state.projectionBake.error = previous.projectionError;
+    state.site.world = previous.world;
+    state.site.mappingMode = previous.mappingMode;
+    state.site.anamorphicFamily = previous.family;
+    state.site.anamorphicCameraMode = previous.cameraMode;
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    setActiveView(previous.activeView);
+    applySiteSurfaceSelection({ resetCamera: false });
+    restoreSiteCameraRuntime(previous.camera);
+    syncSiteCameraControls();
+    syncProjectionPocUi();
+    syncAuthoringUi();
+    updateDiagnostics();
+  }
+};
+window.runBlock8CCompositeSmoke = async () => {
+  if (!state.texture?.image || !state.asset) throw new Error('Block 8C runtime smoke requires the decoded original local bitmap.');
+  const previous = {
+    activeView: state.activeView,
+    world: state.site.world,
+    mappingMode: state.site.mappingMode,
+    family: state.site.anamorphicFamily,
+    cameraMode: state.site.anamorphicCameraMode,
+    camera: snapshotSiteCameraRuntime(),
+    authoringStack: authoringSession.snapshot(),
+    manualLocked: authoringCameraInterlock.manualLocked,
+    previousManualLocked: authoringCameraInterlock.previousManualLocked,
+    layoutEditing: authoringCameraInterlock.layoutEditing,
+    railExpanded: state.authoring.railExpanded,
+    projectionStatus: state.projectionBake.status,
+    projectionResult: state.projectionBake.result,
+    projectionError: state.projectionBake.error
+  };
+  const contextLossBefore = state.contextLossCount;
+  const photoshopBefore = {
+    nextJobId: state.reverseBake.nextJobId,
+    lastApplied: state.reverseBake.lastApplied
+  };
+  try {
+    authoringSession.reset();
+    state.authoring.railExpanded = false;
+    setActiveView('site-3d');
+    state.site.world = 'world3d';
+    state.site.mappingMode = 'anamorphic';
+    state.site.anamorphicFamily = 'front75f';
+    state.site.anamorphicCameraMode = 'CALIBRATION';
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    authoringCameraInterlock.requestManualLock(false);
+    applySiteSurfaceSelection();
+    const cameraBefore = snapshotSiteCameraRuntime();
+    const decodedImage = state.texture.image;
+    const makeRuntime = (name, familyId) => ({
+      id: `block8c-${familyId}-${name}-${state.asset.sha256 || state.asset.fileName}`,
+      filename: `Block8C_${familyId}_${name}_${state.asset.fileName}`,
+      name: `Block8C_${familyId}_${name}_${state.asset.fileName}`,
+      mimeType: state.asset.mime || 'image/png',
+      type: state.asset.mime || 'image/png',
+      width: decodedImage.naturalWidth || decodedImage.width,
+      height: decodedImage.naturalHeight || decodedImage.height,
+      hasAlpha: (state.asset.mime || '').toLowerCase() === 'image/png',
+      byteLength: state.asset.bytes || 0,
+      image: decodedImage,
+      objectUrl: null
+    });
+    const aRuntime = makeRuntime('A', 'FRONT');
+    const bRuntime = makeRuntime('B', 'FRONT');
+    const cRuntime = makeRuntime('C', 'FRONT');
+    const a = authoringSession.addLayer(aRuntime, ANAMORPHIC_FAMILY_IDS.FRONT_75F, aRuntime);
+    const b = authoringSession.addLayer(bRuntime, ANAMORPHIC_FAMILY_IDS.FRONT_75F, bRuntime);
+    const c = authoringSession.addLayer(cRuntime, ANAMORPHIC_FAMILY_IDS.FRONT_75F, cRuntime);
+    for (const layer of [a, b, c]) {
+      authoringSession.selectLayer(layer.layerId);
+      authoringSession.markBaked();
+      authoringSession.markMetadataSynced([layer.layerId]);
+    }
+    authoringSession.setLayerOpacity(a.layerId, 1);
+    authoringSession.setLayerOpacity(b.layerId, 0.5);
+    authoringSession.setLayerOpacity(c.layerId, 0.2);
+    authoringSession.setLayerBlendMode(a.layerId, 'NORMAL');
+    authoringSession.setLayerBlendMode(b.layerId, 'MULTIPLY');
+    authoringSession.setLayerBlendMode(c.layerId, 'SCREEN');
+    const pixelRevisionsBeforeMetadata = [a, b, c].map((layer) => [layer.layerId, layer.pixelRevision, layer.bakedPixelRevision]);
+    authoringSession.setLayerVisibility(b.layerId, false);
+    const hiddenPixelRevisionPreserved = b.pixelRevision === b.bakedPixelRevision;
+    authoringSession.setLayerVisibility(b.layerId, true);
+
+    const initialOrder = authoringSession.layers.map((layer) => layer.layerId);
+    reorderAuthoringLayer(a.layerId, 1, 'drag-smoke');
+    const dragOrder = authoringSession.layers.map((layer) => layer.layerId);
+    reorderAuthoringLayer(a.layerId, 2, 'drag-smoke-restore');
+    authoringSession.selectLayer(a.layerId);
+    moveSelectedAuthoringLayer('up');
+    const buttonOrder = authoringSession.layers.map((layer) => layer.layerId);
+    const dragAndButtonSame = JSON.stringify(dragOrder) === JSON.stringify(buttonOrder);
+
+    syncSelectedAuthoringRuntime();
+    syncAuthoringUi();
+    const railCollapsedDefault = !authoringQuickRail.hidden && authoringQuickMenu.hidden &&
+      authoringQuickToggle.getAttribute('aria-expanded') === 'false';
+    authoringQuickToggle.click();
+    const railExpanded = !authoringQuickMenu.hidden && authoringQuickToggle.getAttribute('aria-expanded') === 'true';
+    authoringQuickToggle.click();
+    const railCollapsedAgain = authoringQuickMenu.hidden && authoringQuickToggle.getAttribute('aria-expanded') === 'false';
+    const bakeCurrentUsesExistingPath = quickBakeCurrent.disabled === false;
+    const sendDirectRequiresReadyResult = quickSendDirect.disabled === true;
+    state.site.mappingMode = 'normal';
+    siteMappingSelect.value = state.site.mappingMode;
+    syncAuthoringUi();
+    const railHiddenOutsideAnamorphic = authoringQuickRail.hidden === true;
+    state.site.mappingMode = 'anamorphic';
+    siteMappingSelect.value = state.site.mappingMode;
+    syncAuthoringUi();
+
+    const cameraBeforeInterlock = snapshotSiteCameraRuntime();
+    authoringCameraInterlock.enterLayout();
+    const layoutForcedLock = authoringCameraInterlock.forcedLocked && !authoringCameraInterlock.controlsEnabled;
+    authoringSession.setLayerOpacity(a.layerId, 0.75);
+    reorderAuthoringLayer(a.layerId, 2, 'interlock-smoke');
+    state.authoring.railExpanded = true;
+    syncAuthoringUi();
+    state.authoring.railExpanded = false;
+    authoringCameraInterlock.exitLayout();
+    const cameraAfterInterlock = snapshotSiteCameraRuntime();
+
+    state.site.anamorphicFamily = 'back';
+    siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
+    applySiteSurfaceSelection();
+    const backRuntime = makeRuntime('A', 'BACK');
+    const back = authoringSession.addLayer(backRuntime, ANAMORPHIC_FAMILY_IDS.BACK, backRuntime);
+    authoringSession.activateFamily(ANAMORPHIC_FAMILY_IDS.FRONT_75F);
+    const frontAfterBack = authoringSession.layers.map((layer) => layer.layerId);
+    const familyIsolation = back.familyId === ANAMORPHIC_FAMILY_IDS.BACK &&
+      frontAfterBack.length === 3 && frontAfterBack.every((layerId) => layerId !== back.layerId);
+
+    const pixelRevisionsAfterMetadata = [a, b, c].map((layer) => [layer.layerId, layer.pixelRevision, layer.bakedPixelRevision]);
+    const report = {
+      block: '8C',
+      implementation: 'LAYER_COMPOSITE_AND_PHOTOSHOP_PER_LAYER_OUTPUT',
+      automatedStatus: 'TECHNICAL PASS',
+      userValidation: 'PENDING',
+      layerOpacityIndependent: a.opacity === 0.75 && b.opacity === 0.5 && c.opacity === 0.2,
+      blendModeIndependent: a.blendMode === 'NORMAL' && b.blendMode === 'MULTIPLY' && c.blendMode === 'SCREEN',
+      pixelReadyPreservedByMetadata: pixelRevisionsBeforeMetadata.every(([layerId, pixelRevision, bakedPixelRevision]) => {
+        const after = pixelRevisionsAfterMetadata.find(([candidateId]) => candidateId === layerId);
+        return after?.[1] === pixelRevision && after?.[2] === bakedPixelRevision;
+      }),
+      metadataDirty: authoringSession.metadataDirty,
+      hiddenPixelRevisionPreserved,
+      initialOrder,
+      dragOrder,
+      buttonOrder,
+      dragAndButtonSame,
+      stableLayerIds: new Set([a.layerId, b.layerId, c.layerId, back.layerId]).size === 4,
+      familyIsolation,
+      railCollapsedDefault,
+      railExpanded,
+      railCollapsedAgain,
+      railHiddenOutsideAnamorphic,
+      bakeCurrentUsesExistingPath,
+      sendDirectRequiresReadyResult,
+      layoutForcedLock,
+      cameraUnchanged: JSON.stringify(cameraBefore) === JSON.stringify(cameraAfterInterlock) &&
+        JSON.stringify(cameraBeforeInterlock) === JSON.stringify(cameraAfterInterlock),
+      photoshopMutationCount: state.reverseBake.nextJobId - photoshopBefore.nextJobId,
+      photoshopLastAppliedUnchanged: state.reverseBake.lastApplied === photoshopBefore.lastApplied,
+      projectionRuntimeCount: 1,
+      acceptedBackPreviewKnownIssuePreserved: true,
+      contextLossCount: state.contextLossCount - contextLossBefore
+    };
+    report.technicalPass = report.layerOpacityIndependent && report.blendModeIndependent &&
+      report.pixelReadyPreservedByMetadata && report.metadataDirty && report.hiddenPixelRevisionPreserved &&
+      report.dragAndButtonSame && report.stableLayerIds && report.familyIsolation &&
+      report.railCollapsedDefault && report.railExpanded && report.railCollapsedAgain &&
+      report.railHiddenOutsideAnamorphic && report.bakeCurrentUsesExistingPath &&
+      report.sendDirectRequiresReadyResult && report.layoutForcedLock && report.cameraUnchanged &&
+      report.photoshopMutationCount === 0 && report.photoshopLastAppliedUnchanged &&
+      report.projectionRuntimeCount === 1 && report.contextLossCount === 0;
+    window.block8CCompositeDiagnostics = structuredClone(report);
+    return report;
+  } finally {
+    if (authoringCameraInterlock.layoutEditing) authoringCameraInterlock.exitLayout();
+    projectionBakeRuntime.dispose();
+    authoringSession.restore(previous.authoringStack);
+    syncSelectedAuthoringRuntime();
+    authoringCameraInterlock.layoutEditing = previous.layoutEditing;
+    authoringCameraInterlock.manualLocked = previous.manualLocked;
+    authoringCameraInterlock.previousManualLocked = previous.previousManualLocked;
+    state.authoring.railExpanded = previous.railExpanded;
     state.projectionBake.status = previous.projectionStatus;
     state.projectionBake.result = previous.projectionResult;
     state.projectionBake.error = previous.projectionError;

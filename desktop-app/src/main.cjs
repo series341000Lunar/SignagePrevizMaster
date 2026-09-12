@@ -184,6 +184,7 @@ async function runSmokeTest(window) {
     const block8aAuthoringBake = await window.webContents.executeJavaScript('window.runBlock8AAuthoringBakeSmoke()', true);
     const outsideSignagePreview = await window.webContents.executeJavaScript('window.runOutsideSignagePreviewSmoke()', true);
     const block8b = await window.webContents.executeJavaScript('window.runBlock8BLayerStackSmoke()', true);
+    const block8c = await window.webContents.executeJavaScript('window.runBlock8CCompositeSmoke()', true);
     const bakeVisibilityArtifacts = {
       front: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_VisibilityDiagnostic.png'),
       back: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_VisibilityDiagnostic.png'),
@@ -296,6 +297,16 @@ async function runSmokeTest(window) {
       block8b.cameraUnchanged === true && block8b.photoshopMutationCount === 0 &&
       block8b.photoshopLastAppliedUnchanged === true &&
       block8b.contextLossCount === 0 && block8b.projectionRuntimeCount === 1 &&
+      block8c.technicalPass === true && block8c.userValidation === 'PENDING' &&
+      block8c.layerOpacityIndependent === true && block8c.blendModeIndependent === true &&
+      block8c.pixelReadyPreservedByMetadata === true && block8c.hiddenPixelRevisionPreserved === true &&
+      block8c.dragAndButtonSame === true && block8c.stableLayerIds === true && block8c.familyIsolation === true &&
+      block8c.railCollapsedDefault === true && block8c.railExpanded === true && block8c.railCollapsedAgain === true &&
+      block8c.railHiddenOutsideAnamorphic === true && block8c.bakeCurrentUsesExistingPath === true &&
+      block8c.sendDirectRequiresReadyResult === true && block8c.layoutForcedLock === true &&
+      block8c.cameraUnchanged === true && block8c.photoshopMutationCount === 0 &&
+      block8c.photoshopLastAppliedUnchanged === true && block8c.contextLossCount === 0 &&
+      block8c.projectionRuntimeCount === 1 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -330,6 +341,7 @@ async function runSmokeTest(window) {
       block8aAuthoringBake,
       outsideSignagePreview,
       block8b,
+      block8c,
       screenshotPath
     };
     writeJson(reportPath, report);

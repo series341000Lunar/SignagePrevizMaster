@@ -103,6 +103,16 @@
             <button id="authoring-rotate-handle" class="authoring-handle rotate" type="button" aria-label="Rotation handle"></button>
           </div>
         </div>
+        <div id="authoring-quick-rail" class="authoring-quick-rail" hidden>
+          <div id="authoring-quick-menu" class="authoring-quick-menu" hidden>
+            <button id="quick-bake-current" type="button">BAKE CURRENT</button>
+            <button id="quick-send-direct" type="button">SEND DIRECT</button>
+            <small id="quick-send-destination">NO DIRECT TARGET</small>
+          </div>
+          <button id="authoring-quick-toggle" class="authoring-quick-toggle" type="button" aria-expanded="false" aria-controls="authoring-quick-menu" title="Projection quick actions">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"></path></svg>
+          </button>
+        </div>
         <div id="drag-hint">2D NAVIGATE: Left/Middle drag: pan · Wheel: zoom</div>
       </section>
 
@@ -218,6 +228,22 @@
             <div id="authoring-layer-list" class="authoring-layer-list" role="listbox" aria-label="Projection image layers">
               <p class="authoring-layer-empty">No layers</p>
             </div>
+          </section>
+          <section class="authoring-composite-control" aria-labelledby="authoring-composite-title">
+            <div class="authoring-composite-heading">
+              <strong id="authoring-composite-title">LAYER COMPOSITE</strong>
+              <output id="authoring-opacity-value" for="authoring-opacity">100%</output>
+            </div>
+            <label for="authoring-opacity">Opacity</label>
+            <input id="authoring-opacity" type="range" min="0" max="1" step="0.01" value="1">
+            <label for="authoring-blend-mode">Blend</label>
+            <select id="authoring-blend-mode">
+              <option value="NORMAL">NORMAL</option>
+              <option value="MULTIPLY">MULTIPLY</option>
+              <option value="SCREEN">SCREEN</option>
+              <option value="LINEAR_DODGE">LINEAR DODGE (ADD)</option>
+            </select>
+            <small id="authoring-metadata-state">METADATA DIRTY</small>
           </section>
           <section class="outside-signage-control" aria-labelledby="outside-signage-title">
             <div class="outside-signage-heading">

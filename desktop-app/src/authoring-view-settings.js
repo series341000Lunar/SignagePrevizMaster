@@ -13,9 +13,10 @@ export function normalizeOutsideSignageOpacity(value) {
   return clamp(finite(value, DEFAULT_OUTSIDE_SIGNAGE_OPACITY), 0, 1);
 }
 
-export function computeAuthoringPreviewAlpha(sourceAlpha, insideSignage, outsideSignageOpacity) {
+export function computeAuthoringPreviewAlpha(sourceAlpha, insideSignage, outsideSignageOpacity, layerOpacity = 1) {
   const alpha = clamp(finite(sourceAlpha, 0), 0, 1);
-  return alpha * (insideSignage ? 1 : normalizeOutsideSignageOpacity(outsideSignageOpacity));
+  const compositeOpacity = clamp(finite(layerOpacity, 1), 0, 1);
+  return alpha * compositeOpacity * (insideSignage ? 1 : normalizeOutsideSignageOpacity(outsideSignageOpacity));
 }
 
 export class AuthoringViewSettings {

@@ -3,6 +3,7 @@ const SUPPORTED_IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg']);
 
 export const AUTHORING_COORDINATE_SPACE = 'PROJECTION_FRAME_NORMALIZED_TOP_LEFT';
 export const AUTHORING_BLEND_MODE = 'NORMAL';
+export const AUTHORING_BLEND_MODES = Object.freeze(['NORMAL', 'MULTIPLY', 'SCREEN', 'LINEAR_DODGE']);
 export const DEFAULT_AUTHORING_TRANSFORM = Object.freeze({
   x: 0.5,
   y: 0.5,
@@ -230,11 +231,20 @@ export class ScreenImageLayerStack {
     return `${this.idPrefix}-${this.sequence.toString(36).padStart(4, '0')}`;
   }
 
-  invalidate() {
+  invalidatePixel(layer = this.selectedLayer) {
     this.revision += 1;
-    const selected = this.selectedLayer;
-    if (selected) selected.bakedRevision = null;
+    if (layer) {
+      layer.pixelRevision += 1;
+      layer.bakedPixelRevision = null;
+      layer.bakedRevision = null;
+    }
   }
+
+  invalidateMetadata(layers = this.selectedLayer ? [this.selectedLayer] : []) {
+    for (const layer of layers) layer.metadataRevision += 1;
+  }
+
+  invalidate() { this.invalidatePixel(); }
 
   syncOrder(layers = this.layers) {
     layers.forEach((layer, index) => { layer.order = index; });
@@ -250,15 +260,21 @@ export class ScreenImageLayerStack {
       runtime,
       transform: DEFAULT_AUTHORING_TRANSFORM,
       visible: true,
+      opacity: 1,
+      blendMode: AUTHORING_BLEND_MODE,
       order: 0,
       familyId: key,
       mappingMode: 'SCREEN_PROJECTED',
+      pixelRevision: 1,
+      bakedPixelRevision: null,
+      metadataRevision: 1,
+      metadataSyncedRevision: null,
       bakedRevision: null
     };
     this.ensureFamily(key).unshift(layer);
     this.syncOrder();
     this.selectedByFamily.set(key, layer.layerId);
-    this.invalidate();
+    this.revision += 1;
     return layer;
   }
 
@@ -276,7 +292,7 @@ export class ScreenImageLayerStack {
     const previousRuntime = layer.runtime;
     layer.source = normalized;
     layer.runtime = runtime;
-    this.invalidate();
+    this.invalidatePixel(layer);
     if (previousRuntime && previousRuntime !== runtime) this.disposeRuntime(previousRuntime);
     return layer;
   }
@@ -286,7 +302,7 @@ export class ScreenImageLayerStack {
     const layer = this.layers.find((candidate) => candidate.layerId === id);
     if (!layer || this.selectedLayerId === id) return false;
     this.selectedByFamily.set(this.activeFamilyId, id);
-    this.invalidate();
+    this.revision += 1;
     return true;
   }
 
@@ -298,7 +314,7 @@ export class ScreenImageLayerStack {
     this.syncOrder();
     const next = this.layers[index] || this.layers[index - 1] || null;
     this.selectedByFamily.set(this.activeFamilyId, next?.layerId || null);
-    this.invalidate();
+    this.invalidateMetadata(this.layers);
     return removed;
   }
 
@@ -307,10 +323,17 @@ export class ScreenImageLayerStack {
     const delta = direction === 'up' ? -1 : (direction === 'down' ? 1 : 0);
     const target = index + delta;
     if (index < 0 || delta === 0 || target < 0 || target >= this.layers.length) return false;
+    return this.reorderLayer(layerId, target);
+  }
+
+  reorderLayer(layerId, targetIndex) {
+    const index = this.layers.findIndex((layer) => layer.layerId === layerId);
+    const target = Number(targetIndex);
+    if (index < 0 || !Number.isSafeInteger(target) || target < 0 || target >= this.layers.length || index === target) return false;
     const [layer] = this.layers.splice(index, 1);
     this.layers.splice(target, 0, layer);
     this.syncOrder();
-    this.invalidate();
+    this.invalidateMetadata(this.layers);
     return true;
   }
 
@@ -318,7 +341,25 @@ export class ScreenImageLayerStack {
     const layer = this.layers.find((candidate) => candidate.layerId === layerId);
     if (!layer || layer.visible === Boolean(visible)) return false;
     layer.visible = Boolean(visible);
-    this.invalidate();
+    this.invalidateMetadata([layer]);
+    return true;
+  }
+
+  setLayerOpacity(layerId, opacity) {
+    const layer = this.layers.find((candidate) => candidate.layerId === layerId);
+    const next = clamp(finite(opacity, 1), 0, 1);
+    if (!layer || layer.opacity === next) return false;
+    layer.opacity = next;
+    this.invalidateMetadata([layer]);
+    return true;
+  }
+
+  setLayerBlendMode(layerId, blendMode) {
+    const layer = this.layers.find((candidate) => candidate.layerId === layerId);
+    const next = String(blendMode || '').toUpperCase();
+    if (!layer || !AUTHORING_BLEND_MODES.includes(next) || layer.blendMode === next) return false;
+    layer.blendMode = next;
+    this.invalidateMetadata([layer]);
     return true;
   }
 
@@ -329,7 +370,7 @@ export class ScreenImageLayerStack {
     const changed = Object.keys(next).some((key) => next[key] !== layer.transform[key]);
     if (!changed) return false;
     layer.transform = next;
-    this.invalidate();
+    this.invalidatePixel(layer);
     return true;
   }
 
@@ -337,7 +378,15 @@ export class ScreenImageLayerStack {
 
   markBaked() {
     const layer = this.selectedLayer;
-    if (layer) layer.bakedRevision = this.revision;
+    if (layer) {
+      layer.bakedPixelRevision = layer.pixelRevision;
+      layer.bakedRevision = this.revision;
+    }
+  }
+
+  markMetadataSynced(layerIds = this.layers.map((layer) => layer.layerId)) {
+    const ids = new Set(layerIds);
+    for (const layer of this.layers) if (ids.has(layer.layerId)) layer.metadataSyncedRevision = layer.metadataRevision;
   }
 
   disposeAll() {
@@ -371,7 +420,16 @@ export class ScreenImageLayerStack {
     this.revision = snapshot.revision;
     this.sequence = snapshot.sequence;
     this.selectedByFamily = new Map(snapshot.selectedByFamily);
-    this.stacks = new Map(snapshot.stacks.map(([familyId, layers]) => [familyId, layers.map((layer) => ({ ...layer, transform: normalizeAuthoringTransform(layer.transform) }))]));
+    this.stacks = new Map(snapshot.stacks.map(([familyId, layers]) => [familyId, layers.map((layer) => ({
+      ...layer,
+      opacity: clamp(finite(layer.opacity, 1), 0, 1),
+      blendMode: AUTHORING_BLEND_MODES.includes(layer.blendMode) ? layer.blendMode : AUTHORING_BLEND_MODE,
+      pixelRevision: Number.isSafeInteger(layer.pixelRevision) ? layer.pixelRevision : 1,
+      bakedPixelRevision: layer.bakedPixelRevision ?? null,
+      metadataRevision: Number.isSafeInteger(layer.metadataRevision) ? layer.metadataRevision : 1,
+      metadataSyncedRevision: layer.metadataSyncedRevision ?? null,
+      transform: normalizeAuthoringTransform(layer.transform)
+    }))]));
     for (const layers of this.stacks.values()) this.syncOrder(layers);
   }
 
@@ -384,11 +442,15 @@ export class ScreenImageLayerStack {
   get familyId() { return this.activeFamilyId; }
   get transform() { return this.selectedLayer?.transform || DEFAULT_AUTHORING_TRANSFORM; }
   get bakedRevision() { return this.selectedLayer?.bakedRevision ?? null; }
-  get dirty() { const layer = this.selectedLayer; return Boolean(layer) && layer.bakedRevision !== this.revision; }
+  get pixelDirty() { const layer = this.selectedLayer; return Boolean(layer) && layer.bakedPixelRevision !== layer.pixelRevision; }
+  get metadataDirty() { return this.layers.some((layer) => layer.metadataSyncedRevision !== layer.metadataRevision); }
+  get dirty() { return this.pixelDirty; }
+  get compositeStatus() { return this.metadataDirty ? 'METADATA DIRTY' : 'METADATA SYNCED'; }
   get status() {
     const layer = this.selectedLayer;
     if (!layer) return 'NO IMAGE';
     if (!layer.visible) return 'HIDDEN / BAKE DISABLED';
-    return this.dirty ? 'DIRTY / NEEDS BAKE' : 'READY';
+    if (this.pixelDirty) return 'DIRTY / NEEDS BAKE';
+    return 'READY';
   }
 }

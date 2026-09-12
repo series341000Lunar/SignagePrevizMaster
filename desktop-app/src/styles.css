@@ -497,13 +497,37 @@ aside {
 
 .authoring-layer-row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: 24px 28px minmax(0, 1fr);
   align-items: center;
   gap: 5px;
   padding: 4px;
   border: 1px solid #343f4d;
   border-radius: 3px;
   background: #171c24;
+}
+
+.authoring-layer-drag {
+  min-width: 0;
+  padding: 4px 2px;
+  cursor: grab;
+  color: #8994a3;
+  touch-action: none;
+}
+
+.authoring-layer-drag:active {
+  cursor: grabbing;
+}
+
+.authoring-layer-row.dragging {
+  opacity: 0.55;
+}
+
+.authoring-layer-row.insert-before {
+  box-shadow: 0 -2px 0 #62daa1;
+}
+
+.authoring-layer-row.insert-after {
+  box-shadow: 0 2px 0 #62daa1;
 }
 
 .authoring-layer-row.selected {
@@ -534,6 +558,47 @@ aside {
   margin: 4px 0 0;
   color: #707a87;
   font: 8px Consolas, monospace;
+}
+
+.authoring-composite-control {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid #343f4d;
+  border-radius: 4px;
+  background: #121720;
+}
+
+.authoring-composite-heading {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  color: #dce6f2;
+  font: 700 9px Consolas, monospace;
+}
+
+.authoring-composite-heading output,
+#authoring-metadata-state {
+  color: #62daa1;
+}
+
+.authoring-composite-control label,
+.authoring-composite-control small {
+  color: #aeb6c3;
+  font: 8px Consolas, monospace;
+}
+
+.authoring-composite-control input,
+.authoring-composite-control select {
+  min-width: 0;
+  width: 100%;
+}
+
+#authoring-metadata-state {
+  grid-column: 1 / -1;
 }
 
 .authoring-source-row > div {
@@ -708,6 +773,66 @@ aside {
 
 .authoring-overlay.editing .authoring-handle {
   display: block;
+}
+
+.authoring-quick-rail {
+  position: absolute;
+  z-index: 8;
+  top: 50%;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  transform: translateY(-50%);
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.authoring-quick-rail[hidden],
+.authoring-quick-menu[hidden] {
+  display: none;
+}
+
+.authoring-quick-toggle {
+  width: 36px;
+  height: 36px;
+  padding: 8px;
+  border-color: #62daa1;
+  background: rgba(23, 28, 36, 0.96);
+  color: #b9f1d5;
+}
+
+.authoring-quick-toggle svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.authoring-quick-menu {
+  display: grid;
+  width: 150px;
+  gap: 5px;
+  margin-right: 6px;
+  padding: 8px;
+  border: 1px solid #536174;
+  border-radius: 5px;
+  background: rgba(18, 23, 32, 0.97);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.authoring-quick-menu button {
+  min-width: 0;
+  padding: 7px 5px;
+  font-size: 9px;
+}
+
+.authoring-quick-menu small {
+  overflow: hidden;
+  color: #8994a3;
+  font: 7px Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .authoring-handle.scale {

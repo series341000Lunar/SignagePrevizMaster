@@ -2,6 +2,7 @@
 
 const { action, app, constants, core, imaging } = require('photoshop');
 const { createBakeTargetRegistry } = require('./bake-target-registry.js');
+const { createOwnedLayerRegistry, normalizeCompositeMetadata } = require('./owned-layer-registry.js');
 const config = window.LUUX_LIVE_LINK_CONFIG;
 const DISPLAY_COLOR_PROFILE = 'sRGB IEC61966-2.1';
 const AUTO_SYNC_EVENTS = ['historyStateChanged'];
@@ -10,6 +11,12 @@ const POINTER_LAYER_NAME = '__LUUX_POINTER__';
 const POINTER_DIAMETER_PX = 25;
 const BAKE_LAYER_PREFIX = '__LUUX_ANAMORPHIC__';
 const BAKE_TARGET_SESSION_ID = `uxp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+const PHOTOSHOP_BLEND_MODES = Object.freeze({
+  NORMAL: constants.BlendMode.NORMAL,
+  MULTIPLY: constants.BlendMode.MULTIPLY,
+  SCREEN: constants.BlendMode.SCREEN,
+  LINEAR_DODGE: constants.BlendMode.LINEARDODGE
+});
 
 const elements = {
   documentName: document.querySelector('#document-name'),
@@ -100,11 +107,11 @@ const state = {
   lastError: '',
   bake: {
     registry: createBakeTargetRegistry({ sessionId: BAKE_TARGET_SESSION_ID }),
+    ownedLayers: createOwnedLayerRegistry({ sessionId: BAKE_TARGET_SESSION_ID }),
     lastPublishedRegistry: '',
     current: null,
     processing: false,
     phase: 'IDLE',
-    ownedOutputs: new Map(),
     lastApplied: null,
     lastError: '',
     suppressAutoSyncUntil: 0,
@@ -793,6 +800,25 @@ function validateBakeBegin(message) {
   if (typeof message.targetId !== 'string' || !message.targetId || typeof message.targetSessionId !== 'string' || !message.targetSessionId) {
     throw bakeFailure('INVALID_BAKE_METADATA', 'targetId and targetSessionId are required.');
   }
+  if (typeof message.authoringLayerId !== 'string' || !message.authoringLayerId || !Array.isArray(message.authoringStack)) {
+    throw bakeFailure('INVALID_LAYER_METADATA', 'authoringLayerId and authoringStack are required.');
+  }
+  const layerIds = new Set();
+  for (const layer of message.authoringStack) {
+    if (typeof layer.authoringLayerId !== 'string' || !layer.authoringLayerId || layerIds.has(layer.authoringLayerId)) {
+      throw bakeFailure('INVALID_LAYER_METADATA', 'authoringStack contains an invalid or duplicate layerId.');
+    }
+    if (!Number.isSafeInteger(layer.metadataRevision) || layer.metadataRevision <= 0) {
+      throw bakeFailure('INVALID_LAYER_METADATA', 'authoringStack contains an invalid metadataRevision.');
+    }
+    layerIds.add(layer.authoringLayerId);
+    try { normalizeCompositeMetadata(layer); } catch (error) { throw bakeFailure('INVALID_LAYER_METADATA', error.message); }
+  }
+  if (!layerIds.has(message.authoringLayerId)) throw bakeFailure('INVALID_LAYER_METADATA', 'Selected authoringLayerId is absent from authoringStack.');
+  const selected = message.authoringStack.find((layer) => layer.authoringLayerId === message.authoringLayerId);
+  if (message.documentId !== message.targetDocumentId || message.metadataRevision !== selected.metadataRevision || message.opacity !== selected.opacity || message.blendMode !== selected.blendMode || message.visible !== selected.visible || message.order !== selected.order) {
+    throw bakeFailure('INVALID_LAYER_METADATA', 'Selected authoring metadata does not match the target document or authoringStack entry.');
+  }
   if (message.components !== 4 || message.componentSize !== 8 || message.pixelFormat !== 'RGBA' || message.alpha !== 'STRAIGHT' || message.orientation !== 'TOP_LEFT') {
     throw bakeFailure('INVALID_BAKE_FORMAT', 'Block 7 requires top-left straight RGBA8.');
   }
@@ -802,12 +828,131 @@ function validateBakeBegin(message) {
   return state.bake.registry.validateJobTarget(message, findOpenDocumentSnapshot);
 }
 
+function findLayerById(doc, layerId) {
+  return collectLayers(doc.layers).find((layer) => layer.id === layerId) || null;
+}
+
+function normalizedPhotoshopBlendMode(value) {
+  for (const [name, photoshopValue] of Object.entries(PHOTOSHOP_BLEND_MODES)) if (value === photoshopValue) return name;
+  const label = enumLabel(value);
+  return label === 'LINEARDODGE' ? 'LINEAR_DODGE' : label;
+}
+
+function readPhotoshopComposite(layer, order = null) {
+  return {
+    opacity: Number(layer.opacity) / 100,
+    blendMode: normalizedPhotoshopBlendMode(layer.blendMode),
+    visible: Boolean(layer.visible),
+    order
+  };
+}
+
+function assertPhotoshopComposite(actual, requested, { includeOrder = false } = {}) {
+  const opacityTolerance = (0.5 / 255) + 0.000001;
+  if (!Number.isFinite(actual.opacity) || Math.abs(actual.opacity - requested.opacity) > opacityTolerance) {
+    throw bakeFailure('PHOTOSHOP_OPACITY_APPLY_MISMATCH', `opacity requested ${requested.opacity} but Photoshop reports ${actual.opacity}.`);
+  }
+  if (actual.blendMode !== requested.blendMode) throw bakeFailure('PHOTOSHOP_BLEND_MODE_APPLY_MISMATCH', `blendMode requested ${requested.blendMode} but Photoshop reports ${actual.blendMode}.`);
+  if (actual.visible !== requested.visible) throw bakeFailure('PHOTOSHOP_VISIBILITY_APPLY_MISMATCH', `visible requested ${requested.visible} but Photoshop reports ${actual.visible}.`);
+  if (includeOrder && actual.order !== requested.order) throw bakeFailure('PHOTOSHOP_ORDER_APPLY_MISMATCH', `order requested ${requested.order} but Photoshop reports ${actual.order}.`);
+}
+
+function applyCompositeMetadata(layer, metadata, traceContext) {
+  const normalized = normalizeCompositeMetadata(metadata);
+  const photoshopBlendMode = PHOTOSHOP_BLEND_MODES[normalized.blendMode];
+  if (!photoshopBlendMode) throw bakeFailure('UNSUPPORTED_BLEND_MODE', `Photoshop BlendMode mapping is unavailable for ${normalized.blendMode}.`);
+  const before = readPhotoshopComposite(layer);
+  layer.opacity = normalized.opacity * 100;
+  layer.blendMode = photoshopBlendMode;
+  layer.visible = normalized.visible;
+  const after = readPhotoshopComposite(layer);
+  console.info('[LUUX][Block8C][UXPMetadataApply]', JSON.stringify({
+    ...traceContext,
+    authoringLayerId: metadata.authoringLayerId,
+    resolvedPhotoshopLayerId: layer.id,
+    metadataRevision: metadata.metadataRevision,
+    opacityBefore: before.opacity,
+    requestedOpacity: normalized.opacity,
+    opacityAfter: after.opacity,
+    blendBefore: before.blendMode,
+    requestedBlend: normalized.blendMode,
+    blendAfter: after.blendMode,
+    visibleBefore: before.visible,
+    requestedVisible: normalized.visible,
+    visibleAfter: after.visible,
+    requestedOrder: normalized.order
+  }));
+  assertPhotoshopComposite(after, normalized);
+  return { requested: normalized, before, after };
+}
+
+async function ensureOwnedBindingGroup(target, metadata) {
+  const ownedLayers = state.bake.ownedLayers;
+  const knownGroupId = ownedLayers.getGroup(metadata.targetId, metadata.familyId, metadata.outputKind);
+  let group = knownGroupId ? findLayerById(target, knownGroupId) : null;
+  if (!group) {
+    group = await target.createLayerGroup({ name: `${BAKE_LAYER_PREFIX} ${metadata.familyId} ${metadata.outputKind}` });
+    ownedLayers.registerGroup(metadata.targetId, metadata.familyId, metadata.outputKind, group.id);
+    return { group, created: true };
+  }
+  return { group, created: false };
+}
+
+async function syncOwnedBindingMetadata(target, metadata, group) {
+  const stackById = new Map(metadata.authoringStack.map((layer) => [layer.authoringLayerId, layer]));
+  const resolved = state.bake.ownedLayers.listBinding(metadata.targetId, metadata.familyId, metadata.outputKind)
+    .map((record) => ({ record, layer: findLayerById(target, record.photoshopLayerId), composite: stackById.get(record.authoringLayerId) }))
+    .filter((entry) => entry.layer && entry.composite)
+    .sort((a, b) => a.composite.order - b.composite.order);
+  for (const entry of resolved) {
+    applyCompositeMetadata(entry.layer, entry.composite, {
+      jobId: metadata.jobId,
+      targetSessionId: metadata.targetSessionId,
+      targetId: metadata.targetId,
+      documentId: target.id,
+      familyId: metadata.familyId,
+      outputKind: metadata.outputKind
+    });
+    state.bake.ownedLayers.register({ ...entry.record, composite: entry.composite });
+    if (entry.layer.parent?.id !== group.id) await entry.layer.move(group, constants.ElementPlacement.PLACEINSIDE);
+  }
+  for (let index = resolved.length - 2; index >= 0; index -= 1) {
+    await resolved[index].layer.move(resolved[index + 1].layer, constants.ElementPlacement.PLACEBEFORE);
+  }
+  const ownedPhotoshopLayerIds = new Set(resolved.map((entry) => entry.record.photoshopLayerId));
+  const physicalOwnedLayers = Array.from(group.layers || []).filter((layer) => ownedPhotoshopLayerIds.has(layer.id));
+  const physicalOrderById = new Map(physicalOwnedLayers.map((layer, index) => [layer.id, index]));
+  const appliedLayers = resolved.map((entry) => {
+    const layer = findLayerById(target, entry.record.photoshopLayerId);
+    const actual = readPhotoshopComposite(layer, physicalOrderById.get(layer.id));
+    assertPhotoshopComposite(actual, entry.composite, { includeOrder: true });
+    return {
+      authoringLayerId: entry.record.authoringLayerId,
+      photoshopLayerId: layer.id,
+      metadataRevision: entry.composite.metadataRevision,
+      opacity: actual.opacity,
+      blendMode: actual.blendMode,
+      visible: actual.visible,
+      order: actual.order
+    };
+  });
+  console.info('[LUUX][Block8C][UXPMetadataVerified]', JSON.stringify({
+    jobId: metadata.jobId, targetSessionId: metadata.targetSessionId, targetId: metadata.targetId,
+    documentId: target.id, familyId: metadata.familyId, outputKind: metadata.outputKind, appliedLayers
+  }));
+  return appliedLayers;
+}
+
 function sendBakeError(message, error) {
   const code = error.code || 'APPLY_ERROR';
   const detail = error.message || String(error);
   state.bake.phase = code.startsWith('TARGET_') ? 'TARGET_ERROR' : (code.includes('APPLY') ? 'APPLY_ERROR' : 'VALIDATION_ERROR');
   state.bake.lastError = `${code}: ${detail}`;
-  if (isSocketOpen()) sendJson({ type: 'BAKE_ERROR', jobId: message?.jobId ?? null, code, message: detail });
+  if (isSocketOpen()) sendJson({
+    type: 'BAKE_ERROR', jobId: message?.jobId ?? null, code, message: detail,
+    authoringLayerId: message?.authoringLayerId ?? null,
+    metadataRevision: message?.metadataRevision ?? null
+  });
   state.bake.current = null;
   state.bake.processing = false;
   publishBakeTargetRegistry();
@@ -821,6 +966,12 @@ function handleBakeBegin(message) {
   }
   try {
     validateBakeBegin(message);
+    console.info('[LUUX][Block8C][UXPReceived]', JSON.stringify({
+      jobId: message.jobId, targetSessionId: message.targetSessionId, targetId: message.targetId,
+      documentId: message.documentId, familyId: message.familyId, outputKind: message.outputKind,
+      authoringLayerId: message.authoringLayerId, metadataRevision: message.metadataRevision,
+      opacity: message.opacity, blendMode: message.blendMode, visible: message.visible, order: message.order
+    }));
     state.bake.current = {
       metadata: message,
       bytes: new Uint8Array(message.totalBytes),
@@ -869,6 +1020,9 @@ async function applyReceivedBake(frame) {
   const metadata = frame.metadata;
   const originalDocumentId = app.activeDocument?.id || null;
   let stagingLayer = null;
+  let bindingGroup = null;
+  let createdGroupThisApply = false;
+  let createdLayerThisApply = false;
   let activeDocumentRestored = originalDocumentId === metadata.targetDocumentId;
   return core.executeAsModal(async () => {
     const registeredTarget = state.bake.registry.getTarget(metadata.targetId);
@@ -883,10 +1037,25 @@ async function applyReceivedBake(frame) {
     }
     if (originalDocumentId !== target.id) await activateDocument(target.id);
     const previousLayerIds = Array.from(target.activeLayers, (layer) => layer.id);
-    const ownershipKey = `${target.id}:${metadata.outputId}`;
-    const priorOwnership = state.bake.ownedOutputs.get(ownershipKey) || null;
+    const priorOwnership = state.bake.ownedLayers.get(metadata.targetId, metadata.familyId, metadata.outputKind, metadata.authoringLayerId);
     try {
-      stagingLayer = await target.createLayer(constants.LayerKind.NORMAL, { name: `${BAKE_LAYER_PREFIX} STAGING ${metadata.jobId}` });
+      const groupResolution = await ensureOwnedBindingGroup(target, metadata);
+      bindingGroup = groupResolution.group;
+      createdGroupThisApply = groupResolution.created;
+      const group = bindingGroup;
+      stagingLayer = priorOwnership ? findLayerById(target, priorOwnership.photoshopLayerId) : null;
+      console.info('[LUUX][Block8C][UXPLayerResolution]', JSON.stringify({
+        jobId: metadata.jobId, targetSessionId: metadata.targetSessionId, targetId: metadata.targetId,
+        documentId: target.id, familyId: metadata.familyId, outputKind: metadata.outputKind,
+        authoringLayerId: metadata.authoringLayerId,
+        priorPhotoshopLayerId: priorOwnership?.photoshopLayerId || null,
+        resolvedPhotoshopLayerId: stagingLayer?.id || null
+      }));
+      if (!stagingLayer) {
+        stagingLayer = await target.createLayer(constants.LayerKind.NORMAL, { name: `${BAKE_LAYER_PREFIX} ${metadata.authoringLayerName || metadata.authoringLayerId}` });
+        createdLayerThisApply = true;
+        await stagingLayer.move(group, constants.ElementPlacement.PLACEINSIDE);
+      }
       const imageData = await imaging.createImageDataFromBuffer(frame.bytes, {
         width: metadata.width,
         height: metadata.height,
@@ -907,22 +1076,23 @@ async function applyReceivedBake(frame) {
       } finally {
         imageData.dispose();
       }
-      const finalLayerName = `${BAKE_LAYER_PREFIX} ${metadata.familyId} ${metadata.outputKind}`;
+      const finalLayerName = `${BAKE_LAYER_PREFIX} ${metadata.authoringLayerName || metadata.authoringLayerId} [${metadata.authoringLayerId.slice(-8)}]`;
       stagingLayer.name = finalLayerName;
-      stagingLayer.visible = true;
-      if (priorOwnership?.layerId && priorOwnership.layerId !== stagingLayer.id) {
-        const priorLayer = collectLayers(target.layers).find((layer) => layer.id === priorOwnership.layerId);
-        if (priorLayer) await priorLayer.delete();
-      }
-      state.bake.ownedOutputs.set(ownershipKey, {
+      const selectedComposite = metadata.authoringStack.find((layer) => layer.authoringLayerId === metadata.authoringLayerId);
+      state.bake.ownedLayers.register({
         documentId: target.id,
+        targetId: metadata.targetId,
         familyId: metadata.familyId,
         outputKind: metadata.outputKind,
-        outputId: metadata.outputId,
-        layerId: stagingLayer.id,
-        layerName: finalLayerName
+        authoringLayerId: metadata.authoringLayerId,
+        photoshopLayerId: stagingLayer.id,
+        layerName: finalLayerName,
+        composite: selectedComposite
       });
-      const selectionRestored = restoreActiveLayers(target, previousLayerIds.filter((id) => id !== priorOwnership?.layerId));
+      const appliedLayers = await syncOwnedBindingMetadata(target, metadata, group);
+      const selectedApplied = appliedLayers.find((layer) => layer.authoringLayerId === metadata.authoringLayerId);
+      if (!selectedApplied) throw bakeFailure('PHOTOSHOP_LAYER_RESOLUTION_FAILED', 'Selected authoring layer was not resolved after metadata synchronization.');
+      const selectionRestored = restoreActiveLayers(target, previousLayerIds);
       const result = {
         jobId: metadata.jobId,
         familyId: metadata.familyId,
@@ -931,21 +1101,34 @@ async function applyReceivedBake(frame) {
         targetId: metadata.targetId,
         targetSessionId: metadata.targetSessionId,
         targetLabel: registeredTarget.label,
+        documentId: target.id,
         targetDocumentId: target.id,
         width: metadata.width,
         height: metadata.height,
         receivedBytes: frame.receivedBytes,
         layerId: stagingLayer.id,
+        photoshopLayerId: selectedApplied.photoshopLayerId,
         layerName: finalLayerName,
-        replacedOwnedLayerId: priorOwnership?.layerId || null,
+        authoringLayerId: metadata.authoringLayerId,
+        metadataRevision: selectedApplied.metadataRevision,
+        opacity: selectedApplied.opacity,
+        blendMode: selectedApplied.blendMode,
+        visible: selectedApplied.visible,
+        order: selectedApplied.order,
+        replacedOwnedLayerId: priorOwnership?.photoshopLayerId || null,
+        synchronizedLayerIds: appliedLayers.map((layer) => layer.authoringLayerId),
+        appliedLayers,
         selectionRestored,
         fullFrameReplace: true
       };
       stagingLayer = null;
       return result;
     } catch (error) {
-      if (stagingLayer) {
+      if (stagingLayer && createdLayerThisApply) {
         try { await stagingLayer.delete(); } catch { /* Preserve the prior confirmed output even if staging cleanup fails. */ }
+      }
+      if (bindingGroup && createdGroupThisApply && bindingGroup.layers.length === 0) {
+        try { await bindingGroup.delete(); } catch { /* A failed apply must not hide the original field-level failure. */ }
       }
       throw error;
     } finally {
@@ -978,7 +1161,17 @@ async function handleBakeEnd(message) {
     state.bake.phase = 'APPLIED';
     state.bake.lastError = '';
     state.bake.current = null;
-    sendJson({ type: 'BAKE_APPLIED', ...result });
+    const acknowledgement = { type: 'BAKE_APPLIED', ...result };
+    console.info('[LUUX][Block8C][UXPAck]', JSON.stringify({
+      jobId: acknowledgement.jobId, targetSessionId: acknowledgement.targetSessionId,
+      targetId: acknowledgement.targetId, documentId: acknowledgement.documentId,
+      familyId: acknowledgement.familyId, outputKind: acknowledgement.outputKind,
+      authoringLayerId: acknowledgement.authoringLayerId,
+      photoshopLayerId: acknowledgement.photoshopLayerId,
+      metadataRevision: acknowledgement.metadataRevision, opacity: acknowledgement.opacity,
+      blendMode: acknowledgement.blendMode, visible: acknowledgement.visible, order: acknowledgement.order
+    }));
+    sendJson(acknowledgement);
   } catch (error) {
     sendBakeError(frame.metadata, error);
     return;

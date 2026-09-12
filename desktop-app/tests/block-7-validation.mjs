@@ -189,9 +189,9 @@ assert.match(targetRegistrySource, /message\.targetSessionId !== registrySession
 assert.match(targetRegistrySource, /const targets = new Map\(\)/);
 assert.match(targetRegistrySource, /const bindings = new Map\(\)/);
 assert.match(targetRegistrySource, /bindingKey: key/);
-assert.match(uxp, /ownedOutputs\.get/);
-assert.match(uxp, /STAGING/);
-assert.match(uxp, /await priorLayer\.delete\(\)/);
+assert.match(uxp, /state\.bake\.ownedLayers\.get\(metadata\.targetId, metadata\.familyId, metadata\.outputKind, metadata\.authoringLayerId\)/);
+assert.match(uxp, /priorOwnership\?\.photoshopLayerId/);
+assert.match(uxp, /createdLayerThisApply/);
 assert.match(uxp, /suppressAutoSyncUntil/);
 assert.match(uxp, /activeDocumentRestored/);
 assert.match(uxp, /replace: true/);
