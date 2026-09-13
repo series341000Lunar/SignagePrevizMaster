@@ -496,6 +496,29 @@ aside {
   background: #20352e;
 }
 
+.preview-background-control {
+  display: grid;
+  gap: 5px;
+  padding-top: 7px;
+  border-top: 1px solid #455568;
+}
+
+.preview-background-control label,
+.preview-background-scale {
+  font: 700 10px Consolas, monospace;
+  color: #dce6f2;
+}
+
+.preview-background-scale {
+  display: flex;
+  justify-content: space-between;
+  color: #aeb6c3;
+}
+
+.preview-background-scale output { color: #b9f1d5; }
+
+#preview-background-gray { width: 100%; }
+
 #preview-mode-state {
   color: #b9f1d5;
   font: 700 10px Consolas, monospace;
@@ -1067,15 +1090,18 @@ aside {
   pointer-events: auto;
 }
 
+.authoring-background-preview,
 .authoring-coverage-preview {
   position: absolute;
   inset: 0;
-  z-index: 1;
   display: block;
   width: 100%;
   height: 100%;
   pointer-events: none;
 }
+
+.authoring-background-preview { z-index: 0; }
+.authoring-coverage-preview { z-index: 1; }
 
 .authoring-image-layer {
   position: absolute;

@@ -82,8 +82,8 @@ assert(packageJson.build.files.includes('src/project-preload.cjs') &&
   packageJson.build.files.includes('src/bitmap-source.js') &&
   packageJson.build.files.includes('src/vector-mask-model.js'),
   'Packaged app must include the narrow Block 8D project persistence boundary.');
-assert(/PROJECT_SCHEMA_VERSION = 3/.test(projectPersistenceSource) &&
-  /PROJECT_SUPPORTED_SCHEMA_VERSIONS = Object\.freeze\(\[1, 2, 3\]\)/.test(projectPersistenceSource) &&
+assert(/PROJECT_SCHEMA_VERSION = 4/.test(projectPersistenceSource) &&
+  /PROJECT_SUPPORTED_SCHEMA_VERSIONS = Object\.freeze\(\[1, 2, 3, 4\]\)/.test(projectPersistenceSource) &&
   /PROJECT_SCHEMA_UNSUPPORTED/.test(projectPersistenceSource) &&
   /PROJECT_ASSET_PATH_INVALID/.test(projectPersistenceSource) &&
   /prepareProjectLoad/.test(projectPersistenceSource),

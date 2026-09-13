@@ -96,6 +96,7 @@
         <div id="authoring-overlay" class="authoring-overlay" hidden>
           <canvas id="authoring-coverage-mask" hidden aria-hidden="true"></canvas>
           <canvas id="authoring-layer-composite" hidden aria-hidden="true"></canvas>
+          <canvas id="authoring-background-preview" class="authoring-background-preview" aria-hidden="true"></canvas>
           <canvas id="authoring-coverage-preview" class="authoring-coverage-preview" aria-hidden="true"></canvas>
           <svg id="vector-mask-overlay" class="vector-mask-overlay" aria-label="Vector mask editor overlay"></svg>
           <div id="authoring-image-layer" class="authoring-image-layer" aria-label="Authoring image layer">
@@ -247,6 +248,11 @@
             <div class="preview-mode-actions">
               <button id="preview-authoring-button" class="active" type="button" aria-pressed="true">AUTHORING PREVIEW</button>
               <button id="preview-photoshop-final-button" type="button" aria-pressed="false">PHOTOSHOP FINAL PREVIEW</button>
+            </div>
+            <div class="preview-background-control">
+              <label for="preview-background-gray">PREVIEW BACKGROUND</label>
+              <div class="preview-background-scale"><span>BLACK</span><output id="preview-background-value" for="preview-background-gray">0.50</output><span>WHITE</span></div>
+              <input id="preview-background-gray" type="range" min="0" max="1" step="0.01" value="0.5" aria-label="Preview background gray">
             </div>
             <p id="preview-mode-state" role="status">AUTHORING PREVIEW · READY</p>
             <dl class="projection-poc-metrics preview-mode-details">

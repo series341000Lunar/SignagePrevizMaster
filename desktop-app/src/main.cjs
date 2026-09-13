@@ -308,6 +308,7 @@ async function runSmokeTest(window) {
     const block8e = await window.webContents.executeJavaScript('window.runBlock8EFoundationSmoke()', true);
     const block8f = await window.webContents.executeJavaScript('window.runBlock8FFullMergeSmoke()', true);
     const block9ba = await window.webContents.executeJavaScript('window.runBlock9BAPreviewSmoke()', true);
+    const previewBackground = await window.webContents.executeJavaScript('window.runPreviewBackgroundSmoke()', true);
     const bakeVisibilityArtifacts = {
       front: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_VisibilityDiagnostic.png'),
       back: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_VisibilityDiagnostic.png'),
@@ -431,7 +432,7 @@ async function runSmokeTest(window) {
       block8c.photoshopLastAppliedUnchanged === true && block8c.contextLossCount === 0 &&
       block8c.projectionRuntimeCount === 1 &&
       block8d.technicalPass === true && block8d.userValidation === 'PENDING' &&
-      block8d.schemaVersion === 3 && block8d.folderProject === true &&
+      block8d.schemaVersion === 4 && block8d.folderProject === true &&
       block8d.frontLayerCount === 3 && block8d.backLayerCount === 2 &&
       block8d.roundTripExact === true && block8d.stableLayerIds === true &&
       block8d.safeSequenceAfterLoad === true && block8d.loadedNeedsBake === true &&
@@ -472,6 +473,7 @@ async function runSmokeTest(window) {
       block9ba.technicalPass === true && block9ba.userValidation === 'PASS_CLOSED' &&
       block9ba.modeSessionOnly === true && block9ba.noMergedSend === true &&
       block9ba.photoshopMutationCount === 0 && block9ba.contextLossCount === 0 &&
+      previewBackground.technicalPass === true && previewBackground.userValidation === 'OPEN' &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -511,6 +513,7 @@ async function runSmokeTest(window) {
       block8e,
       block8f,
       block9ba,
+      previewBackground,
       screenshotPath
     };
     writeJson(reportPath, report);

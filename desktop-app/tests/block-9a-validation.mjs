@@ -103,8 +103,8 @@ stack.appendVectorMaskPoint(selectionLayer.layerId, maskPath.pathId, 0.5, 0.9);
 stack.closeVectorMaskPath(selectionLayer.layerId, maskPath.pathId);
 
 const payload = await createProjectSavePayload(stack, { assetNameToken: 'block9a' });
-assert.equal(PROJECT_SCHEMA_VERSION, 3);
-assert.deepEqual(PROJECT_SUPPORTED_SCHEMA_VERSIONS, [1, 2, 3]);
+assert.equal(PROJECT_SCHEMA_VERSION, 4);
+assert.deepEqual(PROJECT_SUPPORTED_SCHEMA_VERSIONS, [1, 2, 3, 4]);
 validateProjectManifest(payload.manifest);
 const savedLayers = payload.manifest.families[frontId].layers;
 assert.deepEqual(savedLayers.map((layer) => layer.source.sourceType), [
@@ -136,6 +136,7 @@ const filePayload = await createProjectSavePayload(fileOnly, { assetNameToken: '
 for (const version of [1, 2]) {
   const legacy = structuredClone(filePayload.manifest);
   legacy.schemaVersion = version;
+  delete legacy.preview;
   for (const family of Object.values(legacy.families)) for (const layer of family.layers) {
     const source = layer.source;
     layer.source = {
@@ -153,7 +154,7 @@ for (const version of [1, 2]) {
   assert.equal(migratedSource.colorContract, 'EMBEDDED_FILE_PROFILE');
 }
 const future = structuredClone(payload.manifest);
-future.schemaVersion = 4;
+future.schemaVersion = PROJECT_SCHEMA_VERSION + 1;
 assert.throws(() => validateProjectManifest(future), (error) => error.code === 'PROJECT_SCHEMA_UNSUPPORTED');
 
 const validMetadata = {
@@ -265,7 +266,7 @@ assert.match(mainSource, /webSecurity:\s*true/);
 assert.doesNotMatch(preloadSource, /require\('node:fs|arbitrary/i);
 
 console.log(JSON.stringify({
-  block: '9A', technicalPass: true, schemaVersion: 3, supportedSchemas: [1, 2, 3],
+  block: '9A', technicalPass: true, schemaVersion: PROJECT_SCHEMA_VERSION, supportedSchemas: PROJECT_SUPPORTED_SCHEMA_VERSIONS,
   sourceTypes: ['FILE', 'PHOTOSHOP_COMPOSITE_SNAPSHOT', 'PHOTOSHOP_SELECTION_SNAPSHOT'],
   exactRgbaPngRoundTrip: true, transparentRgbPreserved: true, nativeBoundsValidated: true,
   selectionDocumentPlacementRestored: true, selectionOpacityRoundTripMetadata: true,

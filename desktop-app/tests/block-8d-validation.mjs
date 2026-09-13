@@ -252,7 +252,7 @@ try {
   await rm(tempRoot, { recursive: true, force: true });
 }
 
-assert.match(rendererSource, /createProjectSavePayload\(authoringSession\)/);
+assert.match(rendererSource, /createProjectSavePayload\(authoringSession, \{/);
 assert.match(rendererSource, /prepareProjectLoad\(result\.manifest, result\.assets/);
 assert.match(rendererSource, /authoringViewSettings\.setOutsideSignageOpacity\(DEFAULT_OUTSIDE_SIGNAGE_OPACITY\)/);
 assert.match(rendererSource, /clearProjectScopedPhotoshopState\(\)/);

@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 4,
+  "projectType": "LUUX_SIGNAGE_PREVIZ",
+  "coordinateSpace": "PROJECTION_FRAME_NORMALIZED_TOP_LEFT",
+  "preview": {
+    "backgroundGray": 0.52
+  },
+  "families": {
+    "ANAMORPHIC_FRONT_75F": {
+      "familyId": "ANAMORPHIC_FRONT_75F",
+      "projectionProfile": {
+        "profileId": "FRONT_75F_NATIVE_CANONICAL_BAKE_POC",
+        "surfaceBinding": {
+          "exactName": "ANAM_SURFACE_FRONT75F",
+          "uvPolicy": "PRESERVE_AUTHORED_NO_REMAP"
+        }
+      },
+      "layers": [
+        {
+          "familyId": "ANAMORPHIC_FRONT_75F",
+          "layerId": "projection-layer-0002",
+          "order": 0,
+          "visible": true,
+          "source": {
+            "sourceId": "1789279394702-2746353-BackOrg.png",
+            "sourceType": "FILE",
+            "assetReference": "assets/asset-025442b1e31d-0001.png",
+            "originalFilename": "BackOrg.png",
+            "width": 2100,
+            "height": 3840,
+            "mimeType": "image/png",
+            "byteLength": 2746353,
+            "sha256": "C3D52DF827831AFAF410B29DC1612985C7556B737D6837DD1647EFA27BF95BDE",
+            "hasAlpha": true,
+            "alphaContract": "EMBEDDED_FILE_ALPHA",
+            "colorContract": "EMBEDDED_FILE_PROFILE",
+            "provenance": {
+              "type": "FILE",
+              "originalFilename": "BackOrg.png"
+            }
+          },
+          "mappingMode": "SCREEN_PROJECTED",
+          "transform": {
+            "x": 0.5,
+            "y": 0.5,
+            "scale": 1,
+            "rotationDegrees": 0
+          },
+          "opacity": 1,
+          "blendMode": "NORMAL",
+          "vectorMask": {
+            "enabled": true,
+            "invert": false,
+            "paths": [
+              {
+                "pathId": "mask-path-0001",
+                "enabled": true,
+                "operation": "ADD",
+                "closed": true,
+                "points": [
+                  {
+                    "pointId": "mask-point-0001",
+                    "x": 0.5,
+                    "y": 0.5,
+                    "inHandle": {
+                      "x": 0.5,
+                      "y": 0.5
+                    },
+                    "outHandle": {
+                      "x": 0.5,
+                      "y": 0.5
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  },
+                  {
+                    "pointId": "mask-point-0002",
+                    "x": 0.4863765373699148,
+                    "y": 0.3162251655629139,
+                    "inHandle": {
+                      "x": 0.4863765373699148,
+                      "y": 0.3162251655629139
+                    },
+                    "outHandle": {
+                      "x": 0.4863765373699148,
+                      "y": 0.3162251655629139
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  },
+                  {
+                    "pointId": "mask-point-0003",
+                    "x": 0.41169990243614,
+                    "y": 0.34602649006622516,
+                    "inHandle": {
+                      "x": 0.41169990243614,
+                      "y": 0.34602649006622516
+                    },
+                    "outHandle": {
+                      "x": 0.41169990243614,
+                      "y": 0.34602649006622516
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  },
+                  {
+                    "pointId": "mask-point-0004",
+                    "x": 0.39454436938268683,
+                    "y": 0.4652317880794702,
+                    "inHandle": {
+                      "x": 0.39454436938268683,
+                      "y": 0.4652317880794702
+                    },
+                    "outHandle": {
+                      "x": 0.39454436938268683,
+                      "y": 0.4652317880794702
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "ANAMORPHIC_BACK": {
+      "familyId": "ANAMORPHIC_BACK",
+      "projectionProfile": {
+        "profileId": "BACK_NATIVE_CANONICAL_BAKE_POC",
+        "surfaceBinding": {
+          "exactName": "ANAM_SURFACE_BACK",
+          "uvPolicy": "PRESERVE_AUTHORED_NO_REMAP"
+        }
+      },
+      "layers": [
+        {
+          "familyId": "ANAMORPHIC_BACK",
+          "layerId": "projection-layer-0001",
+          "order": 0,
+          "visible": true,
+          "source": {
+            "sourceId": "snapshot:snapshot-mtzf5tv3-1-9a10dbe2",
+            "sourceType": "PHOTOSHOP_SELECTION_SNAPSHOT",
+            "assetReference": "assets/asset-025442b1e31d-0002.png",
+            "originalFilename": "Photoshop_Selection_2026-09-13T06-14-40-301Z.png",
+            "width": 757,
+            "height": 2796,
+            "mimeType": "image/png",
+            "byteLength": 3422841,
+            "sha256": "BAF21E4F792B5F9BE896931450D69C0D2DB23E7BDC1F6B64434E807EC50F4C67",
+            "hasAlpha": true,
+            "alphaContract": "PHOTOSHOP_IMAGING_RGBA8_PROBE_PENDING",
+            "colorContract": "SRGB_IEC61966_2_1_RGB8",
+            "provenance": {
+              "type": "PHOTOSHOP_SELECTION_SNAPSHOT",
+              "documentName": "제목 없음-1",
+              "captureDocumentId": 59,
+              "documentWidth": 2100,
+              "documentHeight": 3840,
+              "captureBounds": {
+                "left": 671,
+                "top": 522,
+                "right": 1428,
+                "bottom": 3318
+              },
+              "captureTimestamp": "2026-09-13T06:14:40.301Z",
+              "captureMode": "SINGLE_PIXEL_LAYER",
+              "selectedLayerIds": [
+                16
+              ],
+              "selectedLayerNames": [
+                "Org"
+              ]
+            }
+          },
+          "mappingMode": "SCREEN_PROJECTED",
+          "transform": {
+            "x": 0.49976190476190474,
+            "y": 0.5,
+            "scale": 1,
+            "rotationDegrees": 0
+          },
+          "opacity": 1,
+          "blendMode": "NORMAL",
+          "vectorMask": {
+            "enabled": false,
+            "invert": false,
+            "paths": []
+          }
+        }
+      ]
+    }
+  }
+}

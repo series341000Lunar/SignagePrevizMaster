@@ -1,7 +1,10 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "projectType": "LUUX_SIGNAGE_PREVIZ",
   "coordinateSpace": "PROJECTION_FRAME_NORMALIZED_TOP_LEFT",
+  "preview": {
+    "backgroundGray": 0.31
+  },
   "families": {
     "ANAMORPHIC_FRONT_75F": {
       "familyId": "ANAMORPHIC_FRONT_75F",
@@ -21,7 +24,7 @@
           "source": {
             "sourceId": "snapshot:snapshot-mtyhpka4-1-b953632c",
             "sourceType": "PHOTOSHOP_COMPOSITE_SNAPSHOT",
-            "assetReference": "assets/asset-879cbb2c36bc-0001.png",
+            "assetReference": "assets/asset-11f256804aec-0001.png",
             "originalFilename": "Photoshop_Composite_2026-09-12T14-38-14-341Z.png",
             "width": 3000,
             "height": 3840,
@@ -203,7 +206,7 @@
           "source": {
             "sourceId": "snapshot:snapshot-mtyjxxlh-6-1b0c35da",
             "sourceType": "PHOTOSHOP_SELECTION_SNAPSHOT",
-            "assetReference": "assets/asset-879cbb2c36bc-0002.png",
+            "assetReference": "assets/asset-11f256804aec-0002.png",
             "originalFilename": "Photoshop_Selection_2026-09-12T15-40-43-797Z.png",
             "width": 757,
             "height": 1181,
@@ -258,7 +261,7 @@
           "source": {
             "sourceId": "snapshot:snapshot-mtyjxtzu-5-022ef444",
             "sourceType": "PHOTOSHOP_SELECTION_SNAPSHOT",
-            "assetReference": "assets/asset-879cbb2c36bc-0003.png",
+            "assetReference": "assets/asset-11f256804aec-0003.png",
             "originalFilename": "Photoshop_Selection_2026-09-12T15-40-39-153Z.png",
             "width": 750,
             "height": 1260,
@@ -313,7 +316,7 @@
           "source": {
             "sourceId": "snapshot:snapshot-mtyjxqp5-4-31d3da65",
             "sourceType": "PHOTOSHOP_SELECTION_SNAPSHOT",
-            "assetReference": "assets/asset-879cbb2c36bc-0004.png",
+            "assetReference": "assets/asset-11f256804aec-0004.png",
             "originalFilename": "Photoshop_Selection_2026-09-12T15-40-34-860Z.png",
             "width": 655,
             "height": 1260,

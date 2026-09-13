@@ -19,9 +19,10 @@ import {
   isSnapshotSourceType,
   normalizeCaptureBounds
 } from './bitmap-source.js';
+import { DEFAULT_PREVIEW_BACKGROUND_GRAY, isPreviewBackgroundGray } from './preview-background.js';
 
-export const PROJECT_SCHEMA_VERSION = 3;
-export const PROJECT_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2, 3]);
+export const PROJECT_SCHEMA_VERSION = 4;
+export const PROJECT_SUPPORTED_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4]);
 export const PROJECT_TYPE = 'LUUX_SIGNAGE_PREVIZ';
 export const PROJECT_MAPPING_MODE = 'SCREEN_PROJECTED';
 
@@ -256,7 +257,16 @@ export function validateProjectManifest(manifest, { profiles = PROJECTION_BAKE_P
   if (!PROJECT_SUPPORTED_SCHEMA_VERSIONS.includes(manifest.schemaVersion)) {
     fail('PROJECT_SCHEMA_UNSUPPORTED', `schemaVersion ${manifest.schemaVersion} is unsupported.`);
   }
-  exactKeys(manifest, ['schemaVersion', 'projectType', 'coordinateSpace', 'families'], 'PROJECT_MANIFEST_INVALID', 'project', manifest.schemaVersion);
+  exactKeys(manifest, manifest.schemaVersion >= 4
+    ? ['schemaVersion', 'projectType', 'coordinateSpace', 'families', 'preview']
+    : ['schemaVersion', 'projectType', 'coordinateSpace', 'families'], 'PROJECT_MANIFEST_INVALID', 'project', manifest.schemaVersion);
+  if (manifest.schemaVersion >= 4) {
+    const preview = object(manifest.preview, 'PROJECT_PREVIEW_INVALID', 'project.preview');
+    exactKeys(preview, ['backgroundGray'], 'PROJECT_PREVIEW_INVALID', 'project.preview', manifest.schemaVersion);
+    if (!isPreviewBackgroundGray(preview.backgroundGray)) {
+      fail('PROJECT_PREVIEW_INVALID', 'project.preview.backgroundGray must be a finite number between 0 and 1.');
+    }
+  }
   if (manifest.projectType !== PROJECT_TYPE) fail('PROJECT_MANIFEST_INVALID', `projectType must be ${PROJECT_TYPE}.`);
   if (manifest.coordinateSpace !== AUTHORING_COORDINATE_SPACE) {
     fail('PROJECT_COORDINATE_INVALID', `coordinateSpace must be ${AUTHORING_COORDINATE_SPACE}.`);
@@ -329,13 +339,15 @@ function sourceBytes(layer) {
 
 export async function createProjectSavePayload(stack, {
   profiles = PROJECTION_BAKE_PROFILES,
-  assetNameToken = null
+  assetNameToken = null,
+  previewBackgroundGray = DEFAULT_PREVIEW_BACKGROUND_GRAY
 } = {}) {
   const token = assetToken(assetNameToken);
   const manifest = {
     schemaVersion: PROJECT_SCHEMA_VERSION,
     projectType: PROJECT_TYPE,
     coordinateSpace: AUTHORING_COORDINATE_SPACE,
+    preview: { backgroundGray: previewBackgroundGray },
     families: {}
   };
   const assets = [];
@@ -516,6 +528,9 @@ export async function prepareProjectLoad(manifest, assetRecords, {
     return {
       manifest,
       runtimes,
+      previewBackgroundGray: manifest.schemaVersion >= 4
+        ? manifest.preview.backgroundGray
+        : DEFAULT_PREVIEW_BACKGROUND_GRAY,
       snapshot: {
         activeFamilyId: selectedFamily,
         revision: 0,

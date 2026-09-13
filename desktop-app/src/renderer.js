@@ -82,6 +82,9 @@ import {
 } from './bitmap-source.js';
 import { encodeRgba8Png, rgba8FromChunky } from './png-codec.js';
 import { PREVIEW_MODES, previewSourceDecision } from './preview-mode.js';
+import { DEFAULT_PREVIEW_BACKGROUND_GRAY, clampPreviewBackgroundInput } from './preview-background.js';
+
+const previewBackgroundUniform = { value: DEFAULT_PREVIEW_BACKGROUND_GRAY };
 
 const canvas = document.querySelector('#three-canvas');
 const viewer = document.querySelector('#viewer');
@@ -103,6 +106,8 @@ const viewSite3dButton = document.querySelector('#view-site-3d-button');
 const previewAuthoringButton = document.querySelector('#preview-authoring-button');
 const previewPhotoshopFinalButton = document.querySelector('#preview-photoshop-final-button');
 const previewModeState = document.querySelector('#preview-mode-state');
+const previewBackgroundGray = document.querySelector('#preview-background-gray');
+const previewBackgroundValue = document.querySelector('#preview-background-value');
 const previewLinkState = document.querySelector('#preview-link-state');
 const previewDocumentName = document.querySelector('#preview-document-name');
 const previewReceivedSize = document.querySelector('#preview-received-size');
@@ -186,6 +191,7 @@ const authoringLayerComposite = document.querySelector('#authoring-layer-composi
 const authoringVectorMaskedSource = document.createElement('canvas');
 const authoringVectorMaskScratch = document.createElement('canvas');
 const authoringCoveragePreview = document.querySelector('#authoring-coverage-preview');
+const authoringBackgroundPreview = document.querySelector('#authoring-background-preview');
 const authoringImageLayer = document.querySelector('#authoring-image-layer');
 const authoringImagePreview = document.querySelector('#authoring-image-preview');
 const authoringScaleHandle = document.querySelector('#authoring-scale-handle');
@@ -369,6 +375,7 @@ const state = {
   texture: null,
   activeView: DEFAULT_ACTIVE_VIEW,
   previewMode: PREVIEW_MODES.AUTHORING,
+  previewBackgroundGray: DEFAULT_PREVIEW_BACKGROUND_GRAY,
   zoom: 1,
   viewMode: 'fit',
   filterMode: 'normal',
@@ -1137,15 +1144,39 @@ function currentPreviewDecision() {
   });
 }
 
+function installPreviewBackgroundShader(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.previewBackgroundGray = previewBackgroundUniform;
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float previewBackgroundGray;')
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        #ifdef USE_MAP
+          vec4 previewSrgb = sRGBTransferOETF( diffuseColor );
+          previewSrgb.rgb = mix( vec3( previewBackgroundGray ), previewSrgb.rgb, diffuseColor.a );
+          diffuseColor.rgb = sRGBTransferEOTF( previewSrgb ).rgb;
+          diffuseColor.a = 1.0;
+        #endif`);
+  };
+  material.customProgramCacheKey = () => 'project-preview-gray-v1';
+}
+
 function applySitePreviewSource(decision) {
   const previewContext = isAnamorphicCalibrationContext();
   const desiredMap = previewContext
     ? (decision.source === 'PHOTOSHOP_FINAL' ? state.texture : null)
     : state.texture;
   for (const binding of state.site.activeBindings) {
-    if (binding.mesh.userData.productionHelper === true || binding.mesh.material.map === desiredMap) continue;
-    binding.mesh.material.map = desiredMap;
-    binding.mesh.material.needsUpdate = true;
+    if (binding.mesh.userData.productionHelper === true) continue;
+    const material = binding.mesh.material;
+    if (material.map !== desiredMap) {
+      material.map = desiredMap;
+      material.needsUpdate = true;
+    }
+    if (binding.mesh.userData.previewBackgroundSurface) {
+      const gray = previewContext && decision.source === 'AUTHORING'
+        ? state.previewBackgroundGray : 1;
+      material.color.setRGB(gray, gray, gray, THREE.SRGBColorSpace);
+    }
   }
 }
 
@@ -1180,12 +1211,27 @@ function setPreviewMode(mode) {
   updateDiagnostics();
 }
 
+function setPreviewBackgroundGray(value, { markProjectChanged = true } = {}) {
+  const gray = clampPreviewBackgroundInput(value);
+  if (gray === null) return false;
+  if (state.previewBackgroundGray === gray) return true;
+  state.previewBackgroundGray = gray;
+  previewBackgroundUniform.value = gray;
+  if (markProjectChanged) state.authoring.project.status = 'Preview background changed. Save Project to keep this value.';
+  syncAuthoringUi();
+  render();
+  updateDiagnostics();
+  return true;
+}
+
 function disposeAuthoringSource() {
   authoringSession.disposeAll();
   state.authoring.sourceRuntime = null;
   authoringImagePreview.removeAttribute('src');
   authoringCoveragePreview.getContext('2d', { alpha: true })
     .clearRect(0, 0, authoringCoveragePreview.width, authoringCoveragePreview.height);
+  authoringBackgroundPreview.getContext('2d', { alpha: true })
+    .clearRect(0, 0, authoringBackgroundPreview.width, authoringBackgroundPreview.height);
 }
 
 function invalidateAuthoringOutputs(reason = 'authoring-transform-change') {
@@ -1300,11 +1346,23 @@ function drawAuthoringCoveragePreview(frame) {
     authoringCoveragePreview.width = width;
     authoringCoveragePreview.height = height;
   }
+  if (authoringBackgroundPreview.width !== width || authoringBackgroundPreview.height !== height) {
+    authoringBackgroundPreview.width = width;
+    authoringBackgroundPreview.height = height;
+  }
   if (authoringLayerComposite.width !== width || authoringLayerComposite.height !== height) {
     authoringLayerComposite.width = width;
     authoringLayerComposite.height = height;
   }
   const coverage = buildAuthoringCoverageMask(frame, pixelRatio);
+  const backgroundContext = authoringBackgroundPreview.getContext('2d', { alpha: true });
+  backgroundContext.clearRect(0, 0, width, height);
+  backgroundContext.drawImage(coverage, 0, 0, width, height);
+  backgroundContext.globalCompositeOperation = 'source-in';
+  const backgroundChannel = Math.round(state.previewBackgroundGray * 255);
+  backgroundContext.fillStyle = `rgb(${backgroundChannel}, ${backgroundChannel}, ${backgroundChannel})`;
+  backgroundContext.fillRect(0, 0, width, height);
+  backgroundContext.globalCompositeOperation = 'source-over';
   const context = authoringCoveragePreview.getContext('2d', { alpha: true });
   context.clearRect(0, 0, width, height);
   const layerContext = authoringLayerComposite.getContext('2d', { alpha: true });
@@ -1896,6 +1954,8 @@ function syncVectorMaskUi(available) {
 }
 
 function syncAuthoringUi() {
+  previewBackgroundGray.value = String(state.previewBackgroundGray);
+  previewBackgroundValue.value = state.previewBackgroundGray.toFixed(2);
   const available = isProjectionAuthoringContext();
   const source = authoringSession.source;
   const selectedLayer = authoringSession.selectedLayer;
@@ -2335,7 +2395,9 @@ async function saveAuthoringProject(saveAs = false) {
   if (state.authoring.project.busy) return false;
   setProjectOperationState({ busy: true, status: saveAs ? 'Preparing Save As...' : 'Preparing Save...', error: '' });
   try {
-    const payload = await createProjectSavePayload(authoringSession);
+    const payload = await createProjectSavePayload(authoringSession, {
+      previewBackgroundGray: state.previewBackgroundGray
+    });
     let result = saveAs ? await window.luuxProject.saveAs(payload) : await window.luuxProject.save(payload);
     if (!saveAs && !result.ok && result.error?.code === 'PROJECT_SAVE_AS_REQUIRED') {
       result = await window.luuxProject.saveAs(payload);
@@ -2460,6 +2522,8 @@ async function openAuthoringProject(manifestFile = null) {
     const previousSnapshot = authoringSession.snapshot();
     authoringSession.restore(prepared.snapshot);
     transferred = true;
+    state.previewBackgroundGray = prepared.previewBackgroundGray;
+    previewBackgroundUniform.value = prepared.previewBackgroundGray;
     disposeAuthoringSnapshot(previousSnapshot);
     authoringViewSettings.setOutsideSignageOpacity(DEFAULT_OUTSIDE_SIGNAGE_OPACITY);
     state.authoring.railExpanded = false;
@@ -3671,16 +3735,18 @@ async function loadSiteScene() {
           !anamorphicFamily.surfaces.some((surface) => surface.expectedNode === child.name);
         child.userData.productionHelper = productionHelper;
         child.userData.photoshopPointTarget = !productionHelper && !anamorphicFamily;
+        child.userData.previewBackgroundSurface = Boolean(anamorphicFamily) && !productionHelper;
         child.material = new THREE.MeshBasicMaterial({
           map: productionHelper ? null : state.texture,
           color: 0xffffff,
-          transparent: true,
+          transparent: !child.userData.previewBackgroundSurface,
           opacity: 1,
           side: THREE.DoubleSide,
           depthTest: true,
           depthWrite: true,
           toneMapped: false
         });
+        if (child.userData.previewBackgroundSurface) installPreviewBackgroundShader(child.material);
         child.visible = false;
       });
       gltf.scene.userData.siteAssetId = assetId;
@@ -5739,6 +5805,7 @@ view3dPlaneButton.addEventListener('click', () => setActiveView('3d-plane'));
 viewSite3dButton.addEventListener('click', () => setActiveView('site-3d'));
 previewAuthoringButton.addEventListener('click', () => setPreviewMode(PREVIEW_MODES.AUTHORING));
 previewPhotoshopFinalButton.addEventListener('click', () => setPreviewMode(PREVIEW_MODES.PHOTOSHOP_FINAL));
+previewBackgroundGray.addEventListener('input', () => setPreviewBackgroundGray(previewBackgroundGray.value));
 siteWorldSelect.addEventListener('change', () => {
   if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
   if (authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
@@ -8023,6 +8090,108 @@ window.runBlock9BAPreviewSmoke = () => {
     state.site.mappingMode = previous.mappingMode;
     state.site.anamorphicFamily = previous.family;
     state.site.anamorphicCameraMode = previous.cameraMode;
+    siteWorldSelect.value = previous.world;
+    siteMappingSelect.value = previous.mappingMode;
+    siteAnamorphicFamilySelect.value = previous.family;
+    setActiveView(previous.activeView);
+    applySiteSurfaceSelection({ resetCamera: false });
+    restoreSiteCameraRuntime(previous.camera);
+    syncAuthoringUi();
+    render();
+    updateDiagnostics();
+  }
+};
+window.runPreviewBackgroundSmoke = () => {
+  const previous = {
+    activeView: state.activeView, world: state.site.world, mappingMode: state.site.mappingMode,
+    family: state.site.anamorphicFamily, cameraMode: state.site.anamorphicCameraMode,
+    camera: snapshotSiteCameraRuntime(), previewMode: state.previewMode,
+    previewBackgroundGray: state.previewBackgroundGray, projectStatus: state.authoring.project.status,
+    asset: state.asset, rendererHandshake: state.link.rendererHandshake,
+    photoshopConnected: state.link.photoshopConnected, liveFrameCurrent: state.link.liveFrameCurrent,
+    lastFrame: state.link.lastFrame
+  };
+  const textureCount = renderer.info.memory.textures;
+  const contextLossCount = state.contextLossCount;
+  const pixelDirtyBefore = authoringSession.pixelDirty;
+  const metadataDirtyBefore = authoringSession.metadataDirty;
+  const mergedBefore = [ANAMORPHIC_FAMILY_IDS.FRONT_75F, ANAMORPHIC_FAMILY_IDS.BACK]
+    .map((familyId) => authoringSession.mergedState(familyId));
+  const stackBefore = JSON.stringify(authoringSession.snapshot());
+  const bakeBefore = state.projectionBake.result;
+  const mergeRunningBefore = state.fullMerge.running;
+  const registryBefore = state.reverseBake.targetRegistry;
+  const families = [];
+  try {
+    state.site.world = 'world3d';
+    state.site.mappingMode = 'anamorphic';
+    state.site.anamorphicCameraMode = 'CALIBRATION';
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    setActiveView('site-3d');
+    state.asset = { ...previous.asset, kind: 'live' };
+    state.link.rendererHandshake = true;
+    state.link.photoshopConnected = true;
+    state.link.liveFrameCurrent = true;
+    for (const [family, width] of [['front75f', 3000], ['back', 2100]]) {
+      state.site.anamorphicFamily = family;
+      siteAnamorphicFamilySelect.value = family;
+      applySiteSurfaceSelection();
+      state.link.lastFrame = {
+        documentId: 91, documentName: 'Preview-background-smoke.psd',
+        documentWidth: width, documentHeight: 3840,
+        receivedWidth: width, receivedHeight: 3840
+      };
+      setPreviewMode(PREVIEW_MODES.AUTHORING);
+      const samples = [];
+      for (const gray of [0, 0.27, 0.5, 1]) {
+        setPreviewBackgroundGray(gray, { markProjectChanged: false });
+        samples.push(previewBackgroundUniform.value === gray &&
+          previewBackgroundGray.value === String(gray) &&
+          state.site.activeBindings.every(({ mesh }) => mesh.material.transparent === false &&
+            mesh.material.map === null && mesh.userData.previewBackgroundSurface === true));
+      }
+      setPreviewBackgroundGray(0.27, { markProjectChanged: false });
+      setPreviewMode(PREVIEW_MODES.PHOTOSHOP_FINAL);
+      const final = currentPreviewDecision().source === 'PHOTOSHOP_FINAL' &&
+        state.site.activeBindings.every(({ mesh }) => mesh.material.transparent === false &&
+          mesh.material.map === state.texture && mesh.material.customProgramCacheKey() === 'project-preview-gray-v1');
+      state.link.lastFrame = { ...state.link.lastFrame,
+        documentWidth: 4728, documentHeight: 5760,
+        receivedWidth: 4728, receivedHeight: 5760 };
+      render();
+      const mismatch = currentPreviewDecision().status === 'SIZE_MISMATCH' &&
+        state.site.activeBindings.every(({ mesh }) => mesh.material.map === null);
+      families.push({ family, samplesPass: samples.every(Boolean), final, mismatch });
+    }
+    const unchanged = JSON.stringify(authoringSession.snapshot()) === stackBefore &&
+      authoringSession.pixelDirty === pixelDirtyBefore && authoringSession.metadataDirty === metadataDirtyBefore &&
+      [ANAMORPHIC_FAMILY_IDS.FRONT_75F, ANAMORPHIC_FAMILY_IDS.BACK].every((familyId, index) =>
+        JSON.stringify(authoringSession.mergedState(familyId)) === JSON.stringify(mergedBefore[index])) &&
+      state.projectionBake.result === bakeBefore && state.fullMerge.running === mergeRunningBefore &&
+      state.reverseBake.targetRegistry === registryBefore;
+    return {
+      technicalPass: families.length === 2 && families.every(({ samplesPass, final, mismatch }) =>
+        samplesPass && final && mismatch) && unchanged &&
+        renderer.info.memory.textures === textureCount && state.contextLossCount === contextLossCount,
+      userValidation: 'OPEN', families, unchanged,
+      rendererTextureCountBefore: textureCount, rendererTextureCountAfter: renderer.info.memory.textures,
+      contextLossCount: state.contextLossCount - contextLossCount
+    };
+  } finally {
+    state.site.world = previous.world;
+    state.site.mappingMode = previous.mappingMode;
+    state.site.anamorphicFamily = previous.family;
+    state.site.anamorphicCameraMode = previous.cameraMode;
+    state.asset = previous.asset;
+    state.link.rendererHandshake = previous.rendererHandshake;
+    state.link.photoshopConnected = previous.photoshopConnected;
+    state.link.liveFrameCurrent = previous.liveFrameCurrent;
+    state.link.lastFrame = previous.lastFrame;
+    state.previewMode = previous.previewMode;
+    state.previewBackgroundGray = previous.previewBackgroundGray;
+    previewBackgroundUniform.value = previous.previewBackgroundGray;
+    state.authoring.project.status = previous.projectStatus;
     siteWorldSelect.value = previous.world;
     siteMappingSelect.value = previous.mappingMode;
     siteAnamorphicFamilySelect.value = previous.family;

@@ -236,6 +236,7 @@ assert.ok(!identityBefore.pointIds.includes(loadedNewPoint.pointId));
 
 const v1 = structuredClone(payload.manifest);
 v1.schemaVersion = 1;
+delete v1.preview;
 for (const family of Object.values(v1.families)) for (const layer of family.layers) {
   delete layer.vectorMask;
   delete layer.source.sourceId;
