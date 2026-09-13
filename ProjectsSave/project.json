@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "projectType": "LUUX_SIGNAGE_PREVIZ",
+  "coordinateSpace": "PROJECTION_FRAME_NORMALIZED_TOP_LEFT",
+  "families": {
+    "ANAMORPHIC_FRONT_75F": {
+      "familyId": "ANAMORPHIC_FRONT_75F",
+      "projectionProfile": {
+        "profileId": "FRONT_75F_NATIVE_CANONICAL_BAKE_POC",
+        "surfaceBinding": {
+          "exactName": "ANAM_SURFACE_FRONT75F",
+          "uvPolicy": "PRESERVE_AUTHORED_NO_REMAP"
+        }
+      },
+      "layers": [
+        {
+          "familyId": "ANAMORPHIC_FRONT_75F",
+          "layerId": "projection-layer-0005",
+          "order": 0,
+          "visible": true,
+          "source": {
+            "sourceType": "FILE",
+            "assetReference": "assets/asset-35cf92ce11d4-0001.jpg",
+            "originalFilename": "P1010230.JPG",
+            "width": 5328,
+            "height": 4000,
+            "mimeType": "image/jpeg",
+            "byteLength": 9227264,
+            "sha256": "9E99C24D6AFE5B4129C5DE374F7B6ADD41228E500FD02482B5C55059A090FFB0",
+            "hasAlpha": false
+          },
+          "mappingMode": "SCREEN_PROJECTED",
+          "transform": {
+            "x": 0.5,
+            "y": 0.5,
+            "scale": 1,
+            "rotationDegrees": 0
+          },
+          "opacity": 1,
+          "blendMode": "NORMAL"
+        },
+        {
+          "familyId": "ANAMORPHIC_FRONT_75F",
+          "layerId": "projection-layer-0002",
+          "order": 1,
+          "visible": true,
+          "source": {
+            "sourceType": "FILE",
+            "assetReference": "assets/asset-35cf92ce11d4-0002.png",
+            "originalFilename": "hf_20260716_043355_eb531fbf-051e-429d-be24-0325c3609b70.png",
+            "width": 3840,
+            "height": 2160,
+            "mimeType": "image/png",
+            "byteLength": 5676304,
+            "sha256": "129E35998DC7015A52BF6DD7C66C68607B161032B8478617D6F084DD256D8D3C",
+            "hasAlpha": false
+          },
+          "mappingMode": "SCREEN_PROJECTED",
+          "transform": {
+            "x": 0.5035319872723509,
+            "y": 0.7593819321386075,
+            "scale": 1,
+            "rotationDegrees": 0
+          },
+          "opacity": 1,
+          "blendMode": "NORMAL"
+        },
+        {
+          "familyId": "ANAMORPHIC_FRONT_75F",
+          "layerId": "projection-layer-0001",
+          "order": 2,
+          "visible": true,
+          "source": {
+            "sourceType": "FILE",
+            "assetReference": "assets/asset-35cf92ce11d4-0003.png",
+            "originalFilename": "ChatGPT Image 2026년 7월 16일 오후 01_24_22 (3).png",
+            "width": 1672,
+            "height": 941,
+            "mimeType": "image/png",
+            "byteLength": 1915168,
+            "sha256": "1CB4CF0E071CA3C04AD747906361903C015108CAEF7646DB45DD9E75C9C90B52",
+            "hasAlpha": false
+          },
+          "mappingMode": "SCREEN_PROJECTED",
+          "transform": {
+            "x": 0.4682119205298013,
+            "y": 0.3923841059602649,
+            "scale": 1,
+            "rotationDegrees": 0
+          },
+          "opacity": 0.68,
+          "blendMode": "NORMAL"
+        }
+      ]
+    },
+    "ANAMORPHIC_BACK": {
+      "familyId": "ANAMORPHIC_BACK",
+      "projectionProfile": {
+        "profileId": "BACK_NATIVE_CANONICAL_BAKE_POC",
+        "surfaceBinding": {
+          "exactName": "ANAM_SURFACE_BACK",
+          "uvPolicy": "PRESERVE_AUTHORED_NO_REMAP"
+        }
+      },
+      "layers": [
+        {
+          "familyId": "ANAMORPHIC_BACK",
+          "layerId": "projection-layer-0004",
+          "order": 0,
+          "visible": true,
+          "source": {
+            "sourceType": "FILE",
+            "assetReference": "assets/asset-35cf92ce11d4-0004.png",
+            "originalFilename": "ChatGPT Image 2026년 7월 16일 오후 01_24_22 (1).png",
+            "width": 1672,
+            "height": 941,
+            "mimeType": "image/png",
+            "byteLength": 1978316,
+            "sha256": "4DF8E20757F42800FA7ED70F083E4552BD65CF4B34DAD3CE8BC4623C6B98D40A",
+            "hasAlpha": false
+          },
+          "mappingMode": "SCREEN_PROJECTED",
+          "transform": {
+            "x": 0.5252285729068118,
+            "y": 0.21357615894039733,
+            "scale": 1,
+            "rotationDegrees": 0
+          },
+          "opacity": 0.71,
+          "blendMode": "NORMAL"
+        },
+        {
+          "familyId": "ANAMORPHIC_BACK",
+          "layerId": "projection-layer-0003",
+          "order": 1,
+          "visible": true,
+          "source": {
+            "sourceType": "FILE",
+            "assetReference": "assets/asset-35cf92ce11d4-0005.png",
+            "originalFilename": "hf_20260716_043355_eb531fbf-051e-429d-be24-0325c3609b70.png",
+            "width": 3840,
+            "height": 2160,
+            "mimeType": "image/png",
+            "byteLength": 5676304,
+            "sha256": "129E35998DC7015A52BF6DD7C66C68607B161032B8478617D6F084DD256D8D3C",
+            "hasAlpha": false
+          },
+          "mappingMode": "SCREEN_PROJECTED",
+          "transform": {
+            "x": 0.5,
+            "y": 0.5,
+            "scale": 1,
+            "rotationDegrees": 0
+          },
+          "opacity": 1,
+          "blendMode": "NORMAL"
+        }
+      ]
+    }
+  }
+}

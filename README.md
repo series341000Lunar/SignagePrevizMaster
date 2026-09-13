@@ -168,9 +168,12 @@ Block 9A adds explicit Photoshop Composite and single-Pixel-Layer Snapshot
 sources to the existing Block 8 authoring stack. Captures become independent
 lossless PNG project assets, persist under schema 3, reopen offline, and reuse
 the existing Layout, Vector Mask, BAKE CURRENT, and BAKE FULL MERGED paths.
-Automated validation passes. BACK V3 per-layer Photoshop round-trip has a
-scoped user visual PASS, and the 62% Layer opacity property has a separate user
-PASS; formal alpha/ACK edge probes remain open, so Block 9A is not closed. See
+Automated validation passes, and Block 9A is CLOSED / USER VALIDATED within the
+RGB8/sRGB-oriented V1 scope. Composite and one ordinary Pixel Layer Selection
+Snapshots have user PASS; BACK V3 per-layer Photoshop round-trip has a scoped
+visual PASS, the 62% Layer opacity property passed separately, and sparse
+order-2-first Send passed on the real Photoshop host. Hidden RGB under zero
+alpha is a non-blocking diagnostic, not a V1 guarantee. See
 [Block 9A Validation](docs/BLOCK-9A-VALIDATION.md),
 [Block 9A Handoff](docs/BLOCK-9A-HANDOFF.md), and the
 [Block 9 master design](docs/POST-BLOCK-8F-SNAPSHOT-AUDIT-AND-BLOCK9-DESIGN-V1.md).

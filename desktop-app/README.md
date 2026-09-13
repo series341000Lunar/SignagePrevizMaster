@@ -219,10 +219,12 @@ to enable the transform controls.
     -> schema 3 Save/Open, including offline Open
     -> existing Vector Mask / Bake Current / Full Merge paths
 
-FILE input remains available without Photoshop. Composite Snapshot is
-implemented. One-Pixel-Layer Selection Snapshot has a scoped BACK V3 user visual
-PASS and a separately confirmed 62% opacity property PASS, but remains
-probe-gated for formal transparent-RGB and ACK edge cases. A
+FILE input remains available without Photoshop. Block 9A is CLOSED / USER
+VALIDATED for Composite Snapshot and exactly one ordinary Pixel Layer Selection
+Snapshot in RGB8/sRGB-oriented V1 scope. BACK V3 has a scoped user visual PASS,
+the 62% Layer opacity property passed separately, and sparse order-2-first
+Send passed on the real Photoshop host. Exact hidden RGB under alpha=0 is a
+non-blocking diagnostic, not a V1 guarantee. A
 Selection Snapshot initializes its layer center from Photoshop capture bounds
 in the active 1:1 working canvas and preserves the selected Pixel Layer opacity
 through the return to Photoshop. Snapshot is explicit and immutable; Photoshop

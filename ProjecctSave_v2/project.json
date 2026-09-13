@@ -1,0 +1,366 @@
+{
+  "schemaVersion": 3,
+  "projectType": "LUUX_SIGNAGE_PREVIZ",
+  "coordinateSpace": "PROJECTION_FRAME_NORMALIZED_TOP_LEFT",
+  "families": {
+    "ANAMORPHIC_FRONT_75F": {
+      "familyId": "ANAMORPHIC_FRONT_75F",
+      "projectionProfile": {
+        "profileId": "FRONT_75F_NATIVE_CANONICAL_BAKE_POC",
+        "surfaceBinding": {
+          "exactName": "ANAM_SURFACE_FRONT75F",
+          "uvPolicy": "PRESERVE_AUTHORED_NO_REMAP"
+        }
+      },
+      "layers": [
+        {
+          "familyId": "ANAMORPHIC_FRONT_75F",
+          "layerId": "projection-layer-0001",
+          "order": 0,
+          "visible": true,
+          "source": {
+            "sourceId": "snapshot:snapshot-mtyhpka4-1-b953632c",
+            "sourceType": "PHOTOSHOP_COMPOSITE_SNAPSHOT",
+            "assetReference": "assets/asset-879cbb2c36bc-0001.png",
+            "originalFilename": "Photoshop_Composite_2026-09-12T14-38-14-341Z.png",
+            "width": 3000,
+            "height": 3840,
+            "mimeType": "image/png",
+            "byteLength": 5155541,
+            "sha256": "A32EEF56A79D3A587C06C052D83A6F56FC2DBEDFFD31B276E6E1574AE15B93C4",
+            "hasAlpha": true,
+            "alphaContract": "PHOTOSHOP_IMAGING_RGBA8_PROBE_PENDING",
+            "colorContract": "SRGB_IEC61966_2_1_RGB8",
+            "provenance": {
+              "type": "PHOTOSHOP_COMPOSITE_SNAPSHOT",
+              "documentName": "LUUX_Front75F-복구됨",
+              "captureDocumentId": 63,
+              "documentWidth": 3000,
+              "documentHeight": 3840,
+              "captureBounds": {
+                "left": 0,
+                "top": 0,
+                "right": 3000,
+                "bottom": 3840
+              },
+              "captureTimestamp": "2026-09-12T14:38:14.341Z",
+              "captureMode": "COMPOSITE"
+            }
+          },
+          "mappingMode": "SCREEN_PROJECTED",
+          "transform": {
+            "x": 0.5,
+            "y": 0.5,
+            "scale": 1,
+            "rotationDegrees": 0
+          },
+          "opacity": 1,
+          "blendMode": "NORMAL",
+          "vectorMask": {
+            "enabled": true,
+            "invert": false,
+            "paths": [
+              {
+                "pathId": "mask-path-0001",
+                "enabled": true,
+                "operation": "ADD",
+                "closed": true,
+                "points": [
+                  {
+                    "pointId": "mask-point-0001",
+                    "x": 0.5,
+                    "y": 0.5,
+                    "inHandle": {
+                      "x": 0.5,
+                      "y": 0.5
+                    },
+                    "outHandle": {
+                      "x": 0.5,
+                      "y": 0.5
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  },
+                  {
+                    "pointId": "mask-point-0002",
+                    "x": 0.3955341944635488,
+                    "y": 0.3732233060603293,
+                    "inHandle": {
+                      "x": 0.3955341944635488,
+                      "y": 0.3732233060603293
+                    },
+                    "outHandle": {
+                      "x": 0.3955341944635488,
+                      "y": 0.3732233060603293
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  },
+                  {
+                    "pointId": "mask-point-0003",
+                    "x": 0.26994041222489684,
+                    "y": 0.23658872077028886,
+                    "inHandle": {
+                      "x": 0.26994041222489684,
+                      "y": 0.23658872077028886
+                    },
+                    "outHandle": {
+                      "x": 0.26994041222489684,
+                      "y": 0.23658872077028886
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  },
+                  {
+                    "pointId": "mask-point-0004",
+                    "x": 0.40844566712517194,
+                    "y": 0.111875300558266,
+                    "inHandle": {
+                      "x": 0.40844566712517194,
+                      "y": 0.111875300558266
+                    },
+                    "outHandle": {
+                      "x": 0.40844566712517194,
+                      "y": 0.111875300558266
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  },
+                  {
+                    "pointId": "mask-point-0005",
+                    "x": 0.6936726272352132,
+                    "y": 0.111875300558266,
+                    "inHandle": {
+                      "x": 0.6936726272352132,
+                      "y": 0.111875300558266
+                    },
+                    "outHandle": {
+                      "x": 0.6936726272352132,
+                      "y": 0.111875300558266
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  },
+                  {
+                    "pointId": "mask-point-0006",
+                    "x": 0.7840532582530949,
+                    "y": 0.24667585076459336,
+                    "inHandle": {
+                      "x": 0.7840532582530949,
+                      "y": 0.24667585076459336
+                    },
+                    "outHandle": {
+                      "x": 0.7840532582530949,
+                      "y": 0.24667585076459336
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  },
+                  {
+                    "pointId": "mask-point-0007",
+                    "x": 0.7265383210110041,
+                    "y": 0.4016506189821183,
+                    "inHandle": {
+                      "x": 0.7265383210110041,
+                      "y": 0.4016506189821183
+                    },
+                    "outHandle": {
+                      "x": 0.7265383210110041,
+                      "y": 0.4016506189821183
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  },
+                  {
+                    "pointId": "mask-point-0008",
+                    "x": 0.578642860213205,
+                    "y": 0.477762550238566,
+                    "inHandle": {
+                      "x": 0.578642860213205,
+                      "y": 0.477762550238566
+                    },
+                    "outHandle": {
+                      "x": 0.578642860213205,
+                      "y": 0.477762550238566
+                    },
+                    "segmentTypeToNext": "LINEAR"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "ANAMORPHIC_BACK": {
+      "familyId": "ANAMORPHIC_BACK",
+      "projectionProfile": {
+        "profileId": "BACK_NATIVE_CANONICAL_BAKE_POC",
+        "surfaceBinding": {
+          "exactName": "ANAM_SURFACE_BACK",
+          "uvPolicy": "PRESERVE_AUTHORED_NO_REMAP"
+        }
+      },
+      "layers": [
+        {
+          "familyId": "ANAMORPHIC_BACK",
+          "layerId": "projection-layer-000j",
+          "order": 0,
+          "visible": true,
+          "source": {
+            "sourceId": "snapshot:snapshot-mtyjxxlh-6-1b0c35da",
+            "sourceType": "PHOTOSHOP_SELECTION_SNAPSHOT",
+            "assetReference": "assets/asset-879cbb2c36bc-0002.png",
+            "originalFilename": "Photoshop_Selection_2026-09-12T15-40-43-797Z.png",
+            "width": 757,
+            "height": 1181,
+            "mimeType": "image/png",
+            "byteLength": 1105165,
+            "sha256": "4BA6780313A224C5B711A236D648DCB5672D061A7F44C25CD906973CB51B2928",
+            "hasAlpha": true,
+            "alphaContract": "PHOTOSHOP_IMAGING_RGBA8_PROBE_PENDING",
+            "colorContract": "SRGB_IEC61966_2_1_RGB8",
+            "provenance": {
+              "type": "PHOTOSHOP_SELECTION_SNAPSHOT",
+              "documentName": "LUUX_75FFront-복구됨",
+              "captureDocumentId": 59,
+              "documentWidth": 2100,
+              "documentHeight": 3840,
+              "captureBounds": {
+                "left": 763,
+                "top": 2043,
+                "right": 1520,
+                "bottom": 3224
+              },
+              "captureTimestamp": "2026-09-12T15:40:43.797Z",
+              "captureMode": "SINGLE_PIXEL_LAYER",
+              "selectedLayerIds": [
+                8
+              ],
+              "selectedLayerNames": [
+                "__LUUX_ANAMORPHIC__ 1a012a00b20538233.jpg [yer-0005]"
+              ]
+            }
+          },
+          "mappingMode": "SCREEN_PROJECTED",
+          "transform": {
+            "x": 0.5435714285714286,
+            "y": 0.6858072916666667,
+            "scale": 1,
+            "rotationDegrees": 0
+          },
+          "opacity": 0.8588235294117647,
+          "blendMode": "NORMAL",
+          "vectorMask": {
+            "enabled": false,
+            "invert": false,
+            "paths": []
+          }
+        },
+        {
+          "familyId": "ANAMORPHIC_BACK",
+          "layerId": "projection-layer-000i",
+          "order": 1,
+          "visible": true,
+          "source": {
+            "sourceId": "snapshot:snapshot-mtyjxtzu-5-022ef444",
+            "sourceType": "PHOTOSHOP_SELECTION_SNAPSHOT",
+            "assetReference": "assets/asset-879cbb2c36bc-0003.png",
+            "originalFilename": "Photoshop_Selection_2026-09-12T15-40-39-153Z.png",
+            "width": 750,
+            "height": 1260,
+            "mimeType": "image/png",
+            "byteLength": 1714194,
+            "sha256": "B00C032EDC91B52EBF4DE2E9B1C21A0103037C65BF4475FB7A4AA087400B5CF6",
+            "hasAlpha": true,
+            "alphaContract": "PHOTOSHOP_IMAGING_RGBA8_PROBE_PENDING",
+            "colorContract": "SRGB_IEC61966_2_1_RGB8",
+            "provenance": {
+              "type": "PHOTOSHOP_SELECTION_SNAPSHOT",
+              "documentName": "LUUX_75FFront-복구됨",
+              "captureDocumentId": 59,
+              "documentWidth": 2100,
+              "documentHeight": 3840,
+              "captureBounds": {
+                "left": 770,
+                "top": 428,
+                "right": 1520,
+                "bottom": 1688
+              },
+              "captureTimestamp": "2026-09-12T15:40:39.153Z",
+              "captureMode": "SINGLE_PIXEL_LAYER",
+              "selectedLayerIds": [
+                7
+              ],
+              "selectedLayerNames": [
+                "__LUUX_ANAMORPHIC__ ChatGPT Image 2026년 8월 14일 오후 06_29_48.png [yer-0003]"
+              ]
+            }
+          },
+          "mappingMode": "SCREEN_PROJECTED",
+          "transform": {
+            "x": 0.5452380952380952,
+            "y": 0.2755208333333333,
+            "scale": 1,
+            "rotationDegrees": 0
+          },
+          "opacity": 0.6196078431372549,
+          "blendMode": "NORMAL",
+          "vectorMask": {
+            "enabled": false,
+            "invert": false,
+            "paths": []
+          }
+        },
+        {
+          "familyId": "ANAMORPHIC_BACK",
+          "layerId": "projection-layer-000h",
+          "order": 2,
+          "visible": true,
+          "source": {
+            "sourceId": "snapshot:snapshot-mtyjxqp5-4-31d3da65",
+            "sourceType": "PHOTOSHOP_SELECTION_SNAPSHOT",
+            "assetReference": "assets/asset-879cbb2c36bc-0004.png",
+            "originalFilename": "Photoshop_Selection_2026-09-12T15-40-34-860Z.png",
+            "width": 655,
+            "height": 1260,
+            "mimeType": "image/png",
+            "byteLength": 1483895,
+            "sha256": "2E454CBB4E3BDA6DD72FBEC0074689404A0620566DDCEA34CB8BF8D80AC1F9A9",
+            "hasAlpha": true,
+            "alphaContract": "PHOTOSHOP_IMAGING_RGBA8_PROBE_PENDING",
+            "colorContract": "SRGB_IEC61966_2_1_RGB8",
+            "provenance": {
+              "type": "PHOTOSHOP_SELECTION_SNAPSHOT",
+              "documentName": "LUUX_75FFront-복구됨",
+              "captureDocumentId": 59,
+              "documentWidth": 2100,
+              "documentHeight": 3840,
+              "captureBounds": {
+                "left": 770,
+                "top": 1290,
+                "right": 1425,
+                "bottom": 2550
+              },
+              "captureTimestamp": "2026-09-12T15:40:34.860Z",
+              "captureMode": "SINGLE_PIXEL_LAYER",
+              "selectedLayerIds": [
+                18
+              ],
+              "selectedLayerNames": [
+                "__LUUX_ANAMORPHIC__ Photoshop_Selection_2026-09-12T15-01-36-871Z.png [yer-000d]"
+              ]
+            }
+          },
+          "mappingMode": "SCREEN_PROJECTED",
+          "transform": {
+            "x": 0.5226190476190476,
+            "y": 0.5,
+            "scale": 1,
+            "rotationDegrees": 0
+          },
+          "opacity": 1,
+          "blendMode": "NORMAL",
+          "vectorMask": {
+            "enabled": false,
+            "invert": false,
+            "paths": []
+          }
+        }
+      ]
+    }
+  }
+}

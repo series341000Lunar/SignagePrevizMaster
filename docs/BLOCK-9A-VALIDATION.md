@@ -1,6 +1,6 @@
 # Block 9A Validation
 
-Status: **IMPLEMENTED / AUTOMATED TECHNICAL PASS / BACK V3 VISUAL + 62% OPACITY USER PASS / FORMAL HOST EDGE PROBES OPEN**
+Status: **CLOSED / IMPLEMENTED / AUTOMATED TECHNICAL PASS / REAL PHOTOSHOP USER VALIDATED** (2026-09-13)
 
 ## Automated evidence
 
@@ -26,11 +26,19 @@ The first sandboxed runtime attempt failed because the Electron GPU process coul
 
 test:block9a proves schema 1/2/3 compatibility, three persistent source types, exact RGBA PNG round-trip including RGB beneath alpha zero, native bounds validation, Selection document-position reconstruction, Selection opacity metadata preservation, mixed-source offline reconstruction, exact-once Snapshot transport, duplicate rejection, Live/Snapshot mutual exclusion, and reuse of existing Vector Mask/Bake/Full Merge runtimes.
 
-The Block 8A authoring regression additionally proves native default placement for both family working canvases: `3000×3840 -> 3000×3840` for FRONT 75F and `2100×3840 -> 2100×3840` for BACK at `Scale 1.00`. It also checks that the Scale field appears directly below `LAYOUT EDIT`. This is automated evidence; visual confirmation of the revised default placement remains pending.
+The Block 8A authoring regression additionally proves native default placement for both family working canvases: `3000×3840 -> 3000×3840` for FRONT 75F and `2100×3840 -> 2100×3840` for BACK at `Scale 1.00`. It also checks that the Scale field appears directly below `LAYOUT EDIT`. This is automated placement evidence, not a claim of independent per-family forensic position logs.
 
-Automated tests do not prove the corrected Photoshop host round-trip. The user confirmed Composite round-trip and non-destructive behavior, and later granted BACK V3 visual PASS for individual-layer return and Photoshop recomposition outside intentional clipping. The user separately confirmed the 62% opacity property value as PASS. Distinct imported positions, sparse order-2-first ACK, and the RGBA transparent-edge contract still require their own recorded probes.
+Automated tests alone do not prove a Photoshop host round-trip. The user confirmed Composite Snapshot round-trip and non-destructive capture, the corrected one-Pixel-Layer Selection Snapshot in the BACK V3 practical workflow, and mixed FILE/Composite/Selection Save -> disconnect -> restart -> Open. The BACK V3 return was **individual-layer Bake/Send followed by Photoshop recomposition**, with no meaningful visible difference outside intended clipping; a Full Merged Direct PNG was compared separately. This is a scoped user visual PASS, not pixel-perfect numerical equality or SEND FULL MERGED evidence. The 62% Photoshop Layer opacity **property** was separately user-confirmed; Layer opacity is distinct from baked pixel alpha, preserving the Block 8C metadata/pixel contract.
 
-## Real Photoshop / UXP probe checklist
+Selection position reconstruction is **ACCEPTED / AUTOMATED PASS / PRACTICAL USER WORKFLOW PASS**. The initial centered overlap of trimmed selections was corrected by mapping `captureBounds -> active Family working canvas -> initial Layer transform center`. The BACK V3 workflow supports practical position/composition acceptance; no independent forensic position log is claimed. The V1 Selection scope is exactly one ordinary Pixel Layer in an RGB 8-bit, sRGB-oriented document. Photoshop Layer Masks, Smart Objects, Groups, arbitrary multi-selection, and RGB 16/32-bit are outside that supported scope.
+
+The user set the V1 alpha product acceptance contract: visible RGB fidelity, partial alpha fidelity, semi-transparent and feathered edges, alpha=0 remaining visually transparent, and no meaningful halo/fringe in practical Previz. BACK V3 supplied practical user visual PASS for semi-transparent/feathered content. Exact hidden RGB preservation beneath alpha=0 (`RGB != 0, A = 0`) is **NOT GUARANTEED / DIAGNOSTIC ONLY / NON-BLOCKING / DEFERRED**. The automated PNG round-trip test of hidden RGB remains valid but is not a real Photoshop host guarantee. This is an explicit product acceptance decision, not an ignored failure: hidden RGB may not survive the graphics pipeline and does not contribute to the visible result; high-end/sub-pixel compositing belongs in Fusion, After Effects, or Nuke.
+
+In a separate real-host BACK test with three SMG layers (top order 0, middle order 1, bottom order 2) and no Previz-owned Pixel Layer in the Photoshop output binding, the user selected order 2, ran BAKE CURRENT, then the **first SEND DIRECT**. BACK DIRECT `2100×3840` was READY; Photoshop reported **APPLY COMPLETE, Job 1, Photoshop Layer 11**, and UXP Full-Image Write **APPLIED**. Only the sent layer was created, with no placeholders for unsent orders 0/1. Thus **SPARSE ORDER-2-FIRST SEND -> REAL HOST PASS**: global authoring order 2 can be the first Photoshop-owned subset layer without order mismatch. This is host Apply evidence, not a raw ACK field-by-field forensic dump. During the same test a mistaken Canonical `4728×5760` target refused BACK DIRECT; correcting the target to BACK DIRECT `2100×3840` gave READY -> SEND -> APPLIED, supporting the intended target-resolution/binding refusal behavior.
+
+## Real Photoshop / UXP probe checklist (historical and future diagnostics)
+
+Composite Snapshot, non-destructive capture, and the ordinary single Pixel Layer V1 workflow are user PASS. The following steps preserve the original probe plan and identify optional diagnostic or future coverage; they are not open Block 9A closure gates.
 
 ### A. Composite Snapshot
 
@@ -49,11 +57,11 @@ Automated tests do not prove the corrected Photoshop host round-trip. The user c
 3. Confirm saved bounds and bitmap dimensions are identical at native level 0.
 4. Without moving the imported SMG layer, confirm its center reconstructs the Photoshop `captureBounds` position in the active 1:1 working canvas.
 5. Set the Photoshop Pixel Layer to 62% opacity; confirm SMG initially shows 62% and the returned Photoshop output layer is also 62%. **User-confirmed PASS on 2026-09-13; raw ACK trace is separate.**
-6. Inspect opaque pixels, semi-transparent edges, fully transparent pixels, and deliberately nonzero RGB beneath alpha zero.
-7. Confirm top-left orientation, sRGB RGB8 color, and no fringe/color corruption.
+6. Inspect opaque pixels, semi-transparent/feathered edges, and fully transparent pixels under the V1 visible-quality contract. Deliberately nonzero RGB beneath alpha zero is an optional, non-blocking diagnostic, not a bit-exact guarantee.
+7. Confirm top-left orientation, sRGB-oriented RGB8 color, and no meaningful fringe/color corruption in practical Previz.
 8. Confirm selected identity and opacity are rechecked and Photoshop history/layers remain unchanged.
 
-Selection Snapshot remains **PROBE-GATED** until this section passes with recorded evidence. Do not infer straight/premultiplied alpha behavior from the API name.
+Selection Snapshot is **SUPPORTED / USER PASS — V1 SCOPE**. The 62% property and practical visible-edge behavior passed user validation; raw ACK field-for-field logging, hidden RGB and straight/premultiplied internals remain diagnostic/future coverage. Do not infer those internals from the API name.
 
 ### C. Mixed-stack reuse and offline project
 
@@ -67,7 +75,7 @@ Selection Snapshot remains **PROBE-GATED** until this section passes with record
 ### D. Failure and cleanup
 
 1. Try no document, non-RGB, and 16/32-bit documents; confirm refusal without mutation.
-2. Try zero/multiple layers, Group, Smart Object, and other non-Pixel kinds; confirm refusal.
+2. Try zero/multiple layers, Group, Smart Object, Adjustment Layer alone, and other non-Pixel kinds; confirm refusal. Pixel Layer + Photoshop Layer Mask and multi-select Flatten need separate future probes.
 3. Disconnect during transfer; confirm no partial Layer or asset survives.
 4. Trigger rapid duplicate requests; confirm one job wins and reused IDs are rejected.
 5. Switch family or project before completion; confirm late completion is rejected and rolled back.
@@ -77,16 +85,24 @@ Selection Snapshot remains **PROBE-GATED** until this section passes with record
 
 | Probe | State | Evidence |
 |---|---|---|
-| Real Photoshop Composite | USER PASS | 2026-09-13: Photoshop -> SMG mask edit/bake -> Photoshop showed no visible round-trip difference |
-| Real Photoshop single Pixel Layer | BACK V3 VISUAL + 62% OPACITY USER PASS; OTHER PROBES OPEN | 2026-09-13: two trimmed selections initially arrived centered/overlapped and 62% source opacity returned as 100%; capture/install corrections address both. A later order-2-first per-layer Send reached UXP but was rejected because physical Photoshop subset order 0 was compared with full authoring order 2; sparse relative-order correction is now automated-tested. User then confirmed no meaningful visible difference outside intended clipping after returning individual BACK layers and recompositing in Photoshop, and separately confirmed the 62% opacity property value. No order-2-first ACK log was supplied with V3. |
-| Selection 62% opacity property | USER PASS | 2026-09-13: user explicitly confirmed the 62% opacity property value after the correction. This does not imply a raw ACK trace or transparent-edge pixel probe. |
-| Alpha / transparent RGB semantics | PARTIAL USER PASS / FORMAL EDGE PROBE PENDING | Basic visual round-trip passed; deliberate transparent-RGB edge case not yet recorded |
+| FILE PNG/JPG/JPEG | SUPPORTED | Available without Photoshop |
+| Real Photoshop Composite Snapshot | SUPPORTED / USER PASS | 2026-09-13: Photoshop -> SMG mask edit/bake -> Photoshop showed no meaningful visible round-trip difference |
+| One ordinary Pixel Layer Selection Snapshot | SUPPORTED / USER PASS — V1 SCOPE | RGB 8-bit, sRGB-oriented; initial centered-overlap correction and BACK V3 practical layer-by-layer return/recomposition accepted outside intentional clipping |
+| Selection position reconstruction | ACCEPTED / AUTOMATED PASS / PRACTICAL USER WORKFLOW PASS | `captureBounds -> active Family working canvas -> initial Layer transform center`; no independent forensic position log claimed |
+| Selection 62% Layer opacity property | USER PASS | 2026-09-13 user confirmation after correction; Layer opacity is not baked pixel alpha and no raw ACK field dump is claimed |
+| Sparse order-2-first Send | REAL HOST PASS | BACK three-layer stack, empty Photoshop owned binding: order 2 first BAKE CURRENT/SEND DIRECT -> BACK DIRECT 2100×3840 READY -> Photoshop APPLY COMPLETE Job 1, Layer 11; UXP Full-Image Write APPLIED; no order 0/1 placeholders |
+| Target-resolution mismatch refusal | REAL HOST SUPPORTING EVIDENCE | Wrong Canonical 4728×5760 target refused BACK DIRECT; corrected BACK DIRECT 2100×3840 target reached READY -> SEND -> APPLIED |
+| Visible RGB / partial alpha / semi-transparent and feathered edges | USER PASS — PRACTICAL PREVIZ | BACK V3 user judged no meaningful visible difference outside intended clipping, including practical semi-transparent/feathered imagery; no pixel-perfect numerical claim |
+| Hidden RGB beneath alpha=0 | NOT GUARANTEED / NON-BLOCKING / DEFERRED | Diagnostic only; exact `RGB != 0, A = 0` preservation is not the V1 Photoshop host contract |
 | Non-destructive Photoshop capture | USER PASS | 2026-09-13 user confirmation |
-| Mixed-stack Save/Open/offline | USER PASS | 2026-09-13 user confirmation (`ok`) |
-| Masked Pixel Layer | NOT TESTED | Not formally supported |
-| Group | UNSUPPORTED | One-Pixel-Layer contract |
-| Smart Object | UNSUPPORTED | One-Pixel-Layer contract |
-| User visual validation | BACK V3 SCOPED PASS | Individual-layer BACK return and Photoshop recomposition passed by user inspection, excluding intentional clipping; 62% opacity property separately passed. This is not SEND FULL MERGED or formal alpha/ACK PASS. Block 9A remains open. |
+| Mixed FILE/Composite/Selection Save/Open/offline | USER PASS | Save -> Photoshop disconnect -> restart -> Open Project, user confirmation |
+| Pixel Layer + Photoshop Layer Mask | NOT YET FORMALLY SUPPORTED | Future real-host probe, not a Block 9A closure gate |
+| Smart Object | UNSUPPORTED / FUTURE PROBE | One-Pixel-Layer V1 contract |
+| Group | UNSUPPORTED / LOW PRIORITY | One-Pixel-Layer V1 contract; future only |
+| Arbitrary multi-selection | UNSUPPORTED / FUTURE | Multi-select Flatten Snapshot requires separate scope |
+| Adjustment Layer alone | UNSUPPORTED | Not an ordinary Pixel Layer |
+| RGB 16/32-bit | UNSUPPORTED / DEFERRED | RGB8/sRGB-oriented V1; no automatic Photoshop document conversion |
+| User visual validation | BACK V3 SCOPED PASS | Individual-layer BACK return and Photoshop recomposition, excluding intentional clipping; separately compared Full Merged Direct PNG. Not SEND FULL MERGED or pixel-perfect numerical equality. |
 
 ## Documentation authority
 

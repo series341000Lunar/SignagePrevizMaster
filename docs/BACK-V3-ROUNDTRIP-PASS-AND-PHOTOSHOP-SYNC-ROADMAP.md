@@ -1,7 +1,7 @@
 # LUUX Signage Previz — BACK V3 왕복 PASS 및 Photoshop 레이어 동기화 후속 설계
 
 Date: 2026-09-13<br>
-Status: **BACK V3 사용자 시각 + 62% 불투명도 속성값 PASS (범위 한정) / 동기화 후속 기능은 설계·검증 대기**<br>
+Status: **BLOCK 9A CLOSED / USER VALIDATED (V1 범위) / BACK V3 사용자 시각 + 62% 불투명도 속성값 PASS / 동기화 후속 기능은 FUTURE DESIGN REQUIREMENT**<br>
 Scope: Photoshop 원본 → SMG 레이어/마스크 편집·Bake → 레이어별 Photoshop 전송과 재합성
 
 이 문서는 사용자가 제공한 V3 실사용 결과와 이후 대화에서 결정한 운영 규칙·추가 기능을 한곳에 기록한다. Block 8C/8F의 닫힌 계약이나 [Block 9 Master Design](POST-BLOCK-8F-SNAPSHOT-AUDIT-AND-BLOCK9-DESIGN-V1.md)을 소급 변경하지 않는다. 여기서 **PASS는 사용자 육안 평가**이며, 픽셀 완전 일치·Photoshop 마스크 일반 지원·장기 세션 동기화의 증명은 아니다.
@@ -25,16 +25,16 @@ Scope: Photoshop 원본 → SMG 레이어/마스크 편집·Bake → 레이어�
 - **PASS:** 이번 BACK V3의 레이어별 전송·Photoshop 재합성 결과는, 의도된 잘림을 제외하면 사용자에게 유의미한 육안 차이가 없다.
 - **PASS로 확대하지 않음:** `SEND FULL MERGED` 경로. 현재 이 경로는 존재하지 않으며 이번 시험에서도 사용하지 않았다.
 - **PASS로 확대하지 않음:** 임의의 Photoshop 레이어 수 변경, LUUX 그룹/레이어 삭제, 플러그인 Reload 이후 연결 복원, Photoshop 원본 가필의 역방향 Refresh.
-- **별도 검증 대기:** 62% 이외 속성의 숫자 단위/ACK 대조, 투명 RGB/반투명 경계, Photoshop 자체 레이어 마스크의 캡처 및 재현, 픽셀 단위 동일성. 62% 속성값의 사용자 확인을 ACK 로그 검증으로 확대하지 않는다.
+- **후속 진단·미지원 범위:** 62% 이외 속성의 숫자 단위/ACK 대조, Photoshop 자체 레이어 마스크의 캡처 및 재현, 픽셀 단위 동일성. 반투명·Feather 경계는 이번 실무형 BACK V3에서 사용자 시각 PASS다. 알파 0 아래 숨은 RGB의 비트 단위 보존은 V1 공식 보장 대상이 아니며 비차단 진단으로 유예한다. 62% 속성값의 사용자 확인을 ACK 원시 필드 검증으로 확대하지 않는다.
 
 ## 2. 현재 제공되는 동작과 이번 대화에서 정리된 이슈
 
 | 항목 | 현재 상태 / 이번 대화의 결론 |
 |---|---|
 | 1:1 작업 기준 | FRONT 75F `3000×3840`, BACK `2100×3840` 작업 캔버스에서 기본 `Scale 1.00`은 원본 1픽셀 대 작업 1픽셀이다. Canonical `4728×5760`은 별도 출력 좌표계이며 기본 레이아웃 스케일의 기준이 아니다. `Scale` 입력은 `LAYOUT EDIT` 바로 아래에 있다. |
-| Photoshop Selection 위치 | 초기 시험에서 둘 이상의 이미지가 중앙에 겹쳤다. `captureBounds`를 작업 캔버스 위치로 복원하는 수정이 들어갔다. 이번 V3 시각 PASS는 왕복 합성이 잘 보인다는 증거지만, 모든 배치 조합의 수치 검증을 대신하지 않는다. |
+| Photoshop Selection 위치 | 초기 시험에서 trimmed Selection 여러 개가 중앙에 겹쳤다. `captureBounds -> active Family working canvas -> initial Layer transform center` 복원 수정이 들어갔다. **ACCEPTED / AUTOMATED PASS / PRACTICAL USER WORKFLOW PASS**. 별도의 독립적인 forensic 위치 로그나 모든 배치 조합의 수치 검증을 뜻하지 않는다. |
 | Photoshop Selection 불투명도 | 62%가 SMG/Photoshop에서 100%가 된 초기 문제가 있었고 선택 Pixel Layer 불투명도 전달·복귀 수정이 들어갔다. **62% 속성값은 사용자가 재확인하여 검증 완료했다.** 이 확인은 별도의 ACK 원시 로그 검증을 뜻하지 않는다. |
-| 단일 레이어 Send 순서 | SMG 전체 순서 `2`를 Photoshop의 첫 전송 레이어 물리 순서 `0`과 직접 비교한 오류가 수정됐다. 이미 전송된 LUUX 레이어 부분집합 안에서만 상대 순서를 압축한다. 이번 V3에서는 개별 전송을 통한 최종 합성이 사용자 시각 PASS다. |
+| 단일 레이어 Send 순서 | SMG 전체 순서 `2`를 Photoshop의 첫 전송 레이어 물리 순서 `0`과 직접 비교한 오류가 수정됐다. 이미 전송된 LUUX 레이어 부분집합 안에서만 상대 순서를 압축한다. 이후 BACK 3-layer Stack에서 order 2를 처음 BAKE CURRENT/SEND DIRECT하여 **BACK DIRECT 2100×3840 READY -> Photoshop APPLY COMPLETE Job 1, Layer 11 -> UXP Full-Image Write APPLIED**를 실제 호스트에서 확인했다. 미전송 order 0/1의 빈 레이어는 만들지 않았다. **SPARSE ORDER-2-FIRST SEND / REAL HOST PASS**이며 ACK JSON 전 필드 forensic 증명은 아니다. |
 | `BAKE CURRENT` / `SEND DIRECT` | 선택한 **한 레이어**의 Bake/전송 경로다. 같은 연결의 재전송은 기존 Photoshop LUUX 소유 레이어를 갱신하도록 설계돼 있다. |
 | `BAKE FULL MERGED` | 현재 family의 보이는 레이어를 Direct/Canonical로 병합하고 PNG로 내보낸다. Photoshop `SEND FULL MERGED`는 현재 없음. |
 | Photoshop 일반 레이어 수 | 4개에서 5개 또는 2개로 바뀌는 **개수 자체**는 매칭 키가 아니다. LUUX 소유 레이어/그룹 ID와 세션 기록으로 분리한다. 실제 구조 변경 내성 시험은 아직 없다. |
@@ -42,6 +42,13 @@ Scope: Photoshop 원본 → SMG 레이어/마스크 편집·Bake → 레이어�
 | Photoshop 원본 가필 | 원본 Pixel Layer의 그림 변경을 SMG 기존 레이어로 다시 가져오는 버튼과 변경 표시 상태는 아직 없다. |
 | SMG → Photoshop 베이크 레이어 | 출력물이며 Photoshop 원본 소스가 아니다. 원본이 삭제된 뒤 다시 보낸 베이크 레이어도 원본-Refresh 대상에 자동 편입하지 않는다. |
 | 비파괴성 | 이번 대화에서 Photoshop → SMG → Photoshop 운용의 비파괴성을 사용자 PASS로 보고했다. 향후 양방향 동기화 기능도 원본·비소유 레이어를 자동 수정/삭제하지 않아야 한다. |
+| Target resolution/binding 안전성 | Canonical `4728×5760` target을 잘못 등록했을 때 BACK DIRECT 전송이 성공하지 않았다. BACK DIRECT `2100×3840`으로 수정 후 READY → SEND → APPLIED. 실사용 보조 증거이며 별도 핵심 PASS 범위로 확대하지 않는다. |
+
+### Block 9A V1 알파 품질 계약 — 사용자 확정
+
+**필수:** 화면에 보이는 RGB와 partial alpha의 충실도, 반투명/Feather 가장자리, alpha=0의 시각적 투명, 실무 Previz에서 유의미한 halo/fringe 없음. BACK V3의 반투명·Feather 포함 왕복은 이 실용 품질 기준으로 사용자 시각 PASS다. Photoshop Layer opacity 속성값(62% USER PASS)과 baked pixel alpha는 서로 다른 계약이며 Block 8C의 메타데이터/픽셀 구분을 유지한다.
+
+**비보장·비차단:** `RGB != 0, A = 0`인 숨은 RGB의 정확한 보존은 **DIAGNOSTIC ONLY / NON-BLOCKING / DEFERRED**다. 화면 결과에 기여하지 않는 hidden RGB는 실제 graphics pipeline에서 유지가 보장되지 않을 수 있다. 이는 실패를 무시하는 것이 아니라 사용자가 SMG의 제작 목적에 맞춰 확정한 Acceptance Contract다. 극단적인 sub-pixel glow/edge 품질과 최종 mastering은 Fusion / After Effects / Nuke 등 본 제작 compositor의 범위다.
 
 ## 3. 권장 운영 규칙 — 현 기능 기준
 
@@ -97,18 +104,22 @@ SMG 레이어 목록에서 작은 LED/색상과 텍스트를 함께 보여준다
 
 - 현재 Selection Snapshot은 정확히 한 일반 Pixel Layer를 받으며 Photoshop 자체 레이어 마스크, Group, Smart Object, 임의 다중 선택의 일반 캡처는 공식 보증 범위가 아니다.
 - 원본에 Photoshop 마스크가 있는 경우 `픽셀만 / 마스크 적용 외관을 래스터화 / 지원하지 않음` 중 어떤 계약인지 별도 UXP 실기 시험으로 결정한다. 원본 레이어·마스크는 캡처 중 변경하지 않는다.
-- 알파 0 아래 비영(非零) RGB, 반투명 가장자리, 색 프로파일, premultiplied/straight alpha를 검증한다. 이미 사용자 확인된 62% Layer opacity는 향후 픽셀 알파/메타데이터 중복 적용 방지 회귀 시험에 포함한다.
+- 알파 0 아래 비영(非零) RGB는 **비차단 진단**으로, 반투명 가장자리·색 프로파일·premultiplied/straight alpha 세부 동작은 향후 추가 회귀/실기 프로브로 추적한다. 이미 사용자 확인된 62% Layer opacity는 향후 픽셀 알파/메타데이터 중복 적용 방지 회귀 시험에 포함한다. Pixel Layer + Photoshop Layer Mask, Smart Object, Multi-select Flatten Snapshot은 후속 범위이며 Block 9A CLOSED를 다시 열지 않는다.
 
-## 5. 다음 검증 게이트
+## 5. 완료된 판정과 후속 진단·기능 검증
 
 | 게이트 | 합격 기준 | 현재 판정 |
 |---|---|
 | BACK V3 시각 왕복 | 의도된 잘림 제외, 레이어별 Send 후 Photoshop 합성에서 유의미한 육안 차이 없음 | **USER PASS** |
 | 62% 불투명도 속성값 | 수정 후 62%가 유지되는지 사용자 확인 | **USER PASS** |
+| Selection 위치 복원 | `captureBounds`에서 작업 캔버스 중심 변환; 자동 검증과 실제 V3 합성 | **ACCEPTED / AUTOMATED PASS / PRACTICAL USER WORKFLOW PASS**; 독립 forensic 위치 로그는 없음 |
+| Sparse order-2-first 전송 | 빈 Photoshop 출력 binding에 SMG order 2를 첫 전송해 호스트 Apply 성공 | **REAL HOST PASS**; raw ACK 필드별 dump는 없음 |
+| 반투명·Feather 가시 품질 | practical Previz 결과에 유의미한 halo/fringe 없음 | **BACK V3 USER VISUAL PASS** |
+| 알파 0 아래 hidden RGB 비트 보존 | V1 Photoshop 호스트 공식 보장 대상 아님 | **DIAGNOSTIC ONLY / NON-BLOCKING / DEFERRED** |
 | 나머지 레이어 속성·ACK 대조 | 세 레이어의 ID, 상대 순서, 위치, 나머지 opacity, blend, visibility와 ACK를 기록 | 추가 증거 필요 |
 | 수치적 이미지 비교 | 동일한 2100×3840 이미지에서 의도된 잘림 영역을 명시적으로 제외하고 오차 지표·차이 이미지를 보존 | 미수행; 이번 PASS의 전제 아님 |
 | 구조 변경 내성 | 일반 레이어 추가·삭제, LUUX 출력 레이어 하나 삭제 후 재전송, LUUX 그룹 삭제 후 재전송, UXP Reload 사례 | 미시험 |
 | 원본 Refresh | 원본 가필 후 노란색 표시 → 기존 SMG 비트맵만 갱신 → 재베이크; 출력물은 원본으로 오인하지 않음 | 미구현 |
-| 마스크/알파 정식 지원 | Photoshop 실제 마스크와 투명 경계·비영 RGB-under-alpha-zero 실기 프로브 | 보류/미시험 |
+| Photoshop Layer Mask·Smart Object·Multi-select Flatten | 별도 후속 범위의 실기 프로브 및 계약 결정 | **FUTURE / NOT BLOCK 9A** |
 
-이번 사용자 PASS를 근거로 Block 9A 전체를 `CLOSED`로 자동 승격하지 않는다. 위 후속 기능들은 **요구사항**이며 이 문서는 구현 완료를 주장하지 않는다. 기존 [Block 9A Validation](BLOCK-9A-VALIDATION.md)은 기능별 미해결 게이트를 계속 추적한다.
+Block 9A는 **명시적인 사용자 승인으로 CLOSED / USER VALIDATED**다. 위 F1 작업 UI 분리, F2 Source Link, F3 Source Changed/Refresh, F4 Reconcile Layers, F5 추가 Photoshop Mask 프로브는 **FUTURE / DESIGN REQUIREMENT**이며 구현 완료를 주장하지 않고 Block 9A를 다시 열지 않는다. 다음 단계는 별도 지시문으로 정할 **Block 9B — Photoshop Snapshot Workflow / Preview Separation**이다. Planar Mapping Bake는 **FUTURE / MANDATORY**이며 Block 9B 자체가 아니다. 완료 상태의 최신 권위는 [Block 9A Handoff](BLOCK-9A-HANDOFF.md), 상세 근거는 [Block 9A Validation](BLOCK-9A-VALIDATION.md)에 있다.

@@ -1690,3 +1690,7 @@ PLANNED
 Planar Mapping Bake
 FUTURE / MANDATORY
 ```
+
+## Status addendum — 2026-09-13
+
+The status list above is this master design's historical planning snapshot. Block 9A is now **CLOSED / AUTOMATED TECHNICAL PASS / REAL PHOTOSHOP USER VALIDATED** within its RGB8/sRGB-oriented V1 scope. The current completion authority is [Block 9A Handoff](BLOCK-9A-HANDOFF.md), followed by [Block 9A Validation](BLOCK-9A-VALIDATION.md); the [BACK V3 Sync Roadmap](BACK-V3-ROUNDTRIP-PASS-AND-PHOTOSHOP-SYNC-ROADMAP.md) records future requirements. Block 9B remains **Photoshop Snapshot Workflow / Preview Separation**; Planar Mapping Bake is separately **FUTURE / MANDATORY**. This addendum does not change the historical Block 8F baseline or pre-implement future blocks.
