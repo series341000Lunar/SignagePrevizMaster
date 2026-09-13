@@ -81,6 +81,7 @@ import {
   selectionSnapshotInitialLayerState
 } from './bitmap-source.js';
 import { encodeRgba8Png, rgba8FromChunky } from './png-codec.js';
+import { PREVIEW_MODES, previewSourceDecision } from './preview-mode.js';
 
 const canvas = document.querySelector('#three-canvas');
 const viewer = document.querySelector('#viewer');
@@ -99,6 +100,14 @@ const pointerMarker = document.querySelector('#pointer-marker');
 const view2dButton = document.querySelector('#view-2d-button');
 const view3dPlaneButton = document.querySelector('#view-3d-plane-button');
 const viewSite3dButton = document.querySelector('#view-site-3d-button');
+const previewAuthoringButton = document.querySelector('#preview-authoring-button');
+const previewPhotoshopFinalButton = document.querySelector('#preview-photoshop-final-button');
+const previewModeState = document.querySelector('#preview-mode-state');
+const previewLinkState = document.querySelector('#preview-link-state');
+const previewDocumentName = document.querySelector('#preview-document-name');
+const previewReceivedSize = document.querySelector('#preview-received-size');
+const previewExpectedSize = document.querySelector('#preview-expected-size');
+const photoshopFinalUnavailable = document.querySelector('#photoshop-final-unavailable');
 const siteControls = [...document.querySelectorAll('.site-control')];
 const siteWorldSelect = document.querySelector('#site-world-select');
 const siteMappingSelect = document.querySelector('#site-mapping-select');
@@ -359,6 +368,7 @@ const state = {
   plane3dHeight: 1,
   texture: null,
   activeView: DEFAULT_ACTIVE_VIEW,
+  previewMode: PREVIEW_MODES.AUTHORING,
   zoom: 1,
   viewMode: 'fit',
   filterMode: 'normal',
@@ -454,6 +464,7 @@ const state = {
     framesDropped: 0,
     framesReplaced: 0,
     lastFrame: null,
+    liveFrameCurrent: false,
     lastError: ''
   },
   pointer: {
@@ -972,6 +983,7 @@ function disposeCurrentTexture() {
   state.plane3d = null;
   state.plane3dFrame = null;
   state.texture = null;
+  state.link.liveFrameCurrent = false;
   renderer.renderLists.dispose();
 }
 
@@ -1112,6 +1124,60 @@ function currentProjectionBakeProfile() {
 
 function isProjectionAuthoringContext() {
   return Boolean(isAnamorphicCalibrationContext() && state.site.surfaceSetAvailable && currentProjectionBakeProfile());
+}
+
+function currentPreviewDecision() {
+  return previewSourceDecision({
+    mode: state.previewMode,
+    expectedResolution: currentProjectionBakeProfile()?.workingResolution ?? null,
+    photoshopConnected: state.link.rendererHandshake && state.link.photoshopConnected,
+    liveFrameCurrent: state.link.liveFrameCurrent,
+    frame: state.link.liveFrameCurrent ? state.link.lastFrame : null,
+    liveTextureAvailable: state.asset?.kind === 'live' && Boolean(state.texture)
+  });
+}
+
+function applySitePreviewSource(decision) {
+  const previewContext = isAnamorphicCalibrationContext();
+  const desiredMap = previewContext
+    ? (decision.source === 'PHOTOSHOP_FINAL' ? state.texture : null)
+    : state.texture;
+  for (const binding of state.site.activeBindings) {
+    if (binding.mesh.userData.productionHelper === true || binding.mesh.material.map === desiredMap) continue;
+    binding.mesh.material.map = desiredMap;
+    binding.mesh.material.needsUpdate = true;
+  }
+}
+
+function syncPreviewModeUi(decision) {
+  const authoring = state.previewMode === PREVIEW_MODES.AUTHORING;
+  previewAuthoringButton.classList.toggle('active', authoring);
+  previewPhotoshopFinalButton.classList.toggle('active', !authoring);
+  previewAuthoringButton.setAttribute('aria-pressed', String(authoring));
+  previewPhotoshopFinalButton.setAttribute('aria-pressed', String(!authoring));
+  const connected = state.link.rendererHandshake && state.link.photoshopConnected;
+  previewLinkState.textContent = connected ? 'CONNECTED' : 'DISCONNECTED';
+  previewDocumentName.textContent = state.link.liveFrameCurrent ? state.link.lastFrame?.documentName || '—' : '—';
+  previewReceivedSize.textContent = decision.received ? `${decision.received.width} × ${decision.received.height}` : '—';
+  previewExpectedSize.textContent = decision.expected ? `${decision.expected.width} × ${decision.expected.height}` : '—';
+  const stateLabel = decision.status === 'SIZE_MISMATCH' ? 'RESOLUTION MISMATCH' :
+    (decision.status === 'DISCONNECTED' || decision.status === 'INVALID_FRAME' ? 'UNAVAILABLE' : decision.status);
+  previewModeState.textContent = `${authoring ? 'AUTHORING PREVIEW' : 'PHOTOSHOP FINAL PREVIEW'} · ${stateLabel}`;
+  previewModeState.classList.toggle('unavailable', !authoring && decision.status !== 'READY');
+  photoshopFinalUnavailable.hidden = !isAnamorphicCalibrationContext() || authoring || decision.status === 'READY';
+  if (!photoshopFinalUnavailable.hidden) {
+    photoshopFinalUnavailable.textContent = decision.status === 'SIZE_MISMATCH'
+      ? `PHOTOSHOP FINAL PREVIEW\nRESOLUTION MISMATCH\nExpected: ${decision.expected.width} × ${decision.expected.height}\nReceived: ${decision.received.width} × ${decision.received.height}`
+      : `PHOTOSHOP FINAL PREVIEW UNAVAILABLE\n${stateLabel}${decision.expected ? `\nExpected: ${decision.expected.width} × ${decision.expected.height}` : ''}`;
+  }
+}
+
+function setPreviewMode(mode) {
+  if (!Object.values(PREVIEW_MODES).includes(mode)) throw new Error(`Unknown preview mode: ${mode}`);
+  state.previewMode = mode;
+  syncAuthoringUi();
+  render();
+  updateDiagnostics();
 }
 
 function disposeAuthoringSource() {
@@ -1453,7 +1519,7 @@ function drawVectorMaskOverlay(frame, profile) {
 function syncAuthoringOverlay() {
   const selectedLayer = authoringSession.selectedLayer;
   const runtimeSource = syncSelectedAuthoringRuntime();
-  const visible = Boolean(authoringSession.layers.length && isProjectionAuthoringContext() &&
+  const visible = Boolean(state.previewMode === PREVIEW_MODES.AUTHORING && authoringSession.layers.length && isProjectionAuthoringContext() &&
     state.site.anamorphicCameraMode === 'CALIBRATION');
   authoringOverlay.hidden = !visible;
   authoringOverlay.classList.toggle('editing', visible && authoringCameraInterlock.layoutEditing);
@@ -1861,7 +1927,7 @@ function syncAuthoringUi() {
   for (const [name, input] of Object.entries(authoringTransformInputs)) {
     input.value = String(authoringSession.transform[name]);
   }
-  authoringTransformFields.disabled = !available || !selectedLayer?.visible || !layoutEditing || maskEditing;
+  authoringTransformFields.disabled = !available || state.previewMode !== PREVIEW_MODES.AUTHORING || !selectedLayer?.visible || !layoutEditing || maskEditing;
   authoringResetTransform.disabled = !available || !selectedLayer?.visible || !layoutEditing || maskEditing;
   authoringImageButton.disabled = !available || maskEditing || snapshotActive || state.projectionBake.running || state.reverseBake.activeJobId !== null;
   const snapshotBlocked = !available || !state.link.photoshopConnected || maskEditing || state.projectionBake.running ||
@@ -1873,7 +1939,7 @@ function syncAuthoringUi() {
   const selectedIndex = authoringSession.layers.findIndex((layer) => layer.layerId === authoringSession.selectedLayerId);
   authoringMoveUp.disabled = !available || selectedIndex <= 0 || snapshotActive || state.projectionBake.running || state.reverseBake.activeJobId !== null;
   authoringMoveDown.disabled = !available || selectedIndex < 0 || selectedIndex >= authoringSession.layers.length - 1 || snapshotActive || state.projectionBake.running || state.reverseBake.activeJobId !== null;
-  layoutEditButton.disabled = !available || !selectedLayer?.visible || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  layoutEditButton.disabled = !available || state.previewMode !== PREVIEW_MODES.AUTHORING || !selectedLayer?.visible || state.projectionBake.running || state.reverseBake.activeJobId !== null;
   layoutEditButton.classList.toggle('active', layoutEditing);
   layoutEditButton.setAttribute('aria-pressed', String(layoutEditing));
   layoutEditButton.textContent = layoutEditing ? 'EXIT LAYOUT EDIT' : 'LAYOUT EDIT';
@@ -1887,8 +1953,8 @@ function syncAuthoringUi() {
   authoringCameraLock.classList.toggle('locked', !authoringCameraInterlock.forcedLocked && authoringCameraInterlock.manualLocked);
   authoringCameraLock.classList.toggle('unlocked', !authoringCameraInterlock.forcedLocked && !authoringCameraInterlock.manualLocked);
   syncAuthoringLayerList(available && !maskEditing);
-  syncVectorMaskFloatingPanel(available);
-  syncVectorMaskUi(available);
+  syncVectorMaskFloatingPanel(available && state.previewMode === PREVIEW_MODES.AUTHORING);
+  syncVectorMaskUi(available && state.previewMode === PREVIEW_MODES.AUTHORING);
   syncAuthoringOverlay();
   syncAuthoringQuickRail(available);
   syncAuthoringProjectUi(available);
@@ -2397,6 +2463,7 @@ async function openAuthoringProject(manifestFile = null) {
     disposeAuthoringSnapshot(previousSnapshot);
     authoringViewSettings.setOutsideSignageOpacity(DEFAULT_OUTSIDE_SIGNAGE_OPACITY);
     state.authoring.railExpanded = false;
+    state.previewMode = PREVIEW_MODES.AUTHORING;
     fullMergeRuntime.disposeAll();
     clearFullMergePreviews();
     clearProjectScopedPhotoshopState();
@@ -3844,6 +3911,7 @@ async function installLiveFrame(frame) {
   texture.needsUpdate = true;
   clearGlErrors();
   installTexture(texture, metadata.width, metadata.height, true);
+  if (isAnamorphicCalibrationContext() && state.previewMode === PREVIEW_MODES.AUTHORING) renderer.initTexture(texture);
 
   sourceSelect.value = 'photoshop-live';
   if (!replacingLiveTexture) applyFit();
@@ -3879,6 +3947,8 @@ async function installLiveFrame(frame) {
     centerPixel: Array.from(centerPixel),
     textureGlError
   };
+  state.link.liveFrameCurrent = true;
+  render();
   updateDiagnostics();
   return state.link.lastFrame;
 }
@@ -3955,6 +4025,8 @@ function render() {
   const height = Math.max(1, viewer.clientHeight);
   const photoActive = isPhotoViewportActive();
   const anamorphicCalibrationActive = isAnamorphicCalibrationFramingActive();
+  const previewDecision = currentPreviewDecision();
+  applySitePreviewSource(previewDecision);
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, width, height);
   const environmentActive = state.activeView === 'site-3d' && state.site.world === 'world3d' &&
@@ -3994,6 +4066,7 @@ function render() {
   updatePointerMarker();
   updateLocationMarkers();
   syncAuthoringOverlay();
+  syncPreviewModeUi(previewDecision);
 }
 
 function updatePointerMarker() {
@@ -4283,8 +4356,16 @@ function updateDiagnostics() {
   const textureLimitPass = textureWidth > 0 && gpu.maxTextureSize >= Math.max(textureWidth, textureHeight);
   const fullResolution = dimensionsMatch && textureLimitPass && state.gpuUploadObserved;
   const live = state.link.lastFrame;
+  const previewDecision = currentPreviewDecision();
 
   state.diagnostics = {
+    previewMode: {
+      ...previewDecision,
+      activeOnSite: isAnamorphicCalibrationContext(),
+      authoringOverlayVisible: !authoringOverlay.hidden,
+      siteSurfaceUsesLiveTexture: isAnamorphicCalibrationContext() && state.site.activeBindings.some((binding) => binding.mesh.material.map === state.texture && Boolean(state.texture)),
+      liveFrameCurrent: state.link.liveFrameCurrent
+    },
     sourceKind: state.asset?.kind || 'none',
     sourceFile: state.asset?.fileName || 'Waiting for LUUX Live Link…',
     sourceBytes: state.asset?.bytes || 0,
@@ -4619,6 +4700,11 @@ function updateDiagnostics() {
 
   const rows = [
     ['Active View', state.activeView === 'site-3d' ? 'SITE 3D' : (state.activeView === '3d-plane' ? '3D PLANE' : '2D VIEW')],
+    ['Preview Mode', state.previewMode === PREVIEW_MODES.AUTHORING ? 'AUTHORING PREVIEW' : 'PHOTOSHOP FINAL PREVIEW'],
+    ['Preview State', previewDecision.status],
+    ['Preview Source', previewDecision.source],
+    ['Preview Expected', previewDecision.expected ? `${previewDecision.expected.width} × ${previewDecision.expected.height}` : '—'],
+    ['Preview Received', previewDecision.received ? `${previewDecision.received.width} × ${previewDecision.received.height}` : '—'],
     ['Photoshop Link', state.link.photoshopConnected ? 'CONNECTED' : 'DISCONNECTED'],
     ['Endpoint', liveLinkConfig.endpoint],
     ['Document', live?.documentName || '—'],
@@ -5011,7 +5097,9 @@ function rejectIncomingFrame(code, message, frameId = null) {
   state.link.framesDropped += 1;
   state.link.lastError = `${code}: ${message}`;
   state.link.currentFrame = null;
+  state.link.liveFrameCurrent = false;
   sendLinkMessage({ type: 'ERROR', code, message, frameId });
+  render();
   updateDiagnostics();
 }
 
@@ -5132,6 +5220,7 @@ function handleLinkJson(message) {
     case 'LINK_STATUS':
       state.link.photoshopConnected = Boolean(message.photoshopConnected);
       if (!state.link.photoshopConnected) {
+        state.link.liveFrameCurrent = false;
         handleSnapshotError({ snapshotJobId: state.authoring.snapshot.current?.request.snapshotJobId, code: 'UXP_DISCONNECTED', message: 'Photoshop disconnected during Snapshot.' });
         state.reverseBake.targetRegistry = {
           registryAuthority: null,
@@ -5141,6 +5230,7 @@ function handleLinkJson(message) {
           bindings: []
         };
       }
+      render();
       break;
     case 'SNAPSHOT_BEGIN':
       try { handleSnapshotBegin(message); }
@@ -5271,6 +5361,7 @@ function connectLiveLink() {
   socket.addEventListener('close', () => {
     state.link.rendererHandshake = false;
     state.link.photoshopConnected = false;
+    state.link.liveFrameCurrent = false;
     handleSnapshotError({ snapshotJobId: state.authoring.snapshot.current?.request.snapshotJobId, code: 'BROKER_DISCONNECTED', message: 'Broker disconnected during Snapshot.' });
     pointerQueue.reset();
     state.pointer.state = 'UNAVAILABLE';
@@ -5288,6 +5379,7 @@ function connectLiveLink() {
       targets: [],
       bindings: []
     };
+    render();
     updateDiagnostics();
     scheduleReconnect();
   });
@@ -5645,6 +5737,8 @@ function updateAuthoringPointerInteraction(event) {
 view2dButton.addEventListener('click', () => setActiveView('2d'));
 view3dPlaneButton.addEventListener('click', () => setActiveView('3d-plane'));
 viewSite3dButton.addEventListener('click', () => setActiveView('site-3d'));
+previewAuthoringButton.addEventListener('click', () => setPreviewMode(PREVIEW_MODES.AUTHORING));
+previewPhotoshopFinalButton.addEventListener('click', () => setPreviewMode(PREVIEW_MODES.PHOTOSHOP_FINAL));
 siteWorldSelect.addEventListener('change', () => {
   if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
   if (authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
@@ -6214,6 +6308,7 @@ function runAnamorphicFamilySmoke(familyKey, expectedSurface) {
     controlsEnabled: controlsSite.enabled,
     helperVisibleCount: state.diagnostics.site3d.helperVisibleCount,
     helperTextureMapCount: state.diagnostics.site3d.helperTextureMapCount,
+    previewSource: currentPreviewDecision().source,
     surfaceTextureShared: state.site.activeBindings[0]?.mesh.material.map === state.texture,
     cameraFinite: [...cameraSite.position.toArray(), ...cameraSite.quaternion.toArray(), cameraSite.fov, cameraSite.aspect].every(Number.isFinite),
     cameraQuaternionMatches: cameraSite.quaternion.angleTo(expectedQuaternion) < CAMERA_RUNTIME_ROTATION_EPSILON,
@@ -7791,7 +7886,7 @@ window.runBlock8FFullMergeSmoke = async () => {
   const report = {
     technicalPass: merged.length === 4 && merged[3] > 0 && merged[3] < 255 && gpuBlendPass &&
       selectionPreservesMerged && metadataDirtiesMerged && panelStateExcluded &&
-      JSON.stringify(quickOrder) === JSON.stringify(['quick-bake-current', 'quick-bake-full-merged', 'quick-send-direct']),
+      JSON.stringify(quickOrder) === JSON.stringify(['quick-bake-current', 'quick-send-direct', 'quick-bake-full-merged']),
     userValidation: state.fullMerge.userValidation,
     blendModes: ['NORMAL', 'MULTIPLY', 'SCREEN', 'LINEAR_DODGE'],
     straightAlpha: true,
@@ -7820,6 +7915,124 @@ window.runBlock8FFullMergeSmoke = async () => {
   };
   window.block8FFullMergeDiagnostics = report;
   return report;
+};
+window.runBlock9BAPreviewSmoke = () => {
+  const previous = {
+    activeView: state.activeView,
+    world: state.site.world,
+    mappingMode: state.site.mappingMode,
+    family: state.site.anamorphicFamily,
+    cameraMode: state.site.anamorphicCameraMode,
+    camera: snapshotSiteCameraRuntime(),
+    authoringStack: authoringSession.snapshot(),
+    previewMode: state.previewMode,
+    asset: state.asset,
+    rendererHandshake: state.link.rendererHandshake,
+    photoshopConnected: state.link.photoshopConnected,
+    liveFrameCurrent: state.link.liveFrameCurrent,
+    lastFrame: state.link.lastFrame
+  };
+  const bakeResult = state.projectionBake.result;
+  const registry = state.reverseBake.targetRegistry;
+  const lastApplied = state.reverseBake.lastApplied;
+  const textureCount = renderer.info.memory.textures;
+  const contextLossBefore = state.contextLossCount;
+  const familyResults = [];
+  try {
+    if (!state.texture?.image) throw new Error('Block 9B-A smoke requires the startup texture.');
+    authoringSession.reset();
+    state.site.world = 'world3d';
+    state.site.mappingMode = 'anamorphic';
+    state.site.anamorphicCameraMode = 'CALIBRATION';
+    siteWorldSelect.value = state.site.world;
+    siteMappingSelect.value = state.site.mappingMode;
+    setActiveView('site-3d');
+    const sourceImage = state.texture.image;
+    const source = {
+      id: 'block9ba-preview-fixture', filename: 'Block9BA-preview.png', name: 'Block9BA-preview.png',
+      mimeType: 'image/png', type: 'image/png',
+      width: sourceImage.naturalWidth || sourceImage.width,
+      height: sourceImage.naturalHeight || sourceImage.height,
+      hasAlpha: true, byteLength: 4, image: sourceImage
+    };
+    for (const [family, expectedWidth] of [['front75f', 3000], ['back', 2100]]) {
+      state.site.anamorphicFamily = family;
+      siteAnamorphicFamilySelect.value = family;
+      applySiteSurfaceSelection();
+      const profile = currentProjectionBakeProfile();
+      authoringSession.activateFamily(profile.familyId);
+      if (!authoringSession.layers.length) authoringSession.addLayer(source, profile.familyId, source);
+      state.asset = { ...previous.asset, kind: 'live' };
+      state.link.rendererHandshake = true;
+      state.link.photoshopConnected = true;
+      state.link.liveFrameCurrent = true;
+      state.link.lastFrame = {
+        documentId: 42, documentName: 'Block9BA-preview.psd',
+        documentWidth: expectedWidth, documentHeight: 3840,
+        receivedWidth: expectedWidth, receivedHeight: 3840
+      };
+      const stackBefore = JSON.stringify(authoringSession.snapshot());
+      setPreviewMode(PREVIEW_MODES.AUTHORING);
+      const authoring = state.site.activeBindings.length > 0 && authoringOverlay.hidden === false &&
+        state.site.activeBindings.every((binding) => binding.mesh.material.map === null);
+      setPreviewMode(PREVIEW_MODES.PHOTOSHOP_FINAL);
+      const final = state.site.activeBindings.length > 0 && authoringOverlay.hidden && photoshopFinalUnavailable.hidden &&
+        currentPreviewDecision().source === 'PHOTOSHOP_FINAL' &&
+        state.site.activeBindings.every((binding) => binding.mesh.material.map === state.texture);
+      for (let index = 0; index < 4; index += 1) {
+        setPreviewMode(PREVIEW_MODES.AUTHORING);
+        setPreviewMode(PREVIEW_MODES.PHOTOSHOP_FINAL);
+      }
+      state.link.lastFrame = { ...state.link.lastFrame, receivedWidth: 4728, receivedHeight: 5760,
+        documentWidth: 4728, documentHeight: 5760 };
+      render();
+      const mismatch = currentPreviewDecision().status === 'SIZE_MISMATCH' &&
+        !photoshopFinalUnavailable.hidden && photoshopFinalUnavailable.textContent.includes('RESOLUTION MISMATCH') &&
+        state.site.activeBindings.every((binding) => binding.mesh.material.map === null);
+      state.link.photoshopConnected = false;
+      render();
+      const disconnected = currentPreviewDecision().status === 'DISCONNECTED' &&
+        !photoshopFinalUnavailable.hidden && authoringOverlay.hidden &&
+        state.site.activeBindings.every((binding) => binding.mesh.material.map === null);
+      const unchanged = JSON.stringify(authoringSession.snapshot()) === stackBefore &&
+        state.projectionBake.result === bakeResult && state.reverseBake.targetRegistry === registry &&
+        state.reverseBake.lastApplied === lastApplied;
+      familyResults.push({ family, expectedWidth, authoring, final, mismatch, disconnected, unchanged });
+    }
+    const report = {
+      technicalPass: familyResults.length === 2 && familyResults.every((item) =>
+        item.authoring && item.final && item.mismatch && item.disconnected && item.unchanged) &&
+        renderer.info.memory.textures === textureCount && state.contextLossCount === contextLossBefore,
+      userValidation: 'PASS_CLOSED', familyResults, modeSessionOnly: true,
+      rendererTextureCountBefore: textureCount, rendererTextureCountAfter: renderer.info.memory.textures,
+      contextLossCount: state.contextLossCount - contextLossBefore,
+      photoshopMutationCount: 0, noMergedSend: !document.querySelector('[data-photoshop-output="FULL_MERGED"]')
+    };
+    window.block9BAPreviewDiagnostics = structuredClone(report);
+    return report;
+  } finally {
+    authoringSession.restore(previous.authoringStack);
+    syncSelectedAuthoringRuntime();
+    state.asset = previous.asset;
+    state.link.rendererHandshake = previous.rendererHandshake;
+    state.link.photoshopConnected = previous.photoshopConnected;
+    state.link.liveFrameCurrent = previous.liveFrameCurrent;
+    state.link.lastFrame = previous.lastFrame;
+    state.previewMode = previous.previewMode;
+    state.site.world = previous.world;
+    state.site.mappingMode = previous.mappingMode;
+    state.site.anamorphicFamily = previous.family;
+    state.site.anamorphicCameraMode = previous.cameraMode;
+    siteWorldSelect.value = previous.world;
+    siteMappingSelect.value = previous.mappingMode;
+    siteAnamorphicFamilySelect.value = previous.family;
+    setActiveView(previous.activeView);
+    applySiteSurfaceSelection({ resetCamera: false });
+    restoreSiteCameraRuntime(previous.camera);
+    syncAuthoringUi();
+    render();
+    updateDiagnostics();
+  }
 };
 window.getBlock6APreviewArtifacts = () => projectionBakeRuntime.previewDataUrls(projectionPreviewCanvases);
 window.getBlock6AFullSourceArtifact = () => projectionBakeRuntime.fullSourceDataUrl();

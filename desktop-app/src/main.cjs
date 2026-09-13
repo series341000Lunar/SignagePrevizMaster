@@ -221,7 +221,8 @@ function anamorphicSmokePass(result, familyId, surfaceName, projectionSeparated,
     result.expectedSurfaceExact === surfaceName && result.familyId === familyId &&
     result.inactiveAnamorphicVisibleCount === 0 && result.pointDisabled === true &&
     result.controlsEnabled === true && result.helperVisibleCount === 0 &&
-    result.helperTextureMapCount === 0 && result.surfaceTextureShared === true &&
+    result.helperTextureMapCount === 0 &&
+    result.previewSource === 'AUTHORING' && result.surfaceTextureShared === false &&
     result.cameraFinite === true && result.cameraQuaternionMatches === true &&
     result.cameraForwardMatches === true && result.runtimeProjectionAspectMatches === true &&
     result.projectionAndWorkingAspectSeparated === projectionSeparated &&
@@ -306,6 +307,7 @@ async function runSmokeTest(window) {
     const block8d = await window.webContents.executeJavaScript('window.runBlock8DProjectSmoke()', true);
     const block8e = await window.webContents.executeJavaScript('window.runBlock8EFoundationSmoke()', true);
     const block8f = await window.webContents.executeJavaScript('window.runBlock8FFullMergeSmoke()', true);
+    const block9ba = await window.webContents.executeJavaScript('window.runBlock9BAPreviewSmoke()', true);
     const bakeVisibilityArtifacts = {
       front: path.join(block6bArtifactDirectory, 'PostBlock7_FRONT75F_VisibilityDiagnostic.png'),
       back: path.join(block6bArtifactDirectory, 'PostBlock7_BACK_VisibilityDiagnostic.png'),
@@ -467,6 +469,9 @@ async function runSmokeTest(window) {
       block8f.noSendFullMerged === true && block8f.outsideSignageIncluded === false &&
       block8f.sharedProjectionBakeRuntime === true && block8f.permanentPerLayerTargets === 0 &&
       block8f.photoshopMutationCount === 0 && block8f.contextLossCount === 0 &&
+      block9ba.technicalPass === true && block9ba.userValidation === 'PASS_CLOSED' &&
+      block9ba.modeSessionOnly === true && block9ba.noMergedSend === true &&
+      block9ba.photoshopMutationCount === 0 && block9ba.contextLossCount === 0 &&
       broker?.address?.address === liveLinkConfig.host &&
       broker?.address?.port === liveLinkConfig.port &&
       broker?.rendererConnected === true &&
@@ -505,6 +510,7 @@ async function runSmokeTest(window) {
       block8d,
       block8e,
       block8f,
+      block9ba,
       screenshotPath
     };
     writeJson(reportPath, report);

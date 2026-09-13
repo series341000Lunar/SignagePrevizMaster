@@ -104,6 +104,7 @@
             <button id="authoring-rotate-handle" class="authoring-handle rotate" type="button" aria-label="Rotation handle"></button>
           </div>
         </div>
+        <div id="photoshop-final-unavailable" class="photoshop-final-unavailable" role="status" hidden>PHOTOSHOP FINAL PREVIEW UNAVAILABLE</div>
         <section id="vector-mask-panel" class="vector-mask-control vector-mask-floating-panel" aria-labelledby="vector-mask-title" hidden>
           <div id="vector-mask-panel-drag-handle" class="vector-mask-heading vector-mask-panel-header">
             <span class="vector-mask-panel-grip" aria-hidden="true">&#8942;&#8942;</span>
@@ -141,11 +142,14 @@
         </section>
         <div id="authoring-quick-rail" class="authoring-quick-rail" hidden>
           <div id="authoring-quick-menu" class="authoring-quick-menu" hidden>
+            <strong class="quick-workflow-heading">LAYER OUTPUT · SELECTED</strong>
             <button id="quick-bake-current" type="button">BAKE CURRENT</button>
-            <button id="quick-bake-full-merged" type="button">BAKE FULL MERGED</button>
             <button id="quick-send-direct" type="button">SEND DIRECT</button>
-            <small id="quick-merged-state">NO LAYERS</small>
             <small id="quick-send-destination">NO DIRECT TARGET</small>
+            <strong class="quick-workflow-heading">FULL COMPOSITE · EXPORT ONLY</strong>
+            <button id="quick-bake-full-merged" type="button">BAKE FULL MERGED</button>
+            <small id="quick-merged-state">NO LAYERS</small>
+            <small>Export Direct / Canonical PNG in the FULL COMPOSITE panel.</small>
           </div>
           <button id="authoring-quick-toggle" class="authoring-quick-toggle" type="button" aria-expanded="false" aria-controls="authoring-quick-menu" title="Projection quick actions">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"></path></svg>
@@ -238,6 +242,20 @@
             <dt>View</dt><dd>APPROVED PROJECTION VIEW</dd>
             <dt>Coordinate</dt><dd>FRAME NORMALIZED</dd>
           </dl>
+          <section id="preview-mode-control" class="preview-mode-control" aria-labelledby="preview-mode-title">
+            <strong id="preview-mode-title">PREVIEW MODE</strong>
+            <div class="preview-mode-actions">
+              <button id="preview-authoring-button" class="active" type="button" aria-pressed="true">AUTHORING PREVIEW</button>
+              <button id="preview-photoshop-final-button" type="button" aria-pressed="false">PHOTOSHOP FINAL PREVIEW</button>
+            </div>
+            <p id="preview-mode-state" role="status">AUTHORING PREVIEW · READY</p>
+            <dl class="projection-poc-metrics preview-mode-details">
+              <dt>Photoshop Link</dt><dd id="preview-link-state">DISCONNECTED</dd>
+              <dt>Document</dt><dd id="preview-document-name">—</dd>
+              <dt>Received</dt><dd id="preview-received-size">—</dd>
+              <dt>Expected Family</dt><dd id="preview-expected-size">—</dd>
+            </dl>
+          </section>
           <section class="authoring-project-control" aria-labelledby="authoring-project-title">
             <div class="authoring-project-heading">
               <strong id="authoring-project-title">PROJECT</strong>
@@ -338,6 +356,7 @@
             <span>OPTIONAL BAKE MASK</span>
             <strong id="projection-mask-state">OFF · FULL SURFACE</strong>
           </label>
+          <div class="workflow-section-label">LAYER OUTPUT · SELECTED LAYER</div>
           <button id="projection-poc-run" class="projection-poc-run" type="button">RUN TEST BAKE</button>
           <div class="projection-poc-previews">
             <figure><figcaption>SOURCE</figcaption><canvas id="projection-source-preview"></canvas></figure>
@@ -353,28 +372,29 @@
           </div>
           <section class="full-merge-output" aria-labelledby="full-merge-title">
             <div class="projection-poc-heading">
-              <h3 id="full-merge-title">FULL MERGED — CURRENT FAMILY</h3>
+              <h3 id="full-merge-title">FULL COMPOSITE · EXPORT ONLY — CURRENT FAMILY</h3>
               <span id="full-merge-state" class="projection-poc-state">NO LAYERS</span>
             </div>
             <div class="projection-poc-previews">
               <figure><figcaption>MERGED DIRECT</figcaption><canvas id="full-merge-direct-preview"></canvas></figure>
-              <figure><figcaption>MERGED CANONICAL</figcaption><canvas id="full-merge-canonical-preview"></canvas></figure>
+              <figure><figcaption>ANAMORPHIC MASTER · CANONICAL 4728 × 5760</figcaption><canvas id="full-merge-canonical-preview"></canvas></figure>
             </div>
             <div class="projection-poc-save-actions" aria-label="Full merged PNG export">
               <button type="button" data-full-merge-export="DIRECT" disabled>SAVE MERGED DIRECT PNG</button>
               <button type="button" data-full-merge-export="CANONICAL" disabled>SAVE MERGED CANONICAL PNG</button>
             </div>
             <p id="full-merge-message" class="projection-poc-message">BAKE FULL MERGED composites visible layers in bottom-to-top order. Photoshop send remains per-layer only.</p>
+            <p class="planar-master-placeholder">PLANAR MASTER · FUTURE / NOT AVAILABLE YET</p>
           </section>
-          <section class="projection-photoshop-output" aria-label="Output to Photoshop">
-            <h3>OUTPUT TO PHOTOSHOP</h3>
+          <section class="projection-photoshop-output" aria-label="Selected layer output to Photoshop">
+            <h3>LAYER OUTPUT TO PHOTOSHOP · SELECTED ONLY</h3>
             <dl class="projection-poc-metrics">
               <dt>SOURCE DOCUMENT</dt><dd id="projection-source-document">No Photoshop source frame received</dd>
               <dt>CURRENT FAMILY</dt><dd id="projection-output-family">—</dd>
               <dt>TARGET REGISTRY</dt><dd id="projection-bake-target">No UXP session registry</dd>
             </dl>
             <div class="projection-output-choice">
-              <div><strong>CANONICAL</strong><span data-photoshop-destination="CANONICAL">NO BAKE TARGET ASSIGNED</span></div>
+              <div><strong>ANAMORPHIC MASTER · CANONICAL</strong><span data-photoshop-destination="CANONICAL">NO BAKE TARGET ASSIGNED</span></div>
               <button type="button" data-photoshop-output="CANONICAL" disabled>SEND TO PHOTOSHOP</button>
             </div>
             <div class="projection-output-choice">

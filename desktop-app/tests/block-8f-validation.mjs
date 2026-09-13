@@ -95,7 +95,7 @@ assert.equal(loaded.mergedState().dirty, true, 'project-like restore never resto
 assert.equal(hash(), sourceHash, 'source bytes remain unchanged');
 
 assert.match(html, /id="vector-mask-panel"[^>]*vector-mask-floating-panel/);
-assert.match(html, /quick-bake-current[\s\S]*quick-bake-full-merged[\s\S]*quick-send-direct/);
+assert.match(html, /quick-bake-current[\s\S]*quick-send-direct[\s\S]*quick-bake-full-merged/);
 assert.match(html, /data-full-merge-export="DIRECT"/);
 assert.match(html, /data-full-merge-export="CANONICAL"/);
 assert.doesNotMatch(html, /data-photoshop-output="FULL_MERGED"/);
