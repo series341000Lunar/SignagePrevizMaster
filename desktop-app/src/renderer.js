@@ -43,6 +43,8 @@ import {
 } from './projection-bake-profile.js';
 import { ProjectionBakeRuntime } from './projection-bake-runtime.js';
 import { FullMergeAccumulatorRuntime, mergeRgbaLayers } from './full-merge-runtime.js';
+import { PlanarMappingRuntime, validatePlanarCanonicalInput } from './planar-mapping-runtime.js';
+import { createPlanarAsymmetricFixture } from './planar-asymmetric-fixture.js';
 import {
   createProjectSavePayload,
   prepareProjectLoad,
@@ -8861,6 +8863,103 @@ window.runBlock4FStartupViewSmoke = async () => {
       reentry.surfaceSetAvailable && reentry.activeSurfaceCount === 2 && reentry.environmentVisible &&
       reentry.locationsControlVisible && reentry.rendererTextureCount === startup.rendererTextureCount &&
       reentry.contextLossCount === 0
+  };
+};
+
+// Development-only Planar-A evidence hook. It does not modify authoring state,
+// Full Merge results, UI controls, project data, or Photoshop targets.
+window.runPlanarAFoundationSmoke = async () => {
+  const familyIds = [ANAMORPHIC_FAMILY_IDS.FRONT_75F, ANAMORPHIC_FAMILY_IDS.BACK];
+  const before = {
+    authoring: JSON.stringify(authoringSession.snapshot()),
+    merged: familyIds.map((familyId) => fullMergeRuntime.result(familyId)),
+    textures: renderer.info.memory.textures,
+    geometries: renderer.info.memory.geometries,
+    camera: JSON.stringify(snapshotSiteCameraRuntime())
+  };
+  const fixture = createPlanarAsymmetricFixture(familyIds[0]);
+  const fixtureChecksum = (bytes) => {
+    let hash = 2166136261;
+    for (let index = 0; index < bytes.length; index += 1) hash = Math.imul(hash ^ bytes[index], 16777619);
+    return hash >>> 0;
+  };
+  const inputChecksumBefore = fixtureChecksum(fixture.bytes);
+  const sourceCanvas = document.createElement('canvas');
+  sourceCanvas.width = fixture.width;
+  sourceCanvas.height = fixture.height;
+  sourceCanvas.getContext('2d', { alpha: true }).putImageData(
+    new ImageData(new Uint8ClampedArray(fixture.bytes), fixture.width, fixture.height), 0, 0
+  );
+  const sourcePng = sourceCanvas.toDataURL('image/png');
+  sourceCanvas.width = sourceCanvas.height = 1;
+  const planar = new PlanarMappingRuntime(renderer);
+  const results = {};
+  try {
+    for (const familyId of familyIds) {
+      fixture.familyId = familyId;
+      validatePlanarCanonicalInput(fixture, familyId);
+      const outputs = [];
+      for (let pass = 0; pass < 2; pass += 1) {
+        const output = await planar.render(familyId, fixture, { sourceCanonicalRevision: 1 });
+        const counts = { opaque: 0, semi: 0, semiStraight: 0, transparent: 0, red: 0, green: 0, blue: 0, yellow: 0 };
+        for (let offset = 0; offset < output.bytes.length; offset += 4) {
+          const r = output.bytes[offset];
+          const g = output.bytes[offset + 1];
+          const b = output.bytes[offset + 2];
+          const a = output.bytes[offset + 3];
+          if (a === 0) counts.transparent += 1;
+          else if (a >= 250) counts.opaque += 1;
+          else if (a > 40 && a < 220) counts.semi += 1;
+          if (a >= 120 && a <= 136 && Math.max(r, g, b) >= 245) counts.semiStraight += 1;
+          if (a > 200 && r > 180 && g < 80 && b < 80) counts.red += 1;
+          if (a > 200 && g > 180 && r < 80 && b < 80) counts.green += 1;
+          if (a > 200 && b > 180 && r < 80 && g < 80) counts.blue += 1;
+          if (a > 200 && r > 180 && g > 180 && b < 80) counts.yellow += 1;
+        }
+        const sample = (x, y) => {
+          const offset = (Math.floor(y * output.height) * output.width + Math.floor(x * output.width)) * 4;
+          return [...output.bytes.subarray(offset, offset + 4)];
+        };
+        const landmarks = [sample(0.3, 0.2), sample(0.7, 0.2), sample(0.3, 0.8), sample(0.7, 0.8)];
+        let png = null;
+        if (pass === 0) {
+          const canvas = document.createElement('canvas');
+          canvas.width = output.width;
+          canvas.height = output.height;
+          canvas.getContext('2d', { alpha: true }).putImageData(
+            new ImageData(new Uint8ClampedArray(output.bytes), output.width, output.height), 0, 0
+          );
+          png = canvas.toDataURL('image/png');
+          canvas.width = canvas.height = 1;
+        }
+        outputs.push({
+          width: output.width, height: output.height,
+          orientation: output.orientation, alpha: output.alpha,
+          counts, landmarks, textureContract: output.textureContract, png,
+          textureCount: renderer.info.memory.textures,
+          geometryCount: renderer.info.memory.geometries
+        });
+      }
+      results[familyId] = { profile: state.manifest.planarMapping.profiles[familyId].id, outputs, state: planar.state(familyId) };
+    }
+  } finally {
+    planar.disposeAll();
+  }
+  const after = {
+    authoring: JSON.stringify(authoringSession.snapshot()),
+    merged: familyIds.map((familyId) => fullMergeRuntime.result(familyId)),
+    textures: renderer.info.memory.textures,
+    geometries: renderer.info.memory.geometries,
+    camera: JSON.stringify(snapshotSiteCameraRuntime())
+  };
+  return {
+    sourcePng, results,
+    authoringMutation: before.authoring !== after.authoring,
+    canonicalMutation: before.merged.some((result, index) => result !== after.merged[index]) ||
+      fixtureChecksum(fixture.bytes) !== inputChecksumBefore,
+    textureDelta: after.textures - before.textures,
+    geometryDelta: after.geometries - before.geometries,
+    siteCameraMutation: before.camera !== after.camera
   };
 };
 

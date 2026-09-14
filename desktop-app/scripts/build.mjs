@@ -14,6 +14,7 @@ import {
 } from '../src/projection-bake-profile.js';
 import { inspectEnvironmentGlb } from './glb-inspection.mjs';
 import { inspectAnamorphicGlb } from './anamorphic-glb-inspection.mjs';
+import { PLANAR_MAPPING_PROFILES } from '../src/planar-mapping-profile.js';
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(appRoot, '..');
@@ -70,6 +71,7 @@ await mkdir(path.join(buildRoot, 'assets', 'photo'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'photo', 'thumb'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'environment'), { recursive: true });
 await mkdir(path.join(buildRoot, 'assets', 'projection'), { recursive: true });
+await mkdir(path.join(buildRoot, 'assets', 'planar'), { recursive: true });
 await Promise.all([
   copyFile(path.join(sourceRoot, 'index.html'), path.join(buildRoot, 'index.html')),
   copyFile(path.join(sourceRoot, 'styles.css'), path.join(buildRoot, 'styles.css')),
@@ -116,6 +118,7 @@ const manifest = {
   siteAssets: SITE_ASSETS,
   photoAssets: [],
   projectionBake: null,
+  planarMapping: { block: 'PLANAR-A', profiles: {} },
   reverseTransport: {
     block: '7',
     protocolVersion: liveLinkConfig.protocolVersion,
@@ -205,6 +208,29 @@ for (const profile of Object.values(PROJECTION_BAKE_PROFILES)) {
 // Block 6A readers retain the verified FRONT contract through this alias.
 const frontProjectionManifest = manifest.projectionBake.profiles.ANAMORPHIC_FRONT_75F;
 Object.assign(manifest.projectionBake, frontProjectionManifest);
+
+for (const profile of Object.values(PLANAR_MAPPING_PROFILES)) {
+  const sourcePath = path.join(projectRoot, profile.sourcePath);
+  const destinationPath = path.join(buildRoot, 'assets', 'planar', profile.fileName);
+  const sourceBytes = await readFile(sourcePath);
+  const inspection = inspectAnamorphicGlb(sourceBytes);
+  const meshNodes = inspection.nodeRecords.filter((node) => node.meshIndex !== null);
+  if (sourceBytes.length !== profile.byteLength || sha256(sourceBytes) !== profile.sha256 ||
+      inspection.gltfVersion !== '2.0' || inspection.scenes !== 1 ||
+      inspection.meshes !== 1 || inspection.cameras !== 0 || inspection.animations !== 0 ||
+      meshNodes.length !== 1 || meshNodes[0].name !== profile.targetNode ||
+      !meshNodes[0].uv0Bounds || meshNodes[0].vertexCount <= 0 || meshNodes[0].primitiveCount <= 0) {
+    throw new Error(`PLANAR_ASSET_CONTRACT_ERROR: ${profile.sourcePath}`);
+  }
+  await copyFile(sourcePath, destinationPath);
+  const destinationBytes = await readFile(destinationPath);
+  if (destinationBytes.length !== profile.byteLength || sha256(destinationBytes) !== profile.sha256) {
+    throw new Error(`PLANAR_ASSET_COPY_ERROR: ${profile.fileName}`);
+  }
+  manifest.planarMapping.profiles[profile.familyId] = {
+    ...profile, inspection, sourceVerified: true, buildCopyVerified: true
+  };
+}
 
 for (const photoScene of PHOTO_SCENE_RECORDS) {
   const contract = photoScene.photoAsset;

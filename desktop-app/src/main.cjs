@@ -16,6 +16,7 @@ const { WebSocket } = require('ws');
 
 const smokeTest = process.argv.includes('--smoke-test');
 const linkSmokeTest = process.argv.includes('--link-smoke-test');
+const planarASmokeTest = process.argv.includes('--planar-a-smoke-test');
 const reportArgument = process.argv.find((argument) => argument.startsWith('--report='));
 const screenshotArgument = process.argv.find((argument) => argument.startsWith('--screenshot='));
 const externalNetworkRequests = [];
@@ -27,8 +28,8 @@ let currentProjectDirectory = null;
 let projectPersistencePromise = null;
 const pendingProjectOpens = new Map();
 
-if (smokeTest || linkSmokeTest) {
-  const profileName = linkSmokeTest ? 'link-smoke-profile' : 'runtime-smoke-profile';
+if (smokeTest || linkSmokeTest || planarASmokeTest) {
+  const profileName = planarASmokeTest ? 'planar-a-smoke-profile' : (linkSmokeTest ? 'link-smoke-profile' : 'runtime-smoke-profile');
   app.setPath('userData', path.resolve(process.cwd(), '.runtime', profileName));
 }
 
@@ -932,6 +933,53 @@ async function runLinkSmokeTest(window) {
   }
 }
 
+async function runPlanarASmokeTest(window) {
+  const reportPath = resolveArgumentPath(reportArgument, 'planar-a-runtime.json');
+  try {
+    await waitForDiagnostics(window);
+    await waitForSiteReady(window);
+    const evidence = await window.webContents.executeJavaScript('window.runPlanarAFoundationSmoke()', true);
+    const artifactDirectory = path.dirname(reportPath);
+    const sourcePath = path.join(artifactDirectory, 'PlanarA_Canonical_Asymmetric_4728x5760.png');
+    writePngDataUrl(sourcePath, evidence.sourcePng);
+    delete evidence.sourcePng;
+    const artifacts = { canonicalFixture: sourcePath };
+    for (const [familyId, family] of Object.entries(evidence.results)) {
+      const pngPath = path.join(artifactDirectory, `PlanarA_${familyId}_4728x5760.png`);
+      writePngDataUrl(pngPath, family.outputs[0].png);
+      delete family.outputs[0].png;
+      artifacts[familyId] = pngPath;
+    }
+    const landmarkContract = {
+      ANAMORPHIC_FRONT_75F: [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 0, 255]],
+      ANAMORPHIC_BACK: [[0, 255, 0, 255], [255, 0, 0, 255], [255, 255, 0, 255], [0, 0, 255, 255]]
+    };
+    const technicalPass = !evidence.authoringMutation && !evidence.canonicalMutation && !evidence.siteCameraMutation &&
+      evidence.textureDelta === 0 && evidence.geometryDelta === 0 &&
+      Object.entries(evidence.results).length === 2 &&
+      Object.entries(evidence.results).every(([familyId, family]) =>
+        family.state.status === 'READY' && family.outputs.length === 2 &&
+        family.outputs.every((output) => output.width === 4728 && output.height === 5760 &&
+          Object.values(output.textureContract).every((passed) => passed === true) &&
+          JSON.stringify(output.landmarks) === JSON.stringify(landmarkContract[familyId]) &&
+          output.orientation === 'TOP_LEFT' && output.alpha === 'STRAIGHT' &&
+          output.counts.opaque > 0 && output.counts.semi > 0 && output.counts.semiStraight > 1000 &&
+          output.counts.transparent > 0 &&
+          output.counts.red > 0 && output.counts.green > 0 &&
+          output.counts.blue > 0 && output.counts.yellow > 0 &&
+          output.textureCount === family.outputs[0].textureCount &&
+          output.geometryCount === family.outputs[0].geometryCount));
+    writeJson(reportPath, { block: 'PLANAR-A', technicalPass, artifacts, ...evidence, criticalErrors });
+    console.log(`PLANAR_A_REPORT=${reportPath}`);
+    console.log(`PLANAR_A_TECHNICAL_PASS=${technicalPass}`);
+    app.exit(technicalPass ? 0 : 2);
+  } catch (error) {
+    writeJson(reportPath, { block: 'PLANAR-A', technicalPass: false, error: error.stack || error.message, criticalErrors });
+    console.error(error);
+    app.exit(2);
+  }
+}
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1440,
@@ -964,6 +1012,7 @@ function createWindow() {
   window.loadFile(pagePath);
   if (smokeTest) window.webContents.once('did-finish-load', () => runSmokeTest(window));
   if (linkSmokeTest) window.webContents.once('did-finish-load', () => runLinkSmokeTest(window));
+  if (planarASmokeTest) window.webContents.once('did-finish-load', () => runPlanarASmokeTest(window));
   return window;
 }
 
