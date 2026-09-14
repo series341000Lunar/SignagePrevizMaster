@@ -1,8 +1,7 @@
-import { PLANAR_CANONICAL, getPlanarMappingProfile } from './planar-mapping-profile.js';
+import { getPlanarMappingProfile } from './planar-mapping-profile.js';
 
 export function createPlanarAsymmetricFixture(familyId) {
-  getPlanarMappingProfile(familyId);
-  const { width, height } = PLANAR_CANONICAL;
+  const { width, height } = getPlanarMappingProfile(familyId).sourceResolution;
   const bytes = new Uint8Array(width * height * 4);
   const corners = [
     [255, 0, 0], [0, 255, 0],
@@ -30,6 +29,6 @@ export function createPlanarAsymmetricFixture(familyId) {
   return {
     bytes, width, height, components: 4, componentSize: 8,
     pixelFormat: 'RGBA', colorSpace: 'RGB', alpha: 'STRAIGHT', orientation: 'TOP_LEFT',
-    outputKind: 'CANONICAL', familyId
+    outputKind: 'DIRECT', familyId
   };
 }

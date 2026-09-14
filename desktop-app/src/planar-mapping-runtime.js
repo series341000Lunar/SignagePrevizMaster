@@ -1,11 +1,10 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { getPlanarMappingProfile, PLANAR_CANONICAL } from './planar-mapping-profile.js';
-
-const PIXEL_COUNT = PLANAR_CANONICAL.width * PLANAR_CANONICAL.height * 4;
+import { getPlanarMappingProfile, PLANAR_OUTPUT_PROFILE } from './planar-mapping-profile.js';
 
 export function createPlanarBakerCamera() {
-  const camera = new THREE.PerspectiveCamera(10, PLANAR_CANONICAL.width / PLANAR_CANONICAL.height, 0.01, 10000);
+  const { width, height } = PLANAR_OUTPUT_PROFILE.outputResolution;
+  const camera = new THREE.PerspectiveCamera(10, width / height, 0.01, 10000);
   camera.position.set(0, 342.9015690828403, 0);
   camera.rotation.order = 'XYZ';
   camera.rotation.set(-Math.PI / 2, 0, 0);
@@ -13,35 +12,37 @@ export function createPlanarBakerCamera() {
   return camera;
 }
 
-export function validatePlanarCanonicalInput(input, familyId) {
-  getPlanarMappingProfile(familyId);
-  if (!input || input.familyId !== familyId || input.outputKind !== 'CANONICAL' ||
-      input.width !== PLANAR_CANONICAL.width || input.height !== PLANAR_CANONICAL.height ||
+export function validatePlanarSourceInput(input, familyId) {
+  const { sourceResolution } = getPlanarMappingProfile(familyId);
+  if (!input || input.familyId !== familyId || input.outputKind !== 'DIRECT' ||
+      input.width !== sourceResolution.width || input.height !== sourceResolution.height ||
       input.components !== 4 || input.componentSize !== 8 || input.pixelFormat !== 'RGBA' || input.colorSpace !== 'RGB' ||
       input.alpha !== 'STRAIGHT' || input.orientation !== 'TOP_LEFT' ||
       !(input.bytes instanceof Uint8Array || input.bytes instanceof Uint8ClampedArray) ||
-      input.bytes.length !== PIXEL_COUNT) {
-    throw new Error(`PLANAR_CANONICAL_CONTRACT_ERROR: ${familyId} requires current-family 4728x5760 RGBA8 STRAIGHT TOP_LEFT Full Merge CANONICAL.`);
+      input.bytes.length !== sourceResolution.width * sourceResolution.height * 4) {
+    throw new Error(`PLANAR_SOURCE_CONTRACT_ERROR: ${familyId} requires family-native ${sourceResolution.width}x${sourceResolution.height} RGBA8 STRAIGHT TOP_LEFT Full Merged DIRECT.`);
   }
   return input;
 }
 
-// The caller must provide the current-family merged revision and ready state.
+// The caller must provide the current-family merged Direct revision and ready state.
 // This is deliberately the only production Full Merge read boundary for Planar-A.
-export function readPlanarCanonical(fullMergeRuntime, familyId, { ready, revision } = {}) {
+export function readPlanarSource(fullMergeRuntime, familyId, { ready, mergedDirectRevision } = {}) {
   getPlanarMappingProfile(familyId);
-  if (ready !== true || !Number.isSafeInteger(revision) || revision < 0 ||
-      !fullMergeRuntime?.hasOutputs?.(familyId)) {
-    throw new Error(`PLANAR_CANONICAL_NOT_READY: ${familyId}`);
+  if (ready !== true || !Number.isSafeInteger(mergedDirectRevision) || mergedDirectRevision < 0 ||
+      !fullMergeRuntime?.hasOutputs?.(familyId) ||
+      fullMergeRuntime.result?.(familyId)?.mergedRevision !== mergedDirectRevision) {
+    throw new Error(`PLANAR_SOURCE_NOT_READY: ${familyId}`);
   }
   return {
-    ...validatePlanarCanonicalInput(fullMergeRuntime.readOutputRgba(familyId, 'CANONICAL'), familyId),
-    sourceCanonicalRevision: revision
+    ...validatePlanarSourceInput(fullMergeRuntime.readOutputRgba(familyId, 'DIRECT'), familyId),
+    sourceFamilyId: familyId,
+    sourceMergedDirectRevision: mergedDirectRevision
   };
 }
 
 export function createPlanarInputTexture(input, familyId) {
-  validatePlanarCanonicalInput(input, familyId);
+  validatePlanarSourceInput(input, familyId);
   // ImageData / CanvasTexture has the same image-source UV convention as the
   // oracle TextureLoader path. The source bytes and canvas rows are TOP_LEFT.
   const canvas = document.createElement('canvas');
@@ -179,15 +180,15 @@ export class PlanarMappingRuntime {
 
   state(familyId) {
     getPlanarMappingProfile(familyId);
-    return { ...(this.states.get(familyId) || { familyId, sourceCanonicalRevision: null, status: 'UNAVAILABLE' }) };
+    return { ...(this.states.get(familyId) || { familyId, sourceFamilyId: familyId, sourceMergedDirectRevision: null, status: 'UNAVAILABLE' }) };
   }
 
-  markCanonicalRevision(familyId, revision) {
+  markMergedDirectRevision(familyId, revision) {
     getPlanarMappingProfile(familyId);
     if (!Number.isSafeInteger(revision) || revision < 0) throw new Error('PLANAR_REVISION_INVALID');
     const prior = this.state(familyId);
-    if (prior.sourceCanonicalRevision !== revision || prior.status === 'UNAVAILABLE') {
-      this.states.set(familyId, { familyId, sourceCanonicalRevision: revision, status: 'DIRTY' });
+    if (prior.sourceMergedDirectRevision !== revision || prior.status === 'UNAVAILABLE') {
+      this.states.set(familyId, { familyId, sourceFamilyId: familyId, sourceMergedDirectRevision: revision, status: 'DIRTY' });
     }
     return this.state(familyId);
   }
@@ -195,26 +196,28 @@ export class PlanarMappingRuntime {
   invalidateFamily(familyId) {
     const prior = this.state(familyId);
     this.states.set(familyId, {
-      familyId,
-      sourceCanonicalRevision: prior.sourceCanonicalRevision,
-      status: prior.sourceCanonicalRevision === null ? 'UNAVAILABLE' : 'DIRTY'
+      familyId, sourceFamilyId: familyId,
+      sourceMergedDirectRevision: prior.sourceMergedDirectRevision,
+      status: prior.sourceMergedDirectRevision === null ? 'UNAVAILABLE' : 'DIRTY'
     });
     return this.state(familyId);
   }
 
-  async render(familyId, input, { sourceCanonicalRevision, width = PLANAR_CANONICAL.width, height = PLANAR_CANONICAL.height } = {}) {
+  async render(familyId, input, { sourceMergedDirectRevision, width = PLANAR_OUTPUT_PROFILE.outputResolution.width, height = PLANAR_OUTPUT_PROFILE.outputResolution.height } = {}) {
     const profile = getPlanarMappingProfile(familyId);
-    validatePlanarCanonicalInput(input, familyId);
-    if (!Number.isSafeInteger(sourceCanonicalRevision) || sourceCanonicalRevision < 0 ||
-        (input.sourceCanonicalRevision !== undefined && input.sourceCanonicalRevision !== sourceCanonicalRevision)) {
+    validatePlanarSourceInput(input, familyId);
+    if ((input.sourceFamilyId !== undefined && input.sourceFamilyId !== familyId) ||
+        !Number.isSafeInteger(sourceMergedDirectRevision) || sourceMergedDirectRevision < 0 ||
+        (input.sourceMergedDirectRevision !== undefined && input.sourceMergedDirectRevision !== sourceMergedDirectRevision)) {
       throw new Error('PLANAR_REVISION_INVALID');
     }
+    const outputResolution = profile.outputResolution;
     if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 ||
-        width > PLANAR_CANONICAL.width || height > PLANAR_CANONICAL.height ||
-        width / height !== PLANAR_CANONICAL.width / PLANAR_CANONICAL.height) {
+        width > outputResolution.width || height > outputResolution.height ||
+        width / height !== outputResolution.width / outputResolution.height) {
       throw new Error('PLANAR_OUTPUT_DIMENSIONS_INVALID');
     }
-    this.markCanonicalRevision(familyId, sourceCanonicalRevision);
+    this.markMergedDirectRevision(familyId, sourceMergedDirectRevision);
     let gltf = null;
     let surfaceMaterial = null;
     let sourceMaterial = null;
@@ -276,14 +279,14 @@ export class PlanarMappingRuntime {
       this.renderer.readRenderTargetPixels(target, 0, 0, width, height, bytes);
       unpremultiplySrgbReadback(bytes);
       flipReadbackToTopLeft(bytes, width, height);
-      this.states.set(familyId, { familyId, sourceCanonicalRevision, status: 'READY' });
+      this.states.set(familyId, { familyId, sourceFamilyId: familyId, sourceMergedDirectRevision, status: 'READY' });
       return {
         bytes, width, height, components: 4, componentSize: 8,
         pixelFormat: 'RGBA', alpha: 'STRAIGHT', colorSpace: 'SRGB',
-        orientation: 'TOP_LEFT', familyId, sourceCanonicalRevision, textureContract
+        orientation: 'TOP_LEFT', familyId, sourceFamilyId: familyId, sourceMergedDirectRevision, textureContract
       };
     } catch (error) {
-      this.states.set(familyId, { familyId, sourceCanonicalRevision, status: 'ERROR', error: String(error.message || error) });
+      this.states.set(familyId, { familyId, sourceFamilyId: familyId, sourceMergedDirectRevision, status: 'ERROR', error: String(error.message || error) });
       throw error;
     } finally {
       restoreRenderer(this.renderer, prior);

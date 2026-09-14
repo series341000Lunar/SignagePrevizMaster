@@ -85,3 +85,9 @@ Use `luux-mockup/baker.html` with the **same Canonical test PNG** and the corres
 - **Minimum output:** separate current-family Planar-Mapped Master, `4728 × 5760` RGBA PNG, transparent-area behavior checked, no automatic Source/Canonical overwrite.
 - **Validation reference:** same-input FRONT/BACK `luux-mockup/baker.html` PNGs plus practical visual comparison; test lifecycle and state invariants separately.
 - **Not required before starting:** 9B-C, 9C, Photoshop sync/refresh, new Snapshot source types, or a large project-schema redesign.
+
+## Addendum — resolution/source contract correction after production-file evidence (2026-09-14)
+
+The earlier sections are preserved as the historical audit, but their **Planar input = global 4728 × 5760 Canonical** recommendation is superseded. Actual FRONT 75F production input is 3000 × 3840 and BACK input is 2100 × 3840. The existing baker accepts each family-native image as Slot A media and exports a separate 4728 × 5760 Planar Master. The user's source files, baker outputs, diff images, and real-footage reference are under `2DAsset/Calibration/PlanarBakeTest/`; see `PLANAR-A-RESOLUTION-CONTRACT-CORRECTION.md` and `PLANAR-A-VALIDATION.md` for the current contract and validation status.
+
+The corrected derived dependency is **current-family Full Merged DIRECT (family-native) → family-specific Planar mapping → LUUX Planar Master (4728 × 5760)**. Existing 4728 × 5760 Full Merge `CANONICAL` and 9B-B Canonical Photoshop target remain separate legacy/technical outputs. Their equal pixel dimensions do not make either a Planar Master. The fixed Planar camera and GLB/UV asset contracts remain unchanged. This addendum itself did not establish visual parity; the subsequent same-input FRONT/BACK fixture user PASS is recorded in `PLANAR-A-VALIDATION.md`. Practical-image end-to-end delivery remains deferred.

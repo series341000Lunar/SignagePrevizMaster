@@ -940,10 +940,13 @@ async function runPlanarASmokeTest(window) {
     await waitForSiteReady(window);
     const evidence = await window.webContents.executeJavaScript('window.runPlanarAFoundationSmoke()', true);
     const artifactDirectory = path.dirname(reportPath);
-    const sourcePath = path.join(artifactDirectory, 'PlanarA_Canonical_Asymmetric_4728x5760.png');
-    writePngDataUrl(sourcePath, evidence.sourcePng);
-    delete evidence.sourcePng;
-    const artifacts = { canonicalFixture: sourcePath };
+    const artifacts = { familyDirectFixtures: {} };
+    for (const [familyId, source] of Object.entries(evidence.sources)) {
+      const sourcePath = path.join(artifactDirectory, `PlanarA_FamilyDirect_Asymmetric_${familyId}_${source.width}x${source.height}.png`);
+      writePngDataUrl(sourcePath, source.png);
+      delete source.png;
+      artifacts.familyDirectFixtures[familyId] = sourcePath;
+    }
     for (const [familyId, family] of Object.entries(evidence.results)) {
       const pngPath = path.join(artifactDirectory, `PlanarA_${familyId}_4728x5760.png`);
       writePngDataUrl(pngPath, family.outputs[0].png);
@@ -954,8 +957,12 @@ async function runPlanarASmokeTest(window) {
       ANAMORPHIC_FRONT_75F: [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 0, 255]],
       ANAMORPHIC_BACK: [[0, 255, 0, 255], [255, 0, 0, 255], [255, 255, 0, 255], [0, 0, 255, 255]]
     };
-    const technicalPass = !evidence.authoringMutation && !evidence.canonicalMutation && !evidence.siteCameraMutation &&
+    const technicalPass = !evidence.authoringMutation && !evidence.mergedMutation && !evidence.sourceMutation && !evidence.siteCameraMutation &&
       evidence.textureDelta === 0 && evidence.geometryDelta === 0 &&
+      Object.entries(evidence.sources).length === 2 &&
+      Object.entries(evidence.sources).every(([familyId, source]) =>
+        source.width === evidence.results[familyId]?.sourceResolution?.width &&
+        source.height === evidence.results[familyId]?.sourceResolution?.height) &&
       Object.entries(evidence.results).length === 2 &&
       Object.entries(evidence.results).every(([familyId, family]) =>
         family.state.status === 'READY' && family.outputs.length === 2 &&

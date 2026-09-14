@@ -43,7 +43,7 @@ import {
 } from './projection-bake-profile.js';
 import { ProjectionBakeRuntime } from './projection-bake-runtime.js';
 import { FullMergeAccumulatorRuntime, mergeRgbaLayers } from './full-merge-runtime.js';
-import { PlanarMappingRuntime, validatePlanarCanonicalInput } from './planar-mapping-runtime.js';
+import { PlanarMappingRuntime, validatePlanarSourceInput } from './planar-mapping-runtime.js';
 import { createPlanarAsymmetricFixture } from './planar-asymmetric-fixture.js';
 import {
   createProjectSavePayload,
@@ -8877,30 +8877,31 @@ window.runPlanarAFoundationSmoke = async () => {
     geometries: renderer.info.memory.geometries,
     camera: JSON.stringify(snapshotSiteCameraRuntime())
   };
-  const fixture = createPlanarAsymmetricFixture(familyIds[0]);
   const fixtureChecksum = (bytes) => {
     let hash = 2166136261;
     for (let index = 0; index < bytes.length; index += 1) hash = Math.imul(hash ^ bytes[index], 16777619);
     return hash >>> 0;
   };
-  const inputChecksumBefore = fixtureChecksum(fixture.bytes);
-  const sourceCanvas = document.createElement('canvas');
-  sourceCanvas.width = fixture.width;
-  sourceCanvas.height = fixture.height;
-  sourceCanvas.getContext('2d', { alpha: true }).putImageData(
-    new ImageData(new Uint8ClampedArray(fixture.bytes), fixture.width, fixture.height), 0, 0
-  );
-  const sourcePng = sourceCanvas.toDataURL('image/png');
-  sourceCanvas.width = sourceCanvas.height = 1;
   const planar = new PlanarMappingRuntime(renderer);
   const results = {};
+  const sources = {};
+  let sourceMutation = false;
   try {
     for (const familyId of familyIds) {
-      fixture.familyId = familyId;
-      validatePlanarCanonicalInput(fixture, familyId);
+      const fixture = createPlanarAsymmetricFixture(familyId);
+      const inputChecksumBefore = fixtureChecksum(fixture.bytes);
+      validatePlanarSourceInput(fixture, familyId);
+      const sourceCanvas = document.createElement('canvas');
+      sourceCanvas.width = fixture.width;
+      sourceCanvas.height = fixture.height;
+      sourceCanvas.getContext('2d', { alpha: true }).putImageData(
+        new ImageData(new Uint8ClampedArray(fixture.bytes), fixture.width, fixture.height), 0, 0
+      );
+      sources[familyId] = { width: fixture.width, height: fixture.height, png: sourceCanvas.toDataURL('image/png') };
+      sourceCanvas.width = sourceCanvas.height = 1;
       const outputs = [];
       for (let pass = 0; pass < 2; pass += 1) {
-        const output = await planar.render(familyId, fixture, { sourceCanonicalRevision: 1 });
+        const output = await planar.render(familyId, fixture, { sourceMergedDirectRevision: 1 });
         const counts = { opaque: 0, semi: 0, semiStraight: 0, transparent: 0, red: 0, green: 0, blue: 0, yellow: 0 };
         for (let offset = 0; offset < output.bytes.length; offset += 4) {
           const r = output.bytes[offset];
@@ -8940,7 +8941,12 @@ window.runPlanarAFoundationSmoke = async () => {
           geometryCount: renderer.info.memory.geometries
         });
       }
-      results[familyId] = { profile: state.manifest.planarMapping.profiles[familyId].id, outputs, state: planar.state(familyId) };
+      sourceMutation ||= fixtureChecksum(fixture.bytes) !== inputChecksumBefore;
+      results[familyId] = {
+        profile: state.manifest.planarMapping.profiles[familyId].id,
+        sourceResolution: state.manifest.planarMapping.profiles[familyId].sourceResolution,
+        outputs, state: planar.state(familyId)
+      };
     }
   } finally {
     planar.disposeAll();
@@ -8953,10 +8959,10 @@ window.runPlanarAFoundationSmoke = async () => {
     camera: JSON.stringify(snapshotSiteCameraRuntime())
   };
   return {
-    sourcePng, results,
+    sources, results,
     authoringMutation: before.authoring !== after.authoring,
-    canonicalMutation: before.merged.some((result, index) => result !== after.merged[index]) ||
-      fixtureChecksum(fixture.bytes) !== inputChecksumBefore,
+    mergedMutation: before.merged.some((result, index) => result !== after.merged[index]),
+    sourceMutation,
     textureDelta: after.textures - before.textures,
     geometryDelta: after.geometries - before.geometries,
     siteCameraMutation: before.camera !== after.camera
