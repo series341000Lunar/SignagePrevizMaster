@@ -893,6 +893,98 @@ aside {
   border-top: 1px solid #343f4d;
 }
 
+.planar-master-output {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #51856f;
+  border-radius: 5px;
+  background: #172622;
+}
+
+.planar-master-source {
+  margin: 6px 0;
+  color: #b5dccd;
+  font: 9px Consolas, monospace;
+}
+
+.planar-preview-overlay {
+  position: absolute;
+  z-index: 15;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(5 8 12 / 78%);
+  pointer-events: auto;
+}
+
+.planar-preview-overlay[hidden] {
+  display: none;
+}
+
+.planar-preview-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 720px);
+  height: min(100%, 900px);
+  min-height: 0;
+  padding: 12px;
+  border: 1px solid #62daa1;
+  border-radius: 8px;
+  background: #181e25;
+  box-shadow: 0 18px 50px rgb(0 0 0 / 60%);
+}
+
+.planar-preview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.planar-preview-heading strong {
+  font: 700 12px Consolas, monospace;
+}
+
+.planar-preview-heading button {
+  min-width: 76px;
+}
+
+.planar-preview-details {
+  margin: 6px 0 10px;
+  color: #b5dccd;
+  font: 10px Consolas, monospace;
+}
+
+.planar-preview-image-wrap {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  overflow: hidden;
+  background-color: #f1f1f1;
+  background-image: linear-gradient(45deg, #d7d7d7 25%, transparent 25%),
+    linear-gradient(-45deg, #d7d7d7 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d7d7d7 75%),
+    linear-gradient(-45deg, transparent 75%, #d7d7d7 75%);
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+  background-size: 20px 20px;
+}
+
+.planar-preview-image-wrap img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.planar-preview-panel small {
+  margin-top: 8px;
+  color: #aeb6c3;
+  font: 9px Consolas, monospace;
+}
+
 .vector-mask-heading,
 .vector-mask-subheading {
   display: flex;
@@ -1511,6 +1603,10 @@ aside {
   color: #b9f1d5;
   font: 700 8px/1.2 Consolas, monospace;
   white-space: normal;
+}
+
+.planar-master-output .projection-poc-save-actions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .projection-poc-metrics {

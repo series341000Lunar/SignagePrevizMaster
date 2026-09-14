@@ -159,5 +159,6 @@ assert.doesNotMatch(runtimeSource, /readOutputRgba\(familyId, 'CANONICAL'\)/);
 assert.match(runtimeSource, /canvas\.width = input\.width/);
 assert.match(runtimeSource, /canvas\.height = input\.height/);
 assert.match(rendererSource, /window\.runPlanarAFoundationSmoke/);
-assert.doesNotMatch(rendererSource, /new PlanarMappingRuntime\(renderer\)[\s\S]*?BAKE PLANAR/);
+// PLANAR-B now consumes this foundation; retain the Planar-A Direct-only invariant.
+assert.match(rendererSource, /readPlanarSource\(fullMergeRuntime, familyId/);
 console.log('Planar-A family-resolution contract validation: PASS');

@@ -55,7 +55,8 @@ assert.match(html, /quick-bake-current[\s\S]*quick-send-direct[\s\S]*quick-bake-
 assert.match(html, /LAYER OUTPUT · SELECTED/);
 assert.match(html, /FULL COMPOSITE · EXPORT ONLY/);
 assert.match(html, /ANAMORPHIC MASTER · CANONICAL 4728 × 5760/);
-assert.match(html, /PLANAR MASTER · FUTURE \/ NOT AVAILABLE YET/);
+assert.match(html, /id="planar-master-title">PLANAR OUTPUT/);
+assert.match(html, /SOURCE: FULL MERGED DIRECT/);
 assert.doesNotMatch(html, /data-photoshop-output="FULL_MERGED"/);
 assert.match(renderer, /previewMode: PREVIEW_MODES\.AUTHORING/);
 assert.match(renderer, /state\.previewMode = PREVIEW_MODES\.AUTHORING/);

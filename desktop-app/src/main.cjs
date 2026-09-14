@@ -17,6 +17,7 @@ const { WebSocket } = require('ws');
 const smokeTest = process.argv.includes('--smoke-test');
 const linkSmokeTest = process.argv.includes('--link-smoke-test');
 const planarASmokeTest = process.argv.includes('--planar-a-smoke-test');
+const planarBSmokeTest = process.argv.includes('--planar-b-smoke-test');
 const reportArgument = process.argv.find((argument) => argument.startsWith('--report='));
 const screenshotArgument = process.argv.find((argument) => argument.startsWith('--screenshot='));
 const externalNetworkRequests = [];
@@ -28,8 +29,8 @@ let currentProjectDirectory = null;
 let projectPersistencePromise = null;
 const pendingProjectOpens = new Map();
 
-if (smokeTest || linkSmokeTest || planarASmokeTest) {
-  const profileName = planarASmokeTest ? 'planar-a-smoke-profile' : (linkSmokeTest ? 'link-smoke-profile' : 'runtime-smoke-profile');
+if (smokeTest || linkSmokeTest || planarASmokeTest || planarBSmokeTest) {
+  const profileName = planarBSmokeTest ? 'planar-b-smoke-profile' : (planarASmokeTest ? 'planar-a-smoke-profile' : (linkSmokeTest ? 'link-smoke-profile' : 'runtime-smoke-profile'));
   app.setPath('userData', path.resolve(process.cwd(), '.runtime', profileName));
 }
 
@@ -987,6 +988,36 @@ async function runPlanarASmokeTest(window) {
   }
 }
 
+async function runPlanarBSmokeTest(window) {
+  const reportPath = resolveArgumentPath(reportArgument, 'planar-b-runtime.json');
+  try {
+    await waitForDiagnostics(window);
+    await waitForSiteReady(window);
+    // Site and environment load independently. Measure resource deltas only
+    // after both startup asset sets settle (important on a busy GPU host).
+    await waitForEnvironmentReady(window);
+    const evidence = await window.webContents.executeJavaScript('window.runPlanarBWorkflowSmoke()', true);
+    const technicalPass = !evidence.authoringMutation && !evidence.projectMutation &&
+      evidence.textureDelta === 0 && evidence.geometryDelta === 0 && evidence.contextLossDelta === 0 &&
+      Object.keys(evidence.reports).length === 2 &&
+      Object.entries(evidence.reports).every(([familyId, report]) =>
+        report.sourceKind === 'FULL_MERGED_DIRECT' && report.sourceDimensions[0] === (familyId === 'ANAMORPHIC_FRONT_75F' ? 3000 : 2100) &&
+        report.sourceDimensions[1] === 3840 && report.directWidth === report.sourceDimensions[0] &&
+        report.directHeight === 3840 && report.pngWidth === 4728 && report.pngHeight === 5760 &&
+        report.pngColorType === 6 && report.pngBytes > 1000 && report.ready && report.staleSaveBlocked && report.revisionUnchanged &&
+        report.repeatedBakes === 3 && report.repeatStable && report.previewInvariant &&
+        report.resourceDelta.textures === 0 && report.resourceDelta.geometries === 0);
+    writeJson(reportPath, { block: 'PLANAR-B', technicalPass, ...evidence, criticalErrors });
+    console.log(`PLANAR_B_REPORT=${reportPath}`);
+    console.log(`PLANAR_B_TECHNICAL_PASS=${technicalPass}`);
+    app.exit(technicalPass ? 0 : 2);
+  } catch (error) {
+    writeJson(reportPath, { block: 'PLANAR-B', technicalPass: false, error: error.stack || error.message, criticalErrors });
+    console.error(error);
+    app.exit(2);
+  }
+}
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1440,
@@ -1020,6 +1051,7 @@ function createWindow() {
   if (smokeTest) window.webContents.once('did-finish-load', () => runSmokeTest(window));
   if (linkSmokeTest) window.webContents.once('did-finish-load', () => runLinkSmokeTest(window));
   if (planarASmokeTest) window.webContents.once('did-finish-load', () => runPlanarASmokeTest(window));
+  if (planarBSmokeTest) window.webContents.once('did-finish-load', () => runPlanarBSmokeTest(window));
   return window;
 }
 

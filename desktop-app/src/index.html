@@ -151,10 +151,26 @@
             <button id="quick-bake-full-merged" type="button">BAKE FULL MERGED</button>
             <small id="quick-merged-state">NO LAYERS</small>
             <small>Export Direct / Canonical PNG in the FULL COMPOSITE panel.</small>
+            <strong class="quick-workflow-heading">PLANAR OUTPUT · FULL COMPOSITE</strong>
+            <button id="quick-bake-planar" type="button" disabled>BAKE PLANAR</button>
+            <small id="quick-planar-state">FULL MERGE REQUIRED</small>
           </div>
           <button id="authoring-quick-toggle" class="authoring-quick-toggle" type="button" aria-expanded="false" aria-controls="authoring-quick-menu" title="Projection quick actions">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"></path></svg>
           </button>
+        </div>
+        <div id="planar-preview-overlay" class="planar-preview-overlay" role="dialog" aria-labelledby="planar-preview-title" hidden>
+          <section class="planar-preview-panel">
+            <div class="planar-preview-heading">
+              <strong id="planar-preview-title">BAKED PLANAR PREVIEW</strong>
+              <button id="planar-preview-close" type="button" aria-label="Close Planar preview">CLOSE ×</button>
+            </div>
+            <p id="planar-preview-details" class="planar-preview-details">—</p>
+            <div class="planar-preview-image-wrap">
+              <img id="planar-preview-image" alt="Baked Planar output" draggable="false">
+            </div>
+            <small>FIT PREVIEW · Original-resolution PNG remains available through SAVE PLANAR PNG.</small>
+          </section>
         </div>
         <div id="drag-hint">2D NAVIGATE: Left/Middle drag: pan · Wheel: zoom</div>
       </section>
@@ -390,7 +406,19 @@
               <button type="button" data-full-merge-export="CANONICAL" disabled>SAVE MERGED CANONICAL PNG</button>
             </div>
             <p id="full-merge-message" class="projection-poc-message">BAKE FULL MERGED composites visible layers in bottom-to-top order. Photoshop send remains per-layer only.</p>
-            <p class="planar-master-placeholder">PLANAR MASTER · FUTURE / NOT AVAILABLE YET</p>
+            <section class="planar-master-output" aria-labelledby="planar-master-title">
+              <div class="projection-poc-heading">
+                <h3 id="planar-master-title">PLANAR OUTPUT</h3>
+                <span id="planar-master-state" class="projection-poc-state">UNAVAILABLE</span>
+              </div>
+              <p id="planar-master-source" class="planar-master-source">SOURCE: FULL MERGED DIRECT · —</p>
+              <div class="projection-poc-save-actions">
+                <button id="planar-master-bake" type="button" disabled>BAKE PLANAR</button>
+                <button id="planar-master-preview" type="button" disabled>VIEW PLANAR</button>
+                <button id="planar-master-save" type="button" disabled>SAVE PLANAR PNG</button>
+              </div>
+              <p id="planar-master-message" class="projection-poc-message">FULL MERGE REQUIRED</p>
+            </section>
           </section>
           <section class="projection-photoshop-output" aria-label="Selected layer output to Photoshop">
             <h3>LAYER OUTPUT TO PHOTOSHOP · SELECTED ONLY</h3>

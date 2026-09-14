@@ -282,7 +282,7 @@ export class ScreenImageAuthoringSession {
 }
 
 export class ScreenImageLayerStack {
-  constructor({ disposeRuntime = null, idPrefix = 'layer' } = {}) {
+  constructor({ disposeRuntime = null, idPrefix = 'layer', onMergedInvalidated = null } = {}) {
     this.activeFamilyId = null;
     this.stacks = new Map();
     this.selectedByFamily = new Map();
@@ -293,6 +293,7 @@ export class ScreenImageLayerStack {
     this.maskPointSequence = 0;
     this.idPrefix = String(idPrefix);
     this.disposeRuntime = typeof disposeRuntime === 'function' ? disposeRuntime : () => {};
+    this.onMergedInvalidated = typeof onMergedInvalidated === 'function' ? onMergedInvalidated : () => {};
   }
 
   ensureFamily(familyId) {
@@ -313,6 +314,7 @@ export class ScreenImageLayerStack {
     const merged = this.ensureMergedFamily(familyId);
     merged.revision += 1;
     merged.bakedRevision = null;
+    this.onMergedInvalidated(String(familyId), merged.revision);
     return true;
   }
 

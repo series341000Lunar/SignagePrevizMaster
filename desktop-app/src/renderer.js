@@ -43,7 +43,9 @@ import {
 } from './projection-bake-profile.js';
 import { ProjectionBakeRuntime } from './projection-bake-runtime.js';
 import { FullMergeAccumulatorRuntime, mergeRgbaLayers } from './full-merge-runtime.js';
-import { PlanarMappingRuntime, validatePlanarSourceInput } from './planar-mapping-runtime.js';
+import { PlanarMappingRuntime, readPlanarSource, validatePlanarSourceInput } from './planar-mapping-runtime.js';
+import { PlanarOutputWorkflow, encodePlanarPng } from './planar-output-workflow.js';
+import { getPlanarMappingProfile, PLANAR_OUTPUT_PROFILE } from './planar-mapping-profile.js';
 import { createPlanarAsymmetricFixture } from './planar-asymmetric-fixture.js';
 import {
   createProjectSavePayload,
@@ -235,8 +237,10 @@ const authoringQuickToggle = document.querySelector('#authoring-quick-toggle');
 const authoringQuickMenu = document.querySelector('#authoring-quick-menu');
 const quickBakeCurrent = document.querySelector('#quick-bake-current');
 const quickBakeFullMerged = document.querySelector('#quick-bake-full-merged');
+const quickBakePlanar = document.querySelector('#quick-bake-planar');
 const quickSendDirect = document.querySelector('#quick-send-direct');
 const quickMergedState = document.querySelector('#quick-merged-state');
+const quickPlanarState = document.querySelector('#quick-planar-state');
 const quickSendDestination = document.querySelector('#quick-send-destination');
 const authoringTransformInputs = {
   x: document.querySelector('#authoring-transform-x'),
@@ -257,8 +261,25 @@ const fullMergePreviewCanvases = {
 const fullMergeState = document.querySelector('#full-merge-state');
 const fullMergeMessage = document.querySelector('#full-merge-message');
 const fullMergeSaveButtons = [...document.querySelectorAll('[data-full-merge-export]')];
+const planarMasterState = document.querySelector('#planar-master-state');
+const planarMasterTitle = document.querySelector('#planar-master-title');
+const planarMasterSource = document.querySelector('#planar-master-source');
+const planarMasterBake = document.querySelector('#planar-master-bake');
+const planarMasterPreview = document.querySelector('#planar-master-preview');
+const planarMasterSave = document.querySelector('#planar-master-save');
+const planarMasterMessage = document.querySelector('#planar-master-message');
+const planarPreviewOverlay = document.querySelector('#planar-preview-overlay');
+const planarPreviewImage = document.querySelector('#planar-preview-image');
+const planarPreviewDetails = document.querySelector('#planar-preview-details');
+const planarPreviewClose = document.querySelector('#planar-preview-close');
 let projectionPngExporting = false;
 let fullMergePngExporting = false;
+let planarPngExporting = false;
+let planarPreviewUrl = null;
+let planarPreviewOutput = null;
+let planarPreviewReturnFocus = null;
+let lastPlanarUiFamilyId = null;
+let lastPlanarUiStatus = null;
 const cameraThreeInputs = {
   position: {
     x: document.querySelector('#camera-three-position-x'),
@@ -310,6 +331,8 @@ renderer.setPixelRatio(window.devicePixelRatio);
 renderer.autoClear = false;
 const projectionBakeRuntime = new ProjectionBakeRuntime(renderer);
 const fullMergeRuntime = new FullMergeAccumulatorRuntime(renderer);
+const planarMappingRuntime = new PlanarMappingRuntime(renderer);
+let planarWorkflow = null;
 
 const gl = renderer.getContext();
 const scene = new THREE.Scene();
@@ -365,7 +388,8 @@ const disposeAuthoringRuntime = (runtime) => {
 };
 const authoringSession = new ScreenImageLayerStack({
   disposeRuntime: disposeAuthoringRuntime,
-  idPrefix: 'projection-layer'
+  idPrefix: 'projection-layer',
+  onMergedInvalidated: (familyId) => planarWorkflow?.invalidateFamily(familyId)
 });
 const authoringViewSettings = new AuthoringViewSettings();
 const authoringCameraInterlock = new LayoutCameraInterlock(false);
@@ -561,6 +585,25 @@ const state = {
 };
 
 const pointerQueue = new LatestWinsPointerQueue((command) => sendLinkMessage(command));
+
+function planarSourceCurrent(familyId, revision) {
+  const profile = getProjectionBakeProfile(familyId);
+  return Boolean(profile && mergedProjectionResultReady(profile) &&
+    authoringSession.mergedState(familyId).revision === revision);
+}
+
+planarWorkflow = new PlanarOutputWorkflow({
+  readSource: (familyId, revision) => readPlanarSource(fullMergeRuntime, familyId, {
+    ready: planarSourceCurrent(familyId, revision), mergedDirectRevision: revision
+  }),
+  render: (familyId, input, revision) => planarMappingRuntime.render(familyId, input, {
+    sourceMergedDirectRevision: revision
+  }),
+  encodePng: encodePlanarPng,
+  isCurrent: planarSourceCurrent,
+  onStale: (familyId) => planarMappingRuntime.invalidateFamily(familyId),
+  onChange: () => syncProjectionPocUi()
+});
 
 function photoSceneForLegacySelection() {
   if (state.site.world !== 'legacy2d' || state.site.mappingMode !== 'normal') return null;
@@ -1816,11 +1859,18 @@ function syncAuthoringQuickRail(available) {
   if (!visible) state.authoring.railExpanded = false;
   authoringQuickToggle.setAttribute('aria-expanded', String(state.authoring.railExpanded));
   authoringQuickMenu.hidden = !state.authoring.railExpanded;
-  const busy = state.projectionBake.running || state.fullMerge.running || state.reverseBake.activeJobId !== null;
+  const busy = state.projectionBake.running || state.fullMerge.running || planarWorkflow.job !== null || state.reverseBake.activeJobId !== null;
   quickBakeCurrent.disabled = !visible || !authoringSession.selectedLayer?.visible || busy;
   const merged = profile ? authoringSession.mergedState(profile.familyId) : { status: 'NO LAYERS' };
   quickBakeFullMerged.disabled = !visible || authoringSession.layers.length === 0 || busy;
   quickMergedState.textContent = merged.status;
+  const mergedRevision = profile ? merged.revision : null;
+  const planarSourceReady = Boolean(visible && profile && mergedProjectionResultReady(profile));
+  const planarAsset = profile && state.manifest?.planarMapping?.profiles?.[profile.familyId];
+  const planarAssetReady = Boolean(planarAsset?.sourceVerified && planarAsset?.buildCopyVerified);
+  const planarState = profile ? planarWorkflow.state(profile.familyId, { ready: planarSourceReady, revision: mergedRevision }) : { status: 'UNAVAILABLE' };
+  quickBakePlanar.disabled = !planarSourceReady || !planarAssetReady || busy || planarPngExporting;
+  quickPlanarState.textContent = !planarSourceReady ? 'FULL MERGE REQUIRED' : !planarAssetReady ? 'PLANAR ASSET UNAVAILABLE' : planarState.status;
   const destination = profile ? resolveReverseBakeTarget(profile.familyId, 'DIRECT') : { target: null };
   const resolution = expectedProjectionOutputResolution(profile, 'DIRECT');
   const target = destination.target;
@@ -2494,6 +2544,8 @@ function clearProjectScopedPhotoshopState() {
 async function openAuthoringProject(manifestFile = null) {
   if (!window.luuxProject) throw new Error('PROJECT_BRIDGE_UNAVAILABLE: Project persistence bridge is unavailable.');
   if (state.authoring.project.busy) return false;
+  planarWorkflow.reset();
+  planarMappingRuntime.disposeAll();
   cancelActiveSnapshot('PROJECT_SWITCH', 'Project Open invalidated the active Snapshot request.');
   state.authoring.snapshot.projectSessionId = crypto.randomUUID();
   setProjectOperationState({
@@ -2627,11 +2679,43 @@ function syncProjectionPocUi() {
   const hasOutputs = available && selectedProjectionResultReady(profile);
   const mergedOutputs = available && mergedProjectionResultReady(profile);
   const mergedStatus = profile ? authoringSession.mergedState(profile.familyId) : { status: 'NO LAYERS', dirty: false };
+  const planarFamilyId = profile?.familyId;
+  const mergedRevision = planarFamilyId ? authoringSession.mergedState(planarFamilyId).revision : null;
+  const planarReadySource = Boolean(available && profile && mergedProjectionResultReady(profile));
+  const planarState = planarFamilyId
+    ? planarWorkflow.state(planarFamilyId, { ready: planarReadySource, revision: mergedRevision })
+    : { status: 'UNAVAILABLE', error: '' };
+  const planarAsset = planarFamilyId && state.manifest?.planarMapping?.profiles?.[planarFamilyId];
+  const planarAssetReady = Boolean(planarAsset?.sourceVerified && planarAsset?.buildCopyVerified);
+  if (planarFamilyId !== lastPlanarUiFamilyId || planarState.status !== lastPlanarUiStatus) {
+    const messages = {
+      UNAVAILABLE: 'FULL MERGE REQUIRED · Run BAKE FULL MERGED first.',
+      DIRTY: 'PLANAR BAKE REQUIRED · Source is the current Full Merged Direct.',
+      BAKING: 'Baking Planar Master…',
+      READY: 'Planar output ready to save.',
+      ERROR: planarState.error || 'Planar bake failed. Try BAKE PLANAR again.'
+    };
+    planarMasterMessage.className = `projection-poc-message${planarState.status === 'ERROR' ? ' fail' : ''}`;
+    planarMasterMessage.textContent = messages[planarState.status];
+    lastPlanarUiFamilyId = planarFamilyId;
+    lastPlanarUiStatus = planarState.status;
+  }
+  planarMasterState.textContent = planarState.status;
+  planarMasterState.className = `projection-poc-state${planarState.status === 'BAKING' || planarState.status === 'DIRTY' ? ' running' : ''}${planarState.status === 'ERROR' ? ' fail' : ''}`;
+  const planarResolution = planarFamilyId ? getPlanarMappingProfile(planarFamilyId).outputResolution : null;
+  planarMasterTitle.textContent = `PLANAR OUTPUT · ${planarResolution?.width || '—'} × ${planarResolution?.height || '—'}`;
+  planarMasterSource.textContent = `SOURCE: FULL MERGED DIRECT · ${profile?.label || '—'} · ${profile?.workingResolution.width || '—'} × ${profile?.workingResolution.height || '—'}`;
+  planarMasterBake.disabled = !planarAssetReady || !planarReadySource || planarWorkflow.job !== null ||
+    state.projectionBake.running || state.fullMerge.running || state.reverseBake.activeJobId !== null || planarPngExporting;
+  planarMasterSave.disabled = !planarReadySource || !planarFamilyId || !planarWorkflow.readyOutput(planarFamilyId, mergedRevision) ||
+    planarWorkflow.job !== null || planarPngExporting;
+  planarMasterPreview.disabled = planarMasterSave.disabled;
+  syncPlanarPreviewValidity();
   projectionPocTitle.textContent = `PROJECTION POC — ${profile?.label || 'CURRENT FAMILY'}`;
   projectionSelectedLayer.textContent = `Layer: ${authoringSession.source?.filename || '—'} · Family: ${profile?.label || '—'} · Output: CANONICAL`;
   projectionPoc.hidden = !available;
   projectionPocRun.textContent = authoringSession.source ? 'BAKE SELECTED LAYER' : 'NO LAYER TO BAKE';
-  projectionPocRun.disabled = !available || !authoringSession.selectedLayer?.visible || state.projectionBake.running || state.fullMerge.running || projectionPngExporting;
+  projectionPocRun.disabled = !available || !authoringSession.selectedLayer?.visible || state.projectionBake.running || state.fullMerge.running || planarWorkflow.job !== null || projectionPngExporting;
   projectionMaskEnabled.checked = maskEnabled;
   projectionMaskEnabled.disabled = !available || state.projectionBake.running || projectionPngExporting || state.reverseBake.activeJobId !== null;
   projectionMaskState.textContent = maskEnabled ? 'ON · PRODUCTION' : 'OFF · FULL SURFACE';
@@ -2674,7 +2758,7 @@ function syncProjectionPocUi() {
     : 'No UXP session registry';
   if (projectionPhotoshopState) projectionPhotoshopState.textContent = state.reverseBake.lastError ||
     (state.reverseBake.lastApplied ? `PHOTOSHOP APPLY COMPLETE · Job ${state.reverseBake.lastApplied.jobId} · Layer ${state.reverseBake.lastApplied.photoshopLayerId || state.reverseBake.lastApplied.layerId}` : state.reverseBake.state);
-  const busy = state.projectionBake.running || state.fullMerge.running || projectionPngExporting || fullMergePngExporting || reverseBusy;
+  const busy = state.projectionBake.running || state.fullMerge.running || planarWorkflow.job !== null || projectionPngExporting || fullMergePngExporting || reverseBusy;
   projectionPocState.textContent = projectionPngExporting ? 'EXPORTING' : (state.projectionBake.running ? 'RUNNING' : state.projectionBake.status);
   projectionPocState.className = `projection-poc-state${busy ? ' running' : ''}${state.projectionBake.status === 'ERROR' ? ' fail' : ''}`;
 }
@@ -2988,6 +3072,7 @@ async function loadProjectionBakeMatte(profile) {
 }
 
 async function runProjectionBake({ repetitions = 1, maskMode = null, allowSynthetic = false } = {}) {
+  if (planarWorkflow.job) throw new Error('PLANAR_BAKE_BUSY');
   const profile = currentProjectionBakeProfile();
   if (!isProjectionPocContext() || !profile) throw new Error('Block 6B PoC requires an implemented anamorphic family calibration with its exact Surface.');
   const profileValidation = validateProjectionBakeProfile(profile);
@@ -3175,7 +3260,8 @@ async function runFullMergedBake() {
   const profile = currentProjectionBakeProfile();
   if (!isProjectionPocContext() || !profile) throw new Error('FULL_MERGE_CONTEXT_REQUIRED: Select an available Anamorphic Projection View.');
   if (authoringSession.layers.length === 0) throw new Error('FULL_MERGE_LAYERS_REQUIRED: Add at least one layer.');
-  if (state.projectionBake.running || state.fullMerge.running || state.reverseBake.activeJobId !== null) return null;
+  if (state.projectionBake.running || state.fullMerge.running || planarWorkflow.job !== null || state.reverseBake.activeJobId !== null) return null;
+  planarWorkflow.invalidateFamily(profile.familyId);
   const visibleLayers = authoringSession.renderLayers.filter((layer) => layer.visible);
   const selectedBefore = authoringSession.selectedLayer;
   const selectedWasReady = selectedProjectionResultReady(profile);
@@ -3272,6 +3358,113 @@ async function saveFullMergedPng(kind) {
     return exported;
   } finally {
     fullMergePngExporting = false;
+    syncProjectionPocUi();
+  }
+}
+
+async function runPlanarBake() {
+  const profile = currentProjectionBakeProfile();
+  if (!isProjectionPocContext() || !profile) throw new Error('PLANAR_CONTEXT_REQUIRED');
+  const planarAsset = state.manifest?.planarMapping?.profiles?.[profile.familyId];
+  if (!planarAsset?.sourceVerified || !planarAsset?.buildCopyVerified) throw new Error('PLANAR_ASSET_UNAVAILABLE');
+  const revision = authoringSession.mergedState(profile.familyId).revision;
+  const ready = mergedProjectionResultReady(profile);
+  if (!ready) {
+    planarMasterMessage.className = 'projection-poc-message fail';
+    planarMasterMessage.textContent = 'FULL MERGE REQUIRED · Run BAKE FULL MERGED first.';
+    throw new Error('FULL_MERGE_REQUIRED');
+  }
+  planarMasterMessage.className = 'projection-poc-message';
+  planarMasterMessage.textContent = `Baking ${profile.label} Full Merged Direct revision ${revision} to Planar Master…`;
+  try {
+    const output = await planarWorkflow.bake(profile.familyId, { ready, revision });
+    if (!output) {
+      if (currentProjectionBakeProfile()?.familyId === profile.familyId) {
+        planarMasterMessage.className = 'projection-poc-message fail';
+        planarMasterMessage.textContent = 'STALE PLANAR BAKE DISCARDED · Full Merge changed. Re-bake Full Merge, then Planar.';
+      }
+      return null;
+    }
+    if (isProjectionPocContext() && currentProjectionBakeProfile()?.familyId === profile.familyId) {
+      planarMasterMessage.className = 'projection-poc-message pass';
+      planarMasterMessage.textContent = `${profile.label} Planar output READY · ${output.width} × ${output.height} · Direct revision ${revision}.`;
+      try {
+        openPlanarPreview(output);
+      } catch (previewError) {
+        planarMasterMessage.textContent += ` Preview unavailable: ${previewError.message || previewError}`;
+      }
+    }
+    return output;
+  } catch (error) {
+    if (currentProjectionBakeProfile()?.familyId === profile.familyId) {
+      planarMasterMessage.className = 'projection-poc-message fail';
+      planarMasterMessage.textContent = String(error.message || error);
+    }
+    throw error;
+  } finally {
+    syncProjectionPocUi();
+    syncAuthoringUi();
+    updateDiagnostics();
+  }
+}
+
+function closePlanarPreview({ restoreFocus = true } = {}) {
+  if (planarPreviewOverlay.hidden) return;
+  const returnFocus = planarPreviewReturnFocus;
+  planarPreviewOverlay.hidden = true;
+  planarPreviewImage.removeAttribute('src');
+  if (planarPreviewUrl) URL.revokeObjectURL(planarPreviewUrl);
+  planarPreviewUrl = null;
+  planarPreviewOutput = null;
+  planarPreviewReturnFocus = null;
+  if (restoreFocus && returnFocus?.isConnected && !returnFocus.disabled) returnFocus.focus();
+}
+
+function openPlanarPreview(output) {
+  const profile = currentProjectionBakeProfile();
+  const revision = profile ? authoringSession.mergedState(profile.familyId).revision : null;
+  if (!isProjectionPocContext() || !profile || output !== planarWorkflow.readyOutput(profile.familyId, revision) ||
+      !(output.blob instanceof Blob) || output.blob.type !== 'image/png') {
+    throw new Error('PLANAR_NOT_READY');
+  }
+  const returnFocus = document.activeElement;
+  closePlanarPreview({ restoreFocus: false });
+  const url = URL.createObjectURL(output.blob);
+  planarPreviewUrl = url;
+  planarPreviewOutput = output;
+  planarPreviewReturnFocus = returnFocus;
+  planarPreviewDetails.textContent = `${profile.label} · ${output.width} × ${output.height} · Full Merged Direct revision ${revision}`;
+  planarPreviewImage.src = url;
+  planarPreviewOverlay.hidden = false;
+  planarPreviewClose.focus();
+}
+
+function syncPlanarPreviewValidity() {
+  if (planarPreviewOverlay.hidden) return;
+  const profile = currentProjectionBakeProfile();
+  const revision = profile ? authoringSession.mergedState(profile.familyId).revision : null;
+  if (!isProjectionPocContext() || !profile || planarPreviewOutput !== planarWorkflow.readyOutput(profile.familyId, revision)) {
+    closePlanarPreview({ restoreFocus: false });
+  }
+}
+
+function savePlanarPng() {
+  const profile = currentProjectionBakeProfile();
+  if (!isProjectionPocContext() || !profile || !mergedProjectionResultReady(profile)) throw new Error('PLANAR_NOT_READY');
+  const revision = authoringSession.mergedState(profile.familyId).revision;
+  const output = planarWorkflow.readyOutput(profile.familyId, revision);
+  if (!output || planarWorkflow.job || planarPngExporting) throw new Error('PLANAR_NOT_READY');
+  planarPngExporting = true;
+  syncProjectionPocUi();
+  try {
+    const familyLabel = profile.familyId === ANAMORPHIC_FAMILY_IDS.FRONT_75F ? 'Front75F' : 'Back';
+    const fileName = `LUUX_Planar_Master_${familyLabel}_${PLANAR_OUTPUT_PROFILE.outputResolution.width}x${PLANAR_OUTPUT_PROFILE.outputResolution.height}.png`;
+    downloadBlob(output.blob, fileName);
+    planarMasterMessage.className = 'projection-poc-message pass';
+    planarMasterMessage.textContent = `${fileName} download started.`;
+    return { ...output, fileName };
+  } finally {
+    planarPngExporting = false;
     syncProjectionPocUi();
   }
 }
@@ -4153,6 +4346,7 @@ function render() {
   updateLocationMarkers();
   syncAuthoringOverlay();
   syncPreviewModeUi(previewDecision);
+  syncPlanarPreviewValidity();
 }
 
 function updatePointerMarker() {
@@ -6061,10 +6255,29 @@ quickBakeCurrent.addEventListener('click', () => {
 quickBakeFullMerged.addEventListener('click', () => {
   void runFullMergedBake().catch((error) => console.error(error));
 });
+quickBakePlanar.addEventListener('click', () => {
+  void runPlanarBake().catch((error) => console.error(error));
+});
+planarPreviewClose.addEventListener('click', () => closePlanarPreview());
+planarPreviewOverlay.addEventListener('click', (event) => {
+  if (event.target === planarPreviewOverlay) closePlanarPreview();
+});
+planarPreviewImage.addEventListener('error', () => {
+  if (!planarPreviewOverlay.hidden) {
+    closePlanarPreview({ restoreFocus: false });
+    planarMasterMessage.className = 'projection-poc-message fail';
+    planarMasterMessage.textContent = 'Planar bake is ready, but its PNG preview could not be displayed.';
+  }
+});
 quickSendDirect.addEventListener('click', () => {
   void sendProjectionToPhotoshop('DIRECT').catch((error) => console.error(error));
 });
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !planarPreviewOverlay.hidden) {
+    event.preventDefault();
+    closePlanarPreview();
+    return;
+  }
   if (event.key === 'Escape' && authoringCameraInterlock.maskEditing) {
     exitVectorMaskEdit();
     return;
@@ -6146,6 +6359,22 @@ for (const button of fullMergeSaveButtons) {
     void saveFullMergedPng(button.dataset.fullMergeExport).catch((error) => console.error(error));
   });
 }
+planarMasterBake.addEventListener('click', () => {
+  void runPlanarBake().catch((error) => console.error(error));
+});
+planarMasterPreview.addEventListener('click', () => {
+  const profile = currentProjectionBakeProfile();
+  const revision = profile ? authoringSession.mergedState(profile.familyId).revision : null;
+  const output = profile ? planarWorkflow.readyOutput(profile.familyId, revision) : null;
+  if (output) openPlanarPreview(output);
+});
+planarMasterSave.addEventListener('click', () => {
+  try { savePlanarPng(); } catch (error) {
+    planarMasterMessage.className = 'projection-poc-message fail';
+    planarMasterMessage.textContent = String(error.message || error);
+    console.error(error);
+  }
+});
 for (const button of projectionPhotoshopButtons) {
   button.addEventListener('click', () => {
     void sendProjectionToPhotoshop(button.dataset.photoshopOutput).catch((error) => console.error(error));
@@ -6281,6 +6510,8 @@ window.addEventListener('resize', resizeRenderer);
 window.addEventListener('resize', () => requestAnimationFrame(clampVectorMaskPanel));
 window.addEventListener('blur', cancelAuthoringPointerInteraction);
 window.addEventListener('beforeunload', () => {
+  planarWorkflow.reset();
+  planarMappingRuntime.disposeAll();
   projectionBakeRuntime.dispose();
   fullMergeRuntime.disposeAll();
   disposeAuthoringSource();
@@ -8049,7 +8280,7 @@ window.runBlock8FFullMergeSmoke = async () => {
   const report = {
     technicalPass: merged.length === 4 && merged[3] > 0 && merged[3] < 255 && gpuBlendPass &&
       selectionPreservesMerged && metadataDirtiesMerged && panelStateExcluded &&
-      JSON.stringify(quickOrder) === JSON.stringify(['quick-bake-current', 'quick-send-direct', 'quick-bake-full-merged']),
+      JSON.stringify(quickOrder) === JSON.stringify(['quick-bake-current', 'quick-send-direct', 'quick-bake-full-merged', 'quick-bake-planar']),
     userValidation: state.fullMerge.userValidation,
     blendModes: ['NORMAL', 'MULTIPLY', 'SCREEN', 'LINEAR_DODGE'],
     straightAlpha: true,
@@ -8967,6 +9198,114 @@ window.runPlanarAFoundationSmoke = async () => {
     geometryDelta: after.geometries - before.geometries,
     siteCameraMutation: before.camera !== after.camera
   };
+};
+
+// Isolated GPU smoke: the same Full Merge DIRECT read boundary and Planar
+// workflow are exercised without mutating the user's authoring/project state.
+window.runPlanarBWorkflowSmoke = async () => {
+  const familyIds = [ANAMORPHIC_FAMILY_IDS.FRONT_75F, ANAMORPHIC_FAMILY_IDS.BACK];
+  const before = {
+    authoring: JSON.stringify(authoringSession.snapshot()),
+    project: JSON.stringify(state.authoring.project),
+    textures: renderer.info.memory.textures,
+    geometries: renderer.info.memory.geometries,
+    contextLoss: state.contextLossCount
+  };
+  const reports = {};
+  for (const familyId of familyIds) {
+    const resourceStart = { textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries };
+    const previewBefore = { mode: state.previewMode, gray: state.previewBackgroundGray, uniform: previewBackgroundUniform.value };
+    const profile = getProjectionBakeProfile(familyId);
+    const fixture = createPlanarAsymmetricFixture(familyId);
+    const sourceCanvas = document.createElement('canvas');
+    sourceCanvas.width = fixture.width;
+    sourceCanvas.height = fixture.height;
+    sourceCanvas.getContext('2d', { alpha: true }).putImageData(
+      new ImageData(new Uint8ClampedArray(fixture.bytes), fixture.width, fixture.height), 0, 0
+    );
+    const texture = new THREE.CanvasTexture(sourceCanvas);
+    texture.colorSpace = THREE.NoColorSpace;
+    texture.flipY = false;
+    texture.minFilter = THREE.NearestFilter;
+    texture.magFilter = THREE.NearestFilter;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+    const target = { texture };
+    const merged = new FullMergeAccumulatorRuntime(renderer);
+    const planar = new PlanarMappingRuntime(renderer);
+    let revision = 1;
+    const workflow = new PlanarOutputWorkflow({
+      readSource: (id, rev) => readPlanarSource(merged, id, { ready: true, mergedDirectRevision: rev }),
+      render: (id, input, rev) => planar.render(id, input, { sourceMergedDirectRevision: rev }),
+      encodePng: encodePlanarPng,
+      isCurrent: (id, rev) => id === familyId && revision === rev && merged.result(id)?.mergedRevision === rev
+    });
+    try {
+      const accumulator = merged.begin(profile);
+      accumulator.addLayer({ directTarget: target, canonicalTarget: target, opacity: 1, blendMode: 'NORMAL' });
+      const fullMergedResult = accumulator.finish({ mergedRevision: revision });
+      const source = readPlanarSource(merged, familyId, { ready: true, mergedDirectRevision: revision });
+      const sourceDimensions = [source.width, source.height];
+      source.bytes = null;
+      const output = await workflow.bake(familyId, { ready: true, revision });
+      const bytes = new Uint8Array(await output.blob.arrayBuffer());
+      const view = new DataView(bytes.buffer);
+      const pngWidth = view.getUint32(16);
+      const pngHeight = view.getUint32(20);
+      const pngColorType = bytes[25];
+      const ready = workflow.state(familyId, { ready: true, revision }).status === 'READY';
+      const repeatBaseline = { textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries };
+      let repeatStable = true;
+      const previewHashes = [];
+      for (let repeat = 0; repeat < 2; repeat += 1) {
+        state.previewBackgroundGray = repeat;
+        previewBackgroundUniform.value = repeat;
+        state.previewMode = repeat === 0 ? PREVIEW_MODES.AUTHORING : PREVIEW_MODES.PHOTOSHOP_FINAL;
+        workflow.invalidateFamily(familyId);
+        const repeated = await workflow.bake(familyId, { ready: true, revision });
+        previewHashes.push([...new Uint8Array(await crypto.subtle.digest('SHA-256', await repeated.blob.arrayBuffer()))]
+          .map((value) => value.toString(16).padStart(2, '0')).join(''));
+        repeatStable &&= renderer.info.memory.textures === repeatBaseline.textures &&
+          renderer.info.memory.geometries === repeatBaseline.geometries;
+      }
+      revision += 1;
+      workflow.invalidateFamily(familyId);
+      const staleSaveBlocked = workflow.readyOutput(familyId, revision) === null;
+      reports[familyId] = {
+        sourceDimensions, directWidth: fullMergedResult.directWidth, directHeight: fullMergedResult.directHeight,
+        sourceKind: 'FULL_MERGED_DIRECT', pngWidth, pngHeight, pngColorType,
+        pngBytes: bytes.length, ready, staleSaveBlocked, repeatedBakes: 3, repeatStable,
+        previewInvariant: previewHashes[0] === previewHashes[1],
+        revisionUnchanged: merged.result(familyId)?.mergedRevision === 1
+      };
+    } finally {
+      workflow.reset();
+      planar.disposeAll();
+      merged.disposeAll();
+      texture.dispose();
+      sourceCanvas.width = sourceCanvas.height = 1;
+      fixture.bytes = null;
+      state.previewMode = previewBefore.mode;
+      state.previewBackgroundGray = previewBefore.gray;
+      previewBackgroundUniform.value = previewBefore.uniform;
+    }
+    reports[familyId].resourceDelta = {
+      textures: renderer.info.memory.textures - resourceStart.textures,
+      geometries: renderer.info.memory.geometries - resourceStart.geometries
+    };
+  }
+  const after = {
+    authoring: JSON.stringify(authoringSession.snapshot()),
+    project: JSON.stringify(state.authoring.project),
+    textures: renderer.info.memory.textures,
+    geometries: renderer.info.memory.geometries,
+    contextLoss: state.contextLossCount
+  };
+  return { reports, authoringMutation: before.authoring !== after.authoring,
+    projectMutation: before.project !== after.project,
+    textureDelta: after.textures - before.textures,
+    geometryDelta: after.geometries - before.geometries,
+    contextLossDelta: after.contextLoss - before.contextLoss };
 };
 
 async function start() {
