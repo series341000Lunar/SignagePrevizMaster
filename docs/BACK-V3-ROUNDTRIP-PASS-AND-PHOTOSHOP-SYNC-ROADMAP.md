@@ -6,6 +6,8 @@ Scope: Photoshop 원본 → SMG 레이어/마스크 편집·Bake → 레이어�
 
 이 문서는 사용자가 제공한 V3 실사용 결과와 이후 대화에서 결정한 운영 규칙·추가 기능을 한곳에 기록한다. Block 8C/8F의 닫힌 계약이나 [Block 9 Master Design](POST-BLOCK-8F-SNAPSHOT-AUDIT-AND-BLOCK9-DESIGN-V1.md)을 소급 변경하지 않는다. 여기서 **PASS는 사용자 육안 평가**이며, 픽셀 완전 일치·Photoshop 마스크 일반 지원·장기 세션 동기화의 증명은 아니다.
 
+> **2026-09-14 후속 상태:** 이 문서의 F5 Layer Mask 실기 프로브 예정 문구는 작성 당시의 기록이다. [Block 9B-C1 실기 프로브](BLOCK-9B-C1-PROBE.md)에서 Photoshop user Layer Mask는 **CLOSED / UNSUPPORTED / NON-BLOCKING / 추가 구현 계획 없음**으로 결론 났다. 필요한 경우 원본을 보존한 복제본에서 마스크 결과를 일반 Pixel Layer에 적용/병합한 다음 `FROM PHOTOSHOP SELECTION`을 사용한다. Smart Object와 Multi-select Flatten은 별도의 조건부 Future 후보로 남는다.
+
 ## 1. 이번 사용자 판정과 증거
 
 사용자는 BACK V3에서 원본과 왕복 결과를 비교하여 **의도된 잘림 영역을 제외하면 유의미한 육안 차이가 없다**고 판정했다. 이번 Photoshop 복귀 경로는 `SEND FULL MERGED`가 아니다. SMG의 레이어를 **하나씩 Bake/Send**하고 Photoshop에서 다시 합성했다. 별도로 `BAKE FULL MERGED`의 Direct PNG도 출력했다. 이 조건으로 **BACK V3 레이어별 왕복 및 합성의 사용자 시각 PASS**를 기록한다.
@@ -106,6 +108,8 @@ SMG 레이어 목록에서 작은 LED/색상과 텍스트를 함께 보여준다
 - 원본에 Photoshop 마스크가 있는 경우 `픽셀만 / 마스크 적용 외관을 래스터화 / 지원하지 않음` 중 어떤 계약인지 별도 UXP 실기 시험으로 결정한다. 원본 레이어·마스크는 캡처 중 변경하지 않는다.
 - 알파 0 아래 비영(非零) RGB는 **비차단 진단**으로, 반투명 가장자리·색 프로파일·premultiplied/straight alpha 세부 동작은 향후 추가 회귀/실기 프로브로 추적한다. 이미 사용자 확인된 62% Layer opacity는 향후 픽셀 알파/메타데이터 중복 적용 방지 회귀 시험에 포함한다. Pixel Layer + Photoshop Layer Mask, Smart Object, Multi-select Flatten Snapshot은 후속 범위이며 Block 9A CLOSED를 다시 열지 않는다.
 
+**F5 후속 판정:** 위 Layer Mask 계약 선택은 [Block 9B-C1](BLOCK-9B-C1-PROBE.md)에서 이미 완료했다. 현재 `getPixels({layerID})` Snapshot은 완전 마스크 구멍을 불투명하게 반환하고 Feather 20 px의 부분 알파를 반환하지 않는다. 이 사례는 **CLOSED / UNSUPPORTED / NON-BLOCKING**, Mask Guard와 수동 합성 구현 계획 없음이다. Smart Object와 Multi-select Flatten Snapshot의 별도 탐색은 이 결론으로 닫히지 않는다.
+
 ## 5. 완료된 판정과 후속 진단·기능 검증
 
 | 게이트 | 합격 기준 | 현재 판정 |
@@ -120,6 +124,10 @@ SMG 레이어 목록에서 작은 LED/색상과 텍스트를 함께 보여준다
 | 수치적 이미지 비교 | 동일한 2100×3840 이미지에서 의도된 잘림 영역을 명시적으로 제외하고 오차 지표·차이 이미지를 보존 | 미수행; 이번 PASS의 전제 아님 |
 | 구조 변경 내성 | 일반 레이어 추가·삭제, LUUX 출력 레이어 하나 삭제 후 재전송, LUUX 그룹 삭제 후 재전송, UXP Reload 사례 | 미시험 |
 | 원본 Refresh | 원본 가필 후 노란색 표시 → 기존 SMG 비트맵만 갱신 → 재베이크; 출력물은 원본으로 오인하지 않음 | 미구현 |
-| Photoshop Layer Mask·Smart Object·Multi-select Flatten | 별도 후속 범위의 실기 프로브 및 계약 결정 | **FUTURE / NOT BLOCK 9A** |
+| Photoshop user Layer Mask | [Block 9B-C1 실기 프로브](BLOCK-9B-C1-PROBE.md) 완료; 유효한 mask alpha/feather가 Snapshot PNG에 없음 | **CLOSED / UNSUPPORTED / NON-BLOCKING; 추가 구현 계획 없음** |
+| Smart Object | 별도 실기 프로브/계약 결정, 수요에 따라 | **CONDITIONAL FUTURE / NOT BLOCK 9A** |
+| Multi-select Flatten Snapshot | 별도 실기 프로브/계약 결정, 수요에 따라 | **CONDITIONAL FUTURE / NOT BLOCK 9A** |
 
 Block 9A는 **명시적인 사용자 승인으로 CLOSED / USER VALIDATED**다. 위 F1 작업 UI 분리, F2 Source Link, F3 Source Changed/Refresh, F4 Reconcile Layers, F5 추가 Photoshop Mask 프로브는 **FUTURE / DESIGN REQUIREMENT**이며 구현 완료를 주장하지 않고 Block 9A를 다시 열지 않는다. 다음 단계는 별도 지시문으로 정할 **Block 9B — Photoshop Snapshot Workflow / Preview Separation**이다. Planar Mapping Bake는 **FUTURE / MANDATORY**이며 Block 9B 자체가 아니다. 완료 상태의 최신 권위는 [Block 9A Handoff](BLOCK-9A-HANDOFF.md), 상세 근거는 [Block 9A Validation](BLOCK-9A-VALIDATION.md)에 있다.
+
+**Post-completion update (2026-09-14):** 직전 문단은 2026-09-13 당시의 roadmap이다. [Block 9B-A](BLOCK-9B-A-HANDOFF.md), [9B-B](BLOCK-9B-B-HANDOFF.md), [PLANAR-B](PLANAR-B-HANDOFF.md)가 이후 닫혔다. F1 작업 UI 분리의 당시 범위와 새 **Production UI Phase A**는 동일한 완료 판정이 아니며, 다음 우선순위는 Production UI다. F2/F3의 Source Link·명시적 Refresh는 P2 개선 후보이며, `SOURCE CHANGED`/`LINK BROKEN`은 신뢰 가능한 원본 identity가 정의된 뒤에만 추진한다. Photoshop user Layer Mask는 더 이상 F5 Future 항목이 아니다. [현재 우선순위와 HOLD/NO-GO](POST-COMPLETION-DOCUMENT-CORRECTION-VALIDATION.md)를 참조한다.

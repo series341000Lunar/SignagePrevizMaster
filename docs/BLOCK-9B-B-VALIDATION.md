@@ -52,3 +52,5 @@ For H, the renderer disables `SEND DIRECT` unless the resolved registered Direct
 ## Deferred
 
 9B-C: Photoshop Pixel Layer + Layer Mask, Smart Object, multi-select flattened Snapshot, Group (low priority). 9C: Source Link, SOURCE CHANGED, REFRESH FROM PHOTOSHOP, conflict and RECONCILE LAYERS. Future mandatory: planar mapping Bake/export/target. Still unsupported: automatic Photoshop target search/reconnect, SEND FULL MERGED, 16/32-bit workflow.
+
+**Later status (2026-09-14):** The deferred list records the 9B-B validation date. [PLANAR-B](PLANAR-B-VALIDATION.md) later closed user-facing Planar PNG delivery. [Block 9B-C1](BLOCK-9B-C1-PROBE.md) later closed Photoshop user Layer Mask visible-result Snapshot **UNSUPPORTED / NON-BLOCKING**, with no further implementation planned. Smart Object and multi-select Flatten are independent conditional candidates; 9B-B user/technical PASS is unchanged.

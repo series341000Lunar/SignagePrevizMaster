@@ -75,7 +75,7 @@ Selection Snapshot is **SUPPORTED / USER PASS — V1 SCOPE**. The 62% property a
 ### D. Failure and cleanup
 
 1. Try no document, non-RGB, and 16/32-bit documents; confirm refusal without mutation.
-2. Try zero/multiple layers, Group, Smart Object, Adjustment Layer alone, and other non-Pixel kinds; confirm refusal. Pixel Layer + Photoshop Layer Mask and multi-select Flatten need separate future probes.
+2. Try zero/multiple layers, Group, Smart Object, Adjustment Layer alone, and other non-Pixel kinds; confirm refusal. **Historical plan:** Pixel Layer + Photoshop Layer Mask and multi-select Flatten needed separate probes. **Later update:** only the user Layer Mask case completed in [Block 9B-C1](BLOCK-9B-C1-PROBE.md) and is CLOSED / UNSUPPORTED / NON-BLOCKING; multi-select Flatten remains conditional future scope.
 3. Disconnect during transfer; confirm no partial Layer or asset survives.
 4. Trigger rapid duplicate requests; confirm one job wins and reused IDs are rejected.
 5. Switch family or project before completion; confirm late completion is rejected and rolled back.
@@ -96,7 +96,7 @@ Selection Snapshot is **SUPPORTED / USER PASS — V1 SCOPE**. The 62% property a
 | Hidden RGB beneath alpha=0 | NOT GUARANTEED / NON-BLOCKING / DEFERRED | Diagnostic only; exact `RGB != 0, A = 0` preservation is not the V1 Photoshop host contract |
 | Non-destructive Photoshop capture | USER PASS | 2026-09-13 user confirmation |
 | Mixed FILE/Composite/Selection Save/Open/offline | USER PASS | Save -> Photoshop disconnect -> restart -> Open Project, user confirmation |
-| Pixel Layer + Photoshop Layer Mask | NOT YET FORMALLY SUPPORTED | Future real-host probe, not a Block 9A closure gate |
+| Pixel Layer + Photoshop user Layer Mask | CLOSED / UNSUPPORTED / NON-BLOCKING (Block 9B-C1) | [Real-host probe](BLOCK-9B-C1-PROBE.md): internal masked hole remained opaque, 20 px Feather had no partial alpha; 62% Layer opacity stayed separate. Apply/merge the mask on a preserved Photoshop duplicate into an ordinary Pixel Layer before `FROM PHOTOSHOP SELECTION`. No further implementation planned; Block 9A stays CLOSED / USER VALIDATED. |
 | Smart Object | UNSUPPORTED / FUTURE PROBE | One-Pixel-Layer V1 contract |
 | Group | UNSUPPORTED / LOW PRIORITY | One-Pixel-Layer V1 contract; future only |
 | Arbitrary multi-selection | UNSUPPORTED / FUTURE | Multi-select Flatten Snapshot requires separate scope |

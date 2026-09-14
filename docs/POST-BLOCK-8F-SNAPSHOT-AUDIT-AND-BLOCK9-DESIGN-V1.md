@@ -9,6 +9,8 @@
 **Supersedes:** none<br>
 **Preserves:** Block 8D / 8E / 8F CLOSED baselines
 
+> **Post-completion status (2026-09-14):** This V1 document retains its historical planning language. The current Photoshop user Layer Mask result is **Block 9B-C1 CLOSED / UNSUPPORTED / NON-BLOCKING**, not a future probe; see [the real-host probe](BLOCK-9B-C1-PROBE.md). Block 9A, 9B-A, 9B-B, PLANAR-A, and PLANAR-B have subsequent completion records. The original Planar input assumption is superseded by the [family-native resolution correction](PLANAR-A-RESOLUTION-CONTRACT-CORRECTION.md) and [PLANAR-B handoff](PLANAR-B-HANDOFF.md). Current priorities are recorded in [post-completion correction validation](POST-COMPLETION-DOCUMENT-CORRECTION-VALIDATION.md).
+
 ---
 
 # 0. Purpose
@@ -291,6 +293,8 @@ Nested Group
 ```
 
 These become supported only if actual Photoshop Probe results demonstrate a stable isolated RGBA contract.
+
+**Later result for the first candidate only:** The real Photoshop 2026 [Block 9B-C1 probe](BLOCK-9B-C1-PROBE.md) found that `imaging.getPixels({layerID})` did not include the user Layer Mask's internal hole or 20 px Feather alpha. Pixel Layer + user Layer Mask is **CLOSED / UNSUPPORTED / NON-BLOCKING; no further implementation planned**. Preserve the original by working on a duplicate, apply/merge the mask result to an ordinary Pixel Layer in Photoshop, then use `FROM PHOTOSHOP SELECTION`. Smart Object and multi-selection remain separate conditional future candidates.
 
 ### Initially unsupported
 
@@ -816,6 +820,8 @@ Pixel Layer + Photoshop Layer Mask
 
 Determine whether capture returns the expected masked RGBA.
 
+**Superseded by Block 9B-C1 real-host probe:** The result was opaque pixels in an internal masked hole and no partial alpha for 20 px Feather. Status: **CLOSED / UNSUPPORTED / NON-BLOCKING**. See [probe evidence and workaround](BLOCK-9B-C1-PROBE.md); this historical checklist is not an open gate.
+
 ## Probe 4 — Smart Object
 
 Determine whether capture is stable and visually correct.
@@ -924,6 +930,8 @@ Smart Object
 Self-contained Group
 Nested Group
 ```
+
+**Post-completion note:** Pixel Layer + Photoshop user Layer Mask in the historical list is **CLOSED / UNSUPPORTED / NON-BLOCKING** after [Block 9B-C1](BLOCK-9B-C1-PROBE.md). The other entries retain their separate scope; do not infer that they were probed or closed.
 
 ## 19.4 Explicitly deferred from 9A
 
@@ -1694,3 +1702,7 @@ FUTURE / MANDATORY
 ## Status addendum — 2026-09-13
 
 The status list above is this master design's historical planning snapshot. Block 9A is now **CLOSED / AUTOMATED TECHNICAL PASS / REAL PHOTOSHOP USER VALIDATED** within its RGB8/sRGB-oriented V1 scope. The current completion authority is [Block 9A Handoff](BLOCK-9A-HANDOFF.md), followed by [Block 9A Validation](BLOCK-9A-VALIDATION.md); the [BACK V3 Sync Roadmap](BACK-V3-ROUNDTRIP-PASS-AND-PHOTOSHOP-SYNC-ROADMAP.md) records future requirements. Block 9B remains **Photoshop Snapshot Workflow / Preview Separation**; Planar Mapping Bake is separately **FUTURE / MANDATORY**. This addendum does not change the historical Block 8F baseline or pre-implement future blocks.
+
+## Post-completion addendum — 2026-09-14
+
+The preceding 2026-09-13 addendum records the state **at that date**, not the present roadmap. [Block 9B-A](BLOCK-9B-A-HANDOFF.md) and [9B-B](BLOCK-9B-B-HANDOFF.md) subsequently closed, and [PLANAR-B](PLANAR-B-HANDOFF.md) delivered the family-native Full Merged Direct → BAKE PLANAR → SAVE PLANAR PNG workflow with practical FRONT/BACK user PASS. This supersedes this V1 design's prospective Planar input/output status, without rewriting its original proposal. [Block 9B-C1](BLOCK-9B-C1-PROBE.md) subsequently closed **UNSUPPORTED / NON-BLOCKING** for the Photoshop user Layer Mask visible-result Snapshot; no further implementation is planned. **Production UI Phase A** is the next separate work block, per the [post-completion correction](POST-COMPLETION-DOCUMENT-CORRECTION-VALIDATION.md), with product runtime unchanged in this documentation turn.

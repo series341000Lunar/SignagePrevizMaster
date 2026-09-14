@@ -230,6 +230,19 @@ in the active 1:1 working canvas and preserves the selected Pixel Layer opacity
 through the return to Photoshop. Snapshot is explicit and immutable; Photoshop
 history changes never auto-refresh it.
 
+**Post-completion Selection scope:** one ordinary Pixel Layer in RGB 8-bit,
+sRGB-oriented Photoshop, **without a Photoshop user Layer Mask dependency**, is
+the supported Selection Snapshot input. The current `LayerKind.NORMAL` code gate
+may still accept a masked Pixel Layer, but the [real Photoshop 9B-C1 probe](../docs/BLOCK-9B-C1-PROBE.md)
+found that `imaging.getPixels({layerID})` loses the user mask's internal-hole
+and feather alpha. That visible-result Snapshot is **CLOSED / UNSUPPORTED /
+NON-BLOCKING**, with no further implementation planned. Preserve the original
+if needed; on a Photoshop duplicate apply/merge the mask result into an
+ordinary Pixel Layer before `FROM PHOTOSHOP SELECTION`. Composite Snapshot
+remains a distinct existing command. The source-pipeline `schema 3` line above
+describes the historical Block 9A stage; the current saved project schema is
+**v4** (see [PLANAR-B handoff](../docs/PLANAR-B-HANDOFF.md)).
+
 ## Security and offline baseline
 
 - `nodeIntegration: false`
