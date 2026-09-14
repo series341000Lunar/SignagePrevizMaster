@@ -425,6 +425,17 @@
       </aside>
     </main>
 
+    <dialog id="snapshot-resolution-dialog" class="snapshot-resolution-dialog" aria-labelledby="snapshot-resolution-title" aria-describedby="snapshot-resolution-message">
+      <h2 id="snapshot-resolution-title">PHOTOSHOP SOURCE RESOLUTION MISMATCH</h2>
+      <p id="snapshot-resolution-message"></p>
+      <p class="snapshot-resolution-hint">The source can still be imported, but its placement may differ. This does not change Bake Target safety.</p>
+      <div class="snapshot-resolution-actions">
+        <button id="snapshot-resolution-no" type="button" autofocus>NO</button>
+        <button id="snapshot-resolution-yes" type="button">YES</button>
+        <button id="snapshot-resolution-session" type="button">YES FOR THIS SESSION</button>
+      </div>
+    </dialog>
+
     <script type="module" src="./renderer.js"></script>
   </body>
 </html>

@@ -5,6 +5,59 @@
   color: #eef2f7;
 }
 
+.snapshot-resolution-dialog {
+  width: min(460px, calc(100vw - 32px));
+  padding: 20px;
+  border: 1px solid #efc66b;
+  border-radius: 10px;
+  background: #20242c;
+  color: #eef2f7;
+  box-shadow: 0 18px 60px #000a;
+}
+
+.snapshot-resolution-dialog::backdrop {
+  background: #0009;
+}
+
+.snapshot-resolution-dialog h2 {
+  margin: 0 0 12px;
+  color: #efc66b;
+  font-size: 15px;
+}
+
+.snapshot-resolution-dialog p {
+  margin: 0 0 12px;
+  line-height: 1.45;
+  white-space: pre-line;
+}
+
+.snapshot-resolution-dialog .snapshot-resolution-hint {
+  color: #b7c0cf;
+  font-size: 12px;
+}
+
+.snapshot-resolution-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.snapshot-resolution-actions button {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid #596372;
+  border-radius: 5px;
+  background: #303742;
+  color: #eef2f7;
+  cursor: pointer;
+}
+
+.snapshot-resolution-actions button:hover,
+.snapshot-resolution-actions button:focus-visible {
+  border-color: #efc66b;
+}
+
 * {
   box-sizing: border-box;
 }

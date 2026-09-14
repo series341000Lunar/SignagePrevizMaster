@@ -172,6 +172,11 @@ const layoutEditButton = document.querySelector('#layout-edit-button');
 const authoringImageButton = document.querySelector('#authoring-image-button');
 const authoringPhotoshopCompositeButton = document.querySelector('#authoring-photoshop-composite');
 const authoringPhotoshopSelectionButton = document.querySelector('#authoring-photoshop-selection');
+const snapshotResolutionDialog = document.querySelector('#snapshot-resolution-dialog');
+const snapshotResolutionMessage = document.querySelector('#snapshot-resolution-message');
+const snapshotResolutionNo = document.querySelector('#snapshot-resolution-no');
+const snapshotResolutionYes = document.querySelector('#snapshot-resolution-yes');
+const snapshotResolutionSession = document.querySelector('#snapshot-resolution-session');
 const authoringImageInput = document.querySelector('#authoring-image-input');
 const authoringReplaceButton = document.querySelector('#authoring-replace-button');
 const authoringReplaceInput = document.querySelector('#authoring-replace-input');
@@ -420,6 +425,7 @@ const state = {
       sequence: 0,
       current: null,
       completedJobIds: new Set(),
+      allowResolutionMismatchThisSession: false,
       status: 'IDLE',
       error: ''
     },
@@ -1991,7 +1997,8 @@ function syncAuthoringUi() {
   authoringResetTransform.disabled = !available || !selectedLayer?.visible || !layoutEditing || maskEditing;
   authoringImageButton.disabled = !available || maskEditing || snapshotActive || state.projectionBake.running || state.reverseBake.activeJobId !== null;
   const snapshotBlocked = !available || !state.link.photoshopConnected || maskEditing || state.projectionBake.running ||
-    state.fullMerge.running || state.reverseBake.activeJobId !== null || Boolean(state.authoring.snapshot.current) || state.authoring.project.busy;
+    state.fullMerge.running || state.reverseBake.activeJobId !== null || Boolean(state.authoring.snapshot.current) ||
+    Boolean(pendingSnapshotResolutionPrompt) || state.authoring.project.busy;
   authoringPhotoshopCompositeButton.disabled = snapshotBlocked;
   authoringPhotoshopSelectionButton.disabled = snapshotBlocked;
   authoringReplaceButton.disabled = !available || !source || maskEditing || snapshotActive || state.projectionBake.running || state.reverseBake.activeJobId !== null;
@@ -2600,7 +2607,18 @@ function expectedProjectionOutputResolution(profile, outputKind) {
   return outputKind === 'CANONICAL' ? profile.canonicalResolution : profile.workingResolution;
 }
 
+let lastTargetFamilyContext = undefined;
+function syncTargetFamilyContext(force = false) {
+  if (!state.link.rendererHandshake || !state.link.photoshopConnected) return;
+  const inFamilyView = state.activeView === 'site-3d' && state.site.world === 'world3d' && state.site.mappingMode === 'anamorphic';
+  const familyId = inFamilyView ? currentProjectionBakeProfile()?.familyId || null : null;
+  if (force || familyId !== lastTargetFamilyContext) {
+    if (sendLinkMessage({ type: 'TARGET_FAMILY_CONTEXT', familyId })) lastTargetFamilyContext = familyId;
+  }
+}
+
 function syncProjectionPocUi() {
+  syncTargetFamilyContext();
   const available = isProjectionPocContext();
   const profile = currentProjectionBakeProfile();
   const maskEnabled = isProjectionMaskEnabled(profile);
@@ -4951,11 +4969,17 @@ function cancelActiveSnapshot(code = 'SNAPSHOT_CANCELED', message = 'Snapshot ca
   return true;
 }
 
-function requestPhotoshopSnapshot(captureMode) {
+let pendingSnapshotResolutionPrompt = null;
+
+function requestPhotoshopSnapshot(captureMode, approval = null) {
   if (!isProjectionAuthoringContext()) throw snapshotFailure('SNAPSHOT_CONTEXT_UNAVAILABLE', 'Select an available Anamorphic Projection View.');
   if (!state.link.photoshopConnected) throw snapshotFailure('UXP_DISCONNECTED', 'Photoshop UXP is not connected.');
   if (state.authoring.snapshot.current) throw snapshotFailure('SNAPSHOT_BUSY', 'Another Snapshot job is active.');
-  const familyId = currentProjectionBakeProfile().familyId;
+  const profile = currentProjectionBakeProfile();
+  const familyId = profile.familyId;
+  if (approval && (approval.familyId !== familyId || approval.projectSessionId !== state.authoring.snapshot.projectSessionId)) {
+    throw snapshotFailure('SNAPSHOT_CONTEXT_CHANGED', 'Family or project changed while waiting for resolution approval. Try the import again.');
+  }
   const snapshotJobId = nextSnapshotJobId();
   const request = {
     type: 'SNAPSHOT_REQUEST',
@@ -4963,7 +4987,15 @@ function requestPhotoshopSnapshot(captureMode) {
     captureRequestId: crypto.randomUUID(),
     projectSessionId: state.authoring.snapshot.projectSessionId,
     familyId,
-    captureMode
+    captureMode,
+    expectedDocumentWidth: profile.workingResolution.width,
+    expectedDocumentHeight: profile.workingResolution.height,
+    allowResolutionMismatch: state.authoring.snapshot.allowResolutionMismatchThisSession || Boolean(approval),
+    ...(approval ? {
+      approvedDocumentId: approval.documentId,
+      approvedDocumentWidth: approval.documentWidth,
+      approvedDocumentHeight: approval.documentHeight
+    } : {})
   };
   state.authoring.snapshot.current = {
     request,
@@ -5153,10 +5185,61 @@ function handleSnapshotCommitted(message) {
 function handleSnapshotError(message) {
   const current = state.authoring.snapshot.current;
   if (!current || (message.snapshotJobId && message.snapshotJobId !== current.request.snapshotJobId)) return;
+  if (message.code === 'SNAPSHOT_RESOLUTION_CONFIRMATION_REQUIRED') {
+    const fields = ['documentId', 'documentWidth', 'documentHeight', 'expectedWidth', 'expectedHeight'];
+    if (!fields.every((field) => Number.isSafeInteger(message[field]) && message[field] > 0) ||
+        typeof message.documentName !== 'string') {
+      const error = 'INVALID_SNAPSHOT_RESOLUTION_CHECK: Photoshop did not identify the source document.';
+      authoringMessage.className = 'projection-poc-message fail';
+      authoringMessage.textContent = error;
+      clearSnapshotJob({ error });
+      return;
+    }
+    const approval = {
+      familyId: current.request.familyId,
+      projectSessionId: current.request.projectSessionId,
+      captureMode: current.request.captureMode,
+      documentId: message.documentId,
+      documentWidth: message.documentWidth,
+      documentHeight: message.documentHeight
+    };
+    clearSnapshotJob();
+    pendingSnapshotResolutionPrompt = approval;
+    snapshotResolutionMessage.textContent = `${message.documentName}\nPhotoshop document: ${message.documentWidth} × ${message.documentHeight}\n${approval.familyId === 'ANAMORPHIC_FRONT_75F' ? 'FRONT75' : 'BACK'} Direct: ${message.expectedWidth} × ${message.expectedHeight}\nImport this ${approval.captureMode === 'COMPOSITE' ? 'Composite' : 'Selection'} anyway?`;
+    snapshotResolutionDialog.showModal();
+    syncAuthoringUi();
+    return;
+  }
   const error = `${message.code || 'SNAPSHOT_ERROR'}: ${message.message || 'Snapshot failed.'}`;
   authoringMessage.className = 'projection-poc-message fail';
   authoringMessage.textContent = error;
   clearSnapshotJob({ rollback: true, error });
+}
+
+function answerSnapshotResolutionPrompt(choice) {
+  const approval = pendingSnapshotResolutionPrompt;
+  if (!approval) return;
+  pendingSnapshotResolutionPrompt = null;
+  snapshotResolutionDialog.close();
+  if (choice === 'NO') {
+    state.authoring.snapshot.status = 'IDLE';
+    state.authoring.snapshot.error = '';
+    authoringMessage.className = 'projection-poc-message';
+    authoringMessage.textContent = 'Photoshop Snapshot import canceled; no layer was added.';
+    syncAuthoringUi();
+    return;
+  }
+  if (choice === 'SESSION') state.authoring.snapshot.allowResolutionMismatchThisSession = true;
+  try {
+    requestPhotoshopSnapshot(approval.captureMode, approval);
+  } catch (error) {
+    const detail = error.message || String(error);
+    state.authoring.snapshot.status = 'FAILED';
+    state.authoring.snapshot.error = detail;
+    authoringMessage.className = 'projection-poc-message fail';
+    authoringMessage.textContent = detail;
+    syncAuthoringUi();
+  }
 }
 
 function rejectIncomingFrame(code, message, frameId = null) {
@@ -5282,9 +5365,13 @@ function handleLinkJson(message) {
   switch (message.type) {
     case 'HELLO_ACK':
       state.link.rendererHandshake = true;
+      lastTargetFamilyContext = undefined;
+      syncTargetFamilyContext(true);
       break;
     case 'LINK_STATUS':
       state.link.photoshopConnected = Boolean(message.photoshopConnected);
+      if (state.link.photoshopConnected) syncTargetFamilyContext(true);
+      else lastTargetFamilyContext = undefined;
       if (!state.link.photoshopConnected) {
         state.link.liveFrameCurrent = false;
         handleSnapshotError({ snapshotJobId: state.authoring.snapshot.current?.request.snapshotJobId, code: 'UXP_DISCONNECTED', message: 'Photoshop disconnected during Snapshot.' });
@@ -5924,6 +6011,13 @@ authoringPhotoshopCompositeButton.addEventListener('click', () => {
 });
 authoringPhotoshopSelectionButton.addEventListener('click', () => {
   try { requestPhotoshopSnapshot('SINGLE_PIXEL_LAYER'); } catch (error) { handleSnapshotError({ code: error.code, message: error.message }); }
+});
+snapshotResolutionNo.addEventListener('click', () => answerSnapshotResolutionPrompt('NO'));
+snapshotResolutionYes.addEventListener('click', () => answerSnapshotResolutionPrompt('YES'));
+snapshotResolutionSession.addEventListener('click', () => answerSnapshotResolutionPrompt('SESSION'));
+snapshotResolutionDialog.addEventListener('cancel', (event) => {
+  event.preventDefault();
+  answerSnapshotResolutionPrompt('NO');
 });
 authoringImageInput.addEventListener('change', () => {
   const file = authoringImageInput.files?.[0] || null;

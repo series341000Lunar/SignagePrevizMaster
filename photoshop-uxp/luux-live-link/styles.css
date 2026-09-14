@@ -58,6 +58,29 @@ h2 {
   text-transform: uppercase;
 }
 
+h3 {
+  margin: 12px 0 6px;
+  color: #c9cdd3;
+  font-size: 11px;
+}
+
+.target-quick-create {
+  margin-top: 12px;
+  padding: 8px;
+  border: 1px solid #555b63;
+}
+
+.target-quick-card {
+  margin: 7px 0;
+  padding: 8px;
+  border: 1px solid #4a4a4a;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.target-quick-card span { color: #a5abb4; }
+
 header p {
   margin-top: 4px;
   color: #a5abb4;

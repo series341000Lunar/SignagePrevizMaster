@@ -2,6 +2,7 @@
 
 const { action, app, constants, core, imaging } = require('photoshop');
 const { createBakeTargetRegistry } = require('./bake-target-registry.js');
+const { FRONT, BACK, createTargetQuickCreate } = require('./target-quick-create.js');
 const { compactAuthoringOrderMap, createOwnedLayerRegistry, normalizeCompositeMetadata } = require('./owned-layer-registry.js');
 const config = window.LUUX_LIVE_LINK_CONFIG;
 const DISPLAY_COLOR_PROFILE = 'sRGB IEC61966-2.1';
@@ -29,6 +30,13 @@ const elements = {
   bakeTargetOutputSelect: document.querySelector('#bake-target-output-select'),
   addBakeTarget: document.querySelector('#add-bake-target'),
   bakeTargetList: document.querySelector('#bake-target-list'),
+  quickFrontDirect: document.querySelector('#quick-front-direct'),
+  quickBackDirect: document.querySelector('#quick-back-direct'),
+  quickCanonical: document.querySelector('#quick-canonical'),
+  quickFrontDirectStatus: document.querySelector('#quick-front-direct-status'),
+  quickBackDirectStatus: document.querySelector('#quick-back-direct-status'),
+  quickCanonicalStatus: document.querySelector('#quick-canonical-status'),
+  quickCanonicalLabel: document.querySelector('#quick-canonical-label'),
   bakeState: document.querySelector('#bake-state'),
   bakeJob: document.querySelector('#bake-job'),
   bakeOutput: document.querySelector('#bake-output'),
@@ -123,6 +131,7 @@ const state = {
     suppressAutoSyncUntil: 0,
     suppressedNotifications: 0
   },
+  targetQuick: { activeFamilyId: null, busy: false },
   pointer: {
     processing: false,
     lastRequestId: null,
@@ -396,6 +405,47 @@ function findOpenDocumentSnapshot(documentId) {
   return doc ? documentSnapshot(doc) : null;
 }
 
+function readQuickDocumentById(documentId) {
+  const doc = Number.isSafeInteger(documentId) && documentId > 0 ? findOpenDocument(documentId) : null;
+  return doc ? {
+    ...documentSnapshot(doc),
+    colorProfileName: doc.colorProfileName,
+    hasBackgroundLayer: doc.backgroundLayer != null
+  } : null;
+}
+
+const targetQuickCreate = createTargetQuickCreate({
+  registry: state.bake.registry,
+  readDocumentById: readQuickDocumentById,
+  confirmContext: (spec) => spec.outputKind !== 'CANONICAL' || state.targetQuick.activeFamilyId === spec.familyId,
+  createDocument: (spec) => core.executeAsModal(() => app.documents.add({
+    name: `LUUX_${spec.familyId === FRONT ? 'FRONT75' : 'BACK'}_${spec.outputKind}_${spec.width}x${spec.height}`,
+    width: spec.width,
+    height: spec.height,
+    resolution: 72,
+    mode: 'RGBColorMode',
+    depth: 8,
+    fill: 'transparent',
+    profile: DISPLAY_COLOR_PROFILE
+  }), { commandName: `Create ${spec.label} Target` }),
+  onChange: () => render()
+});
+
+function renderTargetQuickCreate() {
+  const family = state.targetQuick.activeFamilyId;
+  const cards = [
+    [FRONT, 'DIRECT', elements.quickFrontDirect, elements.quickFrontDirectStatus],
+    [BACK, 'DIRECT', elements.quickBackDirect, elements.quickBackDirectStatus],
+    [family, 'CANONICAL', elements.quickCanonical, elements.quickCanonicalStatus]
+  ];
+  elements.quickCanonicalLabel.textContent = `CANONICAL · ${family === FRONT ? 'FRONT75' : family === BACK ? 'BACK' : 'FAMILY CONTEXT REQUIRED'} · 4728 × 5760`;
+  for (const [familyId, outputKind, button, label] of cards) {
+    const result = targetQuickCreate.status(familyId, outputKind);
+    label.textContent = `${result.status}${result.documentName ? ` · ${result.documentName}` : ''}${result.detail ? ` · ${result.detail}` : ''}`;
+    button.disabled = state.targetQuick.busy || state.bake.processing || state.snapshot.processing || state.phase !== 'IDLE' || !familyId || result.status === 'READY' || result.status === 'CREATING';
+  }
+}
+
 function currentBakeTargetRegistrySnapshot() {
   return {
     type: 'BAKE_TARGET_REGISTRY',
@@ -429,9 +479,10 @@ function appendBakeTargetDetail(parent, label, value) {
 
 function renderBakeTargets() {
   const snapshot = currentBakeTargetRegistrySnapshot();
+  renderTargetQuickCreate();
   elements.bakeTargetCount.textContent = String(snapshot.targets.length);
   elements.bakeTargetSession.textContent = snapshot.sessionId;
-  elements.addBakeTarget.disabled = state.bake.processing || !app.activeDocument;
+  elements.addBakeTarget.disabled = state.bake.processing || state.targetQuick.busy || !app.activeDocument;
   while (elements.bakeTargetList.firstChild) elements.bakeTargetList.removeChild(elements.bakeTargetList.firstChild);
   if (!snapshot.targets.length) {
     const empty = document.createElement('p');
@@ -466,9 +517,9 @@ function renderBakeTargets() {
     const renameButton = document.createElement('button');
     renameButton.type = 'button';
     renameButton.textContent = 'RENAME';
-    renameButton.disabled = state.bake.processing;
+    renameButton.disabled = state.bake.processing || state.targetQuick.busy;
     renameButton.onclick = () => {
-      if (state.bake.processing) return;
+      if (state.bake.processing || state.targetQuick.busy) return;
       try {
         state.bake.registry.renameTarget(target.targetId, renameInput.value);
         state.bake.lastError = '';
@@ -481,9 +532,9 @@ function renderBakeTargets() {
     const setActiveButton = document.createElement('button');
     setActiveButton.type = 'button';
     setActiveButton.textContent = 'SET ACTIVE DOCUMENT';
-    setActiveButton.disabled = state.bake.processing || !app.activeDocument;
+    setActiveButton.disabled = state.bake.processing || state.targetQuick.busy || !app.activeDocument;
     setActiveButton.onclick = () => {
-      if (state.bake.processing) return;
+      if (state.bake.processing || state.targetQuick.busy) return;
       const doc = app.activeDocument;
       if (!doc) {
         state.bake.lastError = 'TARGET_NOT_SET: No active Photoshop document.';
@@ -498,9 +549,9 @@ function renderBakeTargets() {
     const clearButton = document.createElement('button');
     clearButton.type = 'button';
     clearButton.textContent = 'CLEAR';
-    clearButton.disabled = state.bake.processing;
+    clearButton.disabled = state.bake.processing || state.targetQuick.busy;
     clearButton.onclick = () => {
-      if (state.bake.processing) return;
+      if (state.bake.processing || state.targetQuick.busy) return;
       state.bake.registry.clearTarget(target.targetId);
       state.bake.lastError = '';
       publishBakeTargetRegistry(true);
@@ -991,7 +1042,7 @@ function sendBakeError(message, error) {
 }
 
 function handleBakeBegin(message) {
-  if (state.bake.current || state.bake.processing) {
+  if (state.bake.current || state.bake.processing || state.targetQuick.busy) {
     if (isSocketOpen()) sendJson({ type: 'BAKE_ERROR', jobId: message.jobId ?? null, code: 'BAKE_BUSY', message: 'A full-image Photoshop bake is already in progress.' });
     return;
   }
@@ -1238,12 +1289,15 @@ function snapshotBounds(value) {
   return bounds;
 }
 
-async function captureSnapshot(request) {
+async function captureSnapshot(request, expectedDocument) {
   const captureStartedAtEpochMs = Date.now();
   const captureStartedAt = performance.now();
   return core.executeAsModal(async () => {
     const doc = app.activeDocument;
     if (!doc) throw snapshotError('SNAPSHOT_NO_DOCUMENT', 'No active Photoshop document.');
+    if (doc.id !== expectedDocument.id || doc.width !== expectedDocument.width || doc.height !== expectedDocument.height) {
+      throw snapshotError('SNAPSHOT_SOURCE_CHANGED', 'Active Photoshop document changed after Snapshot resolution check. Try the import again.');
+    }
     validateDocument(doc);
     const documentId = doc.id;
     const documentName = doc.name;
@@ -1381,7 +1435,7 @@ async function sendSnapshotCapture(capture) {
 }
 
 async function processSnapshotRequest(request) {
-  if (state.snapshot.processing || state.phase !== 'IDLE' || state.bake.processing) {
+  if (state.snapshot.processing || state.phase !== 'IDLE' || state.bake.processing || state.targetQuick.busy) {
     sendJson({ type: 'SNAPSHOT_ERROR', snapshotJobId: request.snapshotJobId, code: 'LARGE_TRANSFER_BUSY', message: 'Photoshop is already processing a Live, Snapshot, or Bake transfer.' });
     return;
   }
@@ -1390,7 +1444,31 @@ async function processSnapshotRequest(request) {
   state.lastError = '';
   render();
   try {
-    const capture = await captureSnapshot(request);
+    const doc = app.activeDocument;
+    if (!doc) throw snapshotError('SNAPSHOT_NO_DOCUMENT', 'No active Photoshop document.');
+    if (request.captureMode === 'SINGLE_PIXEL_LAYER') {
+      const selectedLayers = Array.from(doc.activeLayers || []);
+      if (selectedLayers.length !== 1 || selectedLayers[0].kind !== constants.LayerKind.NORMAL) {
+        throw snapshotError('SNAPSHOT_SELECTION_UNSUPPORTED', 'Select exactly one Pixel Layer.');
+      }
+    }
+    const expectedDocument = { id: doc.id, width: doc.width, height: doc.height };
+    if (request.approvedDocumentId !== undefined &&
+        (request.approvedDocumentId !== doc.id || request.approvedDocumentWidth !== doc.width || request.approvedDocumentHeight !== doc.height)) {
+      throw snapshotError('SNAPSHOT_SOURCE_CHANGED', 'Active Photoshop document changed after resolution approval. Try the import again.');
+    }
+    if (Number.isSafeInteger(request.expectedDocumentWidth) && Number.isSafeInteger(request.expectedDocumentHeight) &&
+        (doc.width !== request.expectedDocumentWidth || doc.height !== request.expectedDocumentHeight) && !request.allowResolutionMismatch) {
+      sendJson({
+        type: 'SNAPSHOT_ERROR', snapshotJobId: request.snapshotJobId,
+        code: 'SNAPSHOT_RESOLUTION_CONFIRMATION_REQUIRED',
+        message: 'Photoshop document resolution differs from the active Family Direct resolution.',
+        documentId: doc.id, documentName: doc.name, documentWidth: doc.width, documentHeight: doc.height,
+        expectedWidth: request.expectedDocumentWidth, expectedHeight: request.expectedDocumentHeight
+      });
+      return;
+    }
+    const capture = await captureSnapshot(request, expectedDocument);
     const result = await sendSnapshotCapture(capture);
     state.snapshot.lastResult = result;
   } catch (error) {
@@ -1418,8 +1496,13 @@ function handleJson(message) {
     case 'LINK_STATUS':
       state.rendererConnected = Boolean(message.rendererConnected);
       state.connectionState = state.rendererConnected && state.handshake ? 'CONNECTED' : 'WAITING FOR RENDERER';
+      if (!state.rendererConnected) state.targetQuick.activeFamilyId = null;
       if (state.rendererConnected) publishBakeTargetRegistry(true);
       break;
+    case 'TARGET_FAMILY_CONTEXT':
+      state.targetQuick.activeFamilyId = message.familyId === FRONT || message.familyId === BACK ? message.familyId : null;
+      render();
+      return;
     case 'BAKE_BEGIN':
       handleBakeBegin(message);
       return;
@@ -1742,8 +1825,23 @@ async function runRequestedSend(reason = 'manual') {
 
 elements.connectButton.onclick = () => connect(true);
 elements.sendButton.onclick = () => requestLatestFrame('manual');
+async function runTargetQuickCreate(familyId, outputKind) {
+  if (state.targetQuick.busy || state.bake.processing || state.snapshot.processing || state.phase !== 'IDLE') return;
+  state.targetQuick.busy = true;
+  render();
+  try {
+    const result = await targetQuickCreate.run(familyId, outputKind);
+    if (result.status === 'READY') publishBakeTargetRegistry(true);
+  } finally {
+    state.targetQuick.busy = false;
+    render();
+  }
+}
+elements.quickFrontDirect.onclick = () => { void runTargetQuickCreate(FRONT, 'DIRECT'); };
+elements.quickBackDirect.onclick = () => { void runTargetQuickCreate(BACK, 'DIRECT'); };
+elements.quickCanonical.onclick = () => { void runTargetQuickCreate(state.targetQuick.activeFamilyId, 'CANONICAL'); };
 elements.addBakeTarget.onclick = () => {
-  if (state.bake.processing) return;
+  if (state.bake.processing || state.targetQuick.busy) return;
   const doc = app.activeDocument;
   if (!doc) {
     state.bake.lastError = 'TARGET_NOT_SET: No active Photoshop document.';

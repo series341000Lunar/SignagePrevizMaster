@@ -120,6 +120,22 @@ function validateSnapshotRequest(message) {
     if (typeof message[field] !== 'string' || !message[field] || message[field].length > 128) throw new Error(`${field} must be a non-empty string of at most 128 characters.`);
   }
   if (!SNAPSHOT_CAPTURE_MODES.has(message.captureMode)) throw new Error('captureMode must be COMPOSITE or SINGLE_PIXEL_LAYER.');
+  const expectedFields = ['expectedDocumentWidth', 'expectedDocumentHeight'];
+  if (expectedFields.some((field) => message[field] !== undefined) &&
+      !expectedFields.every((field) => Number.isSafeInteger(message[field]) && message[field] > 0)) {
+    throw new Error('Snapshot expected document resolution must contain positive integer width and height.');
+  }
+  if (message.allowResolutionMismatch !== undefined && typeof message.allowResolutionMismatch !== 'boolean') {
+    throw new Error('allowResolutionMismatch must be boolean.');
+  }
+  const approvedFields = ['approvedDocumentId', 'approvedDocumentWidth', 'approvedDocumentHeight'];
+  if (approvedFields.some((field) => message[field] !== undefined) &&
+      !approvedFields.every((field) => Number.isSafeInteger(message[field]) && message[field] > 0)) {
+    throw new Error('Approved Snapshot document identity and resolution must contain positive integers.');
+  }
+  if (message.approvedDocumentId !== undefined && message.allowResolutionMismatch !== true) {
+    throw new Error('Approved Snapshot document requires allowResolutionMismatch.');
+  }
   return true;
 }
 
@@ -239,11 +255,11 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
     if (seenSnapshotJobOrder.length > 256) seenSnapshotJobIds.delete(seenSnapshotJobOrder.shift());
   }
 
-  function abortActiveSnapshot(code, message, notifyPhotoshop = true, notifyRenderer = true) {
+  function abortActiveSnapshot(code, message, notifyPhotoshop = true, notifyRenderer = true, details = null) {
     if (!activeSnapshot) return;
     const { snapshotJobId } = activeSnapshot.request;
     if (activeSnapshot.timer) clearTimeout(activeSnapshot.timer);
-    const payload = { type: 'SNAPSHOT_ERROR', snapshotJobId, code, message };
+    const payload = { type: 'SNAPSHOT_ERROR', snapshotJobId, code, message, ...(details || {}) };
     if (notifyRenderer) sendJson(activeSnapshot.renderer, payload);
     if (notifyPhotoshop) sendJson(activeSnapshot.photoshop, payload);
     emit('snapshot-aborted', { snapshotJobId, code, message });
@@ -683,6 +699,14 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
     }
   }
 
+  function handleTargetFamilyContext(socket, message) {
+    if (socket !== clients.renderer) return sendError(socket, 'ROLE_VIOLATION', 'Only the renderer may report Target Family context.');
+    if (message.familyId !== null && !['ANAMORPHIC_FRONT_75F', 'ANAMORPHIC_BACK'].includes(message.familyId)) {
+      return sendError(socket, 'INVALID_TARGET_FAMILY_CONTEXT', 'Target Family context must be FRONT75, BACK, or null.');
+    }
+    sendJson(clients.photoshop, { type: 'TARGET_FAMILY_CONTEXT', familyId: message.familyId });
+  }
+
   function handleHello(socket, message) {
     if (message.protocol !== config.protocol || message.protocolVersion !== config.protocolVersion || !ROLES.has(message.role)) {
       sendError(socket, 'BAD_HELLO', 'Protocol, version, or role is invalid.');
@@ -837,7 +861,21 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
       case 'SNAPSHOT_COMPLETE':
       case 'SNAPSHOT_ERROR':
         if (socket === clients.renderer) handleSnapshotResponse(socket, message);
-        else if (socket === clients.photoshop && message.type === 'SNAPSHOT_ERROR') abortActiveSnapshot(message.code || 'SNAPSHOT_CAPTURE_FAILED', message.message || 'Photoshop failed to capture the Snapshot.', false, true);
+        else if (socket === clients.photoshop && message.type === 'SNAPSHOT_ERROR' &&
+                 activeSnapshot?.photoshop === socket && activeSnapshot.request.snapshotJobId === message.snapshotJobId) {
+          let details = null;
+          if (message.code === 'SNAPSHOT_RESOLUTION_CONFIRMATION_REQUIRED') {
+            const fields = ['documentId', 'documentWidth', 'documentHeight', 'expectedWidth', 'expectedHeight'];
+            if (fields.every((field) => Number.isSafeInteger(message[field]) && message[field] > 0) &&
+                typeof message.documentName === 'string' && message.documentName.length <= 256) {
+              details = Object.fromEntries(fields.map((field) => [field, message[field]]));
+              details.documentName = message.documentName;
+            } else {
+              return abortActiveSnapshot('INVALID_SNAPSHOT_RESOLUTION_CHECK', 'Photoshop returned invalid resolution-check details.', false, true);
+            }
+          }
+          abortActiveSnapshot(message.code || 'SNAPSHOT_CAPTURE_FAILED', message.message || 'Photoshop failed to capture the Snapshot.', false, true, details);
+        }
         else sendJson(socket, { type: 'SNAPSHOT_ERROR', snapshotJobId: message.snapshotJobId ?? null, code: 'ROLE_VIOLATION', message: 'Unexpected Snapshot response role.' });
         break;
       case 'SNAPSHOT_CANCEL': handleSnapshotCancel(socket, message); break;
@@ -851,6 +889,7 @@ function createLiveLinkBroker({ config, onEvent = () => {}, serverFactory, repla
         handleBakeResponse(socket, message);
         break;
       case 'BAKE_TARGET_REGISTRY': handleBakeTargetRegistry(socket, message); break;
+      case 'TARGET_FAMILY_CONTEXT': handleTargetFamilyContext(socket, message); break;
       case 'POINTER_SET':
       case 'POINTER_CLEAR':
         handlePointerCommand(socket, message);

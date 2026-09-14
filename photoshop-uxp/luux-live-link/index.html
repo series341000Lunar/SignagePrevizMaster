@@ -31,6 +31,16 @@
         <div class="diagnostic-row"><span class="label">Session</span><span id="bake-target-session" class="value">—</span></div>
       </div>
       <p class="hint bake-target-hint">The Active Document is registration input only. It never becomes a Bake destination automatically.</p>
+      <div class="target-quick-create" aria-label="Target Quick Create">
+        <h3>TARGET QUICK CREATE</h3>
+        <p class="hint">DIRECT TARGETS · PRIMARY</p>
+        <div class="target-quick-card"><strong>FRONT75 DIRECT · 3000 × 3840</strong><button id="quick-front-direct" type="button">CREATE + REGISTER</button><span id="quick-front-direct-status">NO TARGET</span></div>
+        <div class="target-quick-card"><strong>BACK DIRECT · 2100 × 3840</strong><button id="quick-back-direct" type="button">CREATE + REGISTER</button><span id="quick-back-direct-status">NO TARGET</span></div>
+        <p class="hint">CANONICAL TARGET · SECONDARY</p>
+        <div class="target-quick-card"><strong id="quick-canonical-label">CANONICAL · FAMILY CONTEXT REQUIRED · 4728 × 5760</strong><button id="quick-canonical" type="button" disabled>CREATE + REGISTER</button><span id="quick-canonical-status">FAMILY CONTEXT REQUIRED</span></div>
+        <p class="hint">Creates a blank transparent RGB8 sRGB document. No existing document is searched or changed.</p>
+      </div>
+      <h3>MANUAL REGISTER EXISTING DOCUMENT</h3>
       <label class="field-label" for="bake-target-label-input">Target label</label>
       <input id="bake-target-label-input" type="text" placeholder="e.g. FRONT DIRECT">
       <label class="field-label" for="bake-target-family-select">Family binding</label>
