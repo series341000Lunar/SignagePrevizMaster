@@ -110,4 +110,4 @@ await Promise.all([once(renderer.socket, 'close'), once(photoshop.socket, 'close
 await broker.close();
 
 console.log(JSON.stringify({ feature: 'Snapshot resolution consent', technicalPass: true, mismatchPromptRelayed: true,
-  approvalBoundToDocument: true, malformedApprovalRejected: true, userPhotoshopValidation: 'OPEN' }));
+  approvalBoundToDocument: true, malformedApprovalRejected: true, userPhotoshopValidation: 'NOT_ASSERTED_BY_THIS_TEST' }));

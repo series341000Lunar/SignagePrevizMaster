@@ -1,6 +1,7 @@
 # Block 9B-B Validation — Photoshop Target Quick Create / Register
 
-Status: **IMPLEMENTED / AUTOMATED TECHNICAL PASS / USER PHOTOSHOP A–I PASS / CLOSEOUT PENDING**  
+Status: **IMPLEMENTED / AUTOMATED TECHNICAL PASS / USER PHOTOSHOP A–I PASS / VALIDATION COMPLETE / CLOSEOUT PENDING**
+
 Date: 2026-09-14  
 Base HEAD: `ac3924677c0098e431fcfdbfbff97d4ee1f2043b`
 
@@ -28,9 +29,11 @@ The target registry remains UXP-session-only. Project schema remains v4. No targ
 
 Automated checks mock UXP creation and inspect source structure. They do **not** prove Photoshop's actual `documents.add` behavior or a real host `SEND DIRECT` result. Adobe's official [Documents.add](https://developer.adobe.com/photoshop/uxp/2022/ps-reference/classes/documents) documentation states that omitted fill defaults to opaque white and demonstrates `fill: 'transparent'`; [DocumentCreateOptions](https://developer.adobe.com/photoshop/uxp/2022/ps-reference/objects/createoptions/documentcreateoptions) documents depth and profile, and [executeAsModal](https://developer.adobe.com/photoshop/uxp/2022/ps-reference/media/executeasmodal) requires modal state for creation. The user reported real-host PASS for gates A–I on 2026-09-14.
 
+Closeout recheck on 2026-09-14: the first sandboxed `npm test` run could not start the GPU process. An unsandboxed rerun with a real UXP client connected failed at Electron `executeJavaScript` with `Script failed to execute`; the report also recorded a Live frame during the smoke, but causation was not established. After the user unloaded the UXP panel, an isolated unsandboxed full `npm test` passed static, protocol, and runtime checks (`BLOCK0_TECHNICAL_PASS=true`; report `technicalPass: true`, `criticalErrors: []`). `npm run test:block9bb` and `npm run test:snapshot-resolution-consent` also passed separately. These technical results remain distinct from the user-reported Photoshop A–I PASS.
+
 ## Real Photoshop validation — USER A–I PASS
 
-The user confirmed gates A and B in conversation on 2026-09-14, including Quick Create/Register, READY, and actual `SEND DIRECT → APPLIED` for both families. The user later reported C–G PASS and supplied screenshots. G was explicitly corrected to **no automatic Bake Target binding**. E's slight Photoshop Live preview pixel offset is a previously known issue; the user did not observe a Bake → Send difference for FRONT75/BACK. The user subsequently confirmed H's wrong-size target block and I's unchanged pre-existing content after `CREATE + REGISTER`. These are user-reported real-host results, distinct from automated checks.
+The user confirmed gates A and B in conversation on 2026-09-14, including Quick Create/Register, READY, and actual `SEND DIRECT → APPLIED` for both families. The user later reported C–G PASS and supplied screenshots. G was explicitly corrected to **no automatic Bake Target binding**. E's slight Photoshop Live preview pixel offset is a previously known issue; the user did not observe a Bake → Send difference for FRONT75/BACK. The user subsequently confirmed H's wrong-size target block and I's unchanged pre-existing content after `CREATE + REGISTER`, including retained masks, Hue/Saturation adjustment, and selection in the original PSD. The supplied after-creation screenshot shows the separate target READY while the original document's artwork, layer stack, and selection remain visible. These are user-reported real-host results, distinct from automated checks.
 
 | Gate | Action and PASS condition | Result |
 | --- | --- | --- |
@@ -42,7 +45,7 @@ The user confirmed gates A and B in conversation on 2026-09-14, including Quick 
 | F — UXP reload | Reload with created documents still open. No auto rebind; manually register an existing document or explicitly create a new target. | USER PASS (reported 2026-09-14) |
 | G — No auto search | Open multiple matching-size/name documents. None binds without explicit manual or quick-create action. | USER PASS (user corrected report to no automatic Bake Target binding on 2026-09-14) |
 | H — Wrong target | Manually bind a document whose size does not match the active Family's DIRECT output, then attempt `BAKE CURRENT` → `SEND DIRECT`. The wrong target must not receive pixels. | USER PASS (reported 2026-09-14: wrong-size canvas blocks `SEND DIRECT`) |
-| I — Non-destructive | Inspect a pre-existing PSD's layers, visibility, opacity, masks, selection, and pixels before/after Quick Create. The old PSD is unchanged; active document may become the new target. | USER PASS (reported 2026-09-14: manual register → CLEAR → `CREATE + REGISTER` left the pre-existing content unchanged against its duplicate; new target appeared separately and READY). The screenshots show the three-layer content comparison; mask/selection edge cases were not independently demonstrated. |
+| I — Non-destructive | Inspect a pre-existing PSD's layers, visibility, opacity, masks, selection, and pixels before/after Quick Create. The old PSD is unchanged; active document may become the new target. | USER PASS (reported 2026-09-14: manual register → CLEAR → `CREATE + REGISTER` left the pre-existing document unchanged against its duplicate; new target appeared separately and READY). The user additionally confirmed mask, Hue/Saturation adjustment, and selection preservation with a before/after screenshot. |
 
 For H, the renderer disables `SEND DIRECT` unless the resolved registered Direct target is READY and exactly matches the active output resolution; `sendProjectionToPhotoshop` checks the size again before transfer. UXP also checks the target dimensions against the Bake job. The user has now reported wrong-size target blocking as real-host PASS. Earlier mismatched Photoshop **source** screenshots were a separate question: the operations then permitted were `FROM PHOTOSHOP COMPOSITE` and `FROM PHOTOSHOP SELECTION`, not `SEND DIRECT`. That source-document mismatch now has an explicit consent flow; see [Snapshot resolution consent validation](SNAPSHOT-RESOLUTION-CONSENT-VALIDATION.md).
 
