@@ -19,6 +19,7 @@ const linkSmokeTest = process.argv.includes('--link-smoke-test');
 const planarASmokeTest = process.argv.includes('--planar-a-smoke-test');
 const planarBSmokeTest = process.argv.includes('--planar-b-smoke-test');
 const previewSourceASmokeTest = process.argv.includes('--preview-source-a-smoke-test');
+const previewSourceBSmokeTest = process.argv.includes('--preview-source-b-smoke-test');
 const reportArgument = process.argv.find((argument) => argument.startsWith('--report='));
 const screenshotArgument = process.argv.find((argument) => argument.startsWith('--screenshot='));
 const externalNetworkRequests = [];
@@ -30,8 +31,9 @@ let currentProjectDirectory = null;
 let projectPersistencePromise = null;
 const pendingProjectOpens = new Map();
 
-if (smokeTest || linkSmokeTest || planarASmokeTest || planarBSmokeTest || previewSourceASmokeTest) {
-  const profileName = planarBSmokeTest ? 'planar-b-smoke-profile' : (planarASmokeTest ? 'planar-a-smoke-profile' : (linkSmokeTest ? 'link-smoke-profile' : 'runtime-smoke-profile'));
+if (smokeTest || linkSmokeTest || planarASmokeTest || planarBSmokeTest || previewSourceASmokeTest || previewSourceBSmokeTest) {
+  const profileName = previewSourceBSmokeTest ? 'preview-source-b-smoke-profile' :
+    (planarBSmokeTest ? 'planar-b-smoke-profile' : (planarASmokeTest ? 'planar-a-smoke-profile' : (linkSmokeTest ? 'link-smoke-profile' : 'runtime-smoke-profile')));
   app.setPath('userData', path.resolve(process.cwd(), '.runtime', profileName));
 }
 
@@ -1042,6 +1044,26 @@ async function runPreviewSourceASmokeTest(window) {
   }
 }
 
+async function runPreviewSourceBSmokeTest(window) {
+  const reportPath = resolveArgumentPath(reportArgument, 'preview-source-b-runtime.json');
+  try {
+    await waitForDiagnostics(window);
+    await waitForSiteReady(window);
+    const evidence = await window.webContents.executeJavaScript('window.runPreviewSourceBSmoke()', true);
+    const physical = await window.webContents.executeJavaScript('window.runPreviewSourceBPhysicalIntegrationSmoke()', true);
+    const technicalPass = evidence.technicalPass === true && physical.technicalPass === true && criticalErrors.length === 0;
+    writeJson(reportPath, { block: 'PREVIEW-SOURCE-B', technicalPass, ...evidence, physical, criticalErrors });
+    console.log(`PREVIEW_SOURCE_B_REPORT=${reportPath}`);
+    console.log(`PREVIEW_SOURCE_B_TECHNICAL_PASS=${technicalPass}`);
+    app.exit(technicalPass ? 0 : 2);
+  } catch (error) {
+    writeJson(reportPath, { block: 'PREVIEW-SOURCE-B', technicalPass: false,
+      error: error.stack || error.message, criticalErrors });
+    console.error(error);
+    app.exit(2);
+  }
+}
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1440,
@@ -1077,6 +1099,7 @@ function createWindow() {
   if (planarASmokeTest) window.webContents.once('did-finish-load', () => runPlanarASmokeTest(window));
   if (planarBSmokeTest) window.webContents.once('did-finish-load', () => runPlanarBSmokeTest(window));
   if (previewSourceASmokeTest) window.webContents.once('did-finish-load', () => runPreviewSourceASmokeTest(window));
+  if (previewSourceBSmokeTest) window.webContents.once('did-finish-load', () => runPreviewSourceBSmokeTest(window));
   return window;
 }
 

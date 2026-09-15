@@ -103,7 +103,8 @@ assert.match(css, /\.vector-mask-floating-panel\s*\{[\s\S]*position:\s*absolute/
 assert.match(css, /\.vector-mask-panel-body\s*\{[\s\S]*overflow:\s*auto/);
 assert.match(renderer, /outsideSignageIncluded:\s*false/);
 assert.match(renderer, /fullMergeRuntime\.begin\(profile\)/);
-assert.match(renderer, /authoringSession\.renderLayers\.filter/);
+assert.match(renderer, /autoPreview \? authoringSession\.ensureFamily\(profile\.familyId\) : authoringSession\.layers/);
+assert.match(renderer, /\[\.\.\.familyLayers\]\.reverse\(\)\.filter\(\(layer\) => layer\.visible\)/);
 assert.match(runtime, /retainedMergedTargets:\s*2/);
 assert.match(runtime, /permanentPerLayerTargets:\s*0/);
 

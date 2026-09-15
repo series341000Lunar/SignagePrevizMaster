@@ -19,6 +19,7 @@
     "test:planar-b": "node tests/planar-b-validation.mjs",
     "test:planar-b:runtime": "npm run build && electron . --planar-b-smoke-test --report=.runtime/planar-b-runtime.json",
     "test:preview-source-a:runtime": "npm run build && electron . --preview-source-a-smoke-test --report=.runtime/preview-source-a-runtime.json",
+    "test:preview-source-b:runtime": "npm run build && electron . --preview-source-b-smoke-test --report=.runtime/preview-source-b-runtime.json",
     "test:preview-background": "node tests/preview-background-validation.mjs",
     "test:block4a": "node tests/block-4a-validation.mjs",
     "test:block4b": "node tests/block-4b-validation.mjs",

@@ -59,3 +59,5 @@ Production에서는 BLOCK 번호, PROJECTION POC, 진단 preview/metric, Optiona
 3. **AUTO AUTHORING → PLANAR PHYSICAL PREVIEW**
 
 검증 결과와 사용자 확인 절차는 [PRODUCTION-UI-A-VALIDATION.md](PRODUCTION-UI-A-VALIDATION.md)에 기록했다.
+
+후속 상태 (2026-09-16): 위 목록은 Phase A 종료 당시의 미구현 항목이다. 통합 SOURCE 선택은 PREVIEW-SOURCE-A에서, AUTHORING → Planar 물리 Preview는 PREVIEW-SOURCE-B에서 구현했다. 현재 별도 후속 설계 항목으로 남은 것은 PLANAR SEND TO PHOTOSHOP이다. B의 사용자 확인 범위는 [PREVIEW-SOURCE-B-VALIDATION.md](PREVIEW-SOURCE-B-VALIDATION.md)에 기록했다.

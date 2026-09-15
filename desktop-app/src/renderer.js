@@ -329,6 +329,15 @@ const productionPreviewCache = {
   photoshopFrame: null,
   lastValid: { photo: null, site: null }
 };
+const authoringPhysicalPreview = {
+  requestGeneration: 0,
+  pending: null,
+  running: null,
+  cache: new Map(),
+  errors: new Map(),
+  routeActive: false,
+  timings: []
+};
 const planarPreviewOverlay = document.querySelector('#planar-preview-overlay');
 const planarPreviewImage = document.querySelector('#planar-preview-image');
 const planarPreviewDetails = document.querySelector('#planar-preview-details');
@@ -1306,10 +1315,58 @@ function installSimpleImageBlackShader(material) {
   material.customProgramCacheKey = () => 'simple-image-black-v1';
 }
 
+function productionAuthoringPreviewFamilyId() {
+  if (productionWorkspace === 'photo') {
+    return state.site.scene === 'back' || state.site.scene === 'night'
+      ? ANAMORPHIC_FAMILY_IDS.BACK : ANAMORPHIC_FAMILY_IDS.FRONT_75F;
+  }
+  const family = productionSitePreset === 'free' ? productionAuthoringFamily : productionSitePreset;
+  return family === 'back' ? ANAMORPHIC_FAMILY_IDS.BACK : ANAMORPHIC_FAMILY_IDS.FRONT_75F;
+}
+
+function physicalPlanarBindings() {
+  const contracts = productionWorkspace === 'photo'
+    ? SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes.find((scene) => scene.id === state.site.scene)?.surfaces
+    : SITE_SCENE_PROFILE.worlds.world3d.normalSurfaces;
+  if (!contracts?.length || contracts.some((contract) => contract.displayMapping.kind !== 'planar-uv')) {
+    throw new Error('PHYSICAL_PLANAR_CONTRACT_UNAVAILABLE');
+  }
+  const meshes = productionWorkspace === 'photo' ? state.site.meshesByWorld.legacy2d : state.site.meshesByWorld.world3d;
+  const resolved = resolveSurfaceSet(meshes ?? [], contracts);
+  if (!resolved.available || resolved.resolved.some((binding) => !binding.mesh.geometry?.getAttribute('uv'))) {
+    throw new Error('PHYSICAL_PLANAR_SURFACE_UNAVAILABLE');
+  }
+  return resolved.resolved;
+}
+
+function restoreProductionSiteSurfaceVisibility() {
+  for (const mesh of state.site.meshes) mesh.visible = false;
+  const photoReady = productionWorkspace !== 'photo' || state.photo.status === 'READY';
+  if (photoReady) for (const binding of state.site.activeBindings) binding.mesh.visible = true;
+  authoringPhysicalPreview.routeActive = false;
+}
+
 function applySitePreviewSource(decision) {
   const previewContext = isAnamorphicCalibrationContext();
   const production = isProductionPreviewRoutingActive();
   const selected = production ? productionPreviewDecision() : null;
+  const physicalTexture = production && selected.source === 'AUTHORING' ? selected.physicalTexture : null;
+  if (physicalTexture) {
+    const bindings = physicalPlanarBindings();
+    for (const mesh of state.site.meshes) mesh.visible = false;
+    if (productionWorkspace !== 'photo' || state.photo.status === 'READY') {
+      for (const binding of bindings) {
+        binding.mesh.visible = true;
+        if (binding.mesh.material.map !== physicalTexture) {
+          binding.mesh.material.map = physicalTexture;
+          binding.mesh.material.needsUpdate = true;
+        }
+      }
+    }
+    authoringPhysicalPreview.routeActive = true;
+    return physicalTexture;
+  }
+  if (authoringPhysicalPreview.routeActive) restoreProductionSiteSurfaceVisibility();
   const desiredMap = production ? selected.texture : previewContext
     ? (decision.source === 'PHOTOSHOP_FINAL' ? state.texture : null)
     : state.texture;
@@ -1356,16 +1413,203 @@ function productionPreviewDecision() {
       expected && frame && (expected.width !== receivedWidth || expected.height !== receivedHeight)
         ? 'SIZE MISMATCH' : 'UNAVAILABLE', texture: valid ? texture : lastValid ?? productionPreviewCache.imageTexture };
   }
-  const familyId = workspace === 'photo'
-    ? (state.site.scene === 'back' || state.site.scene === 'night'
-      ? ANAMORPHIC_FAMILY_IDS.BACK : ANAMORPHIC_FAMILY_IDS.FRONT_75F)
-    : productionSitePreset === 'back' ? ANAMORPHIC_FAMILY_IDS.BACK : ANAMORPHIC_FAMILY_IDS.FRONT_75F;
+  const familyId = productionAuthoringPreviewFamilyId();
   const merged = authoringSession.mergedState(familyId);
   const planar = planarWorkflow?.readyOutput(familyId, merged.revision);
-  const status = merged.dirty ? 'OUTDATED' : planar ? 'UNAVAILABLE' : 'NOT READY';
-  // Planar output is only exposed in the existing 2D overlay. Mapping it to
-  // the PHOTO/SITE physical meshes belongs to PREVIEW-SOURCE-B.
-  return { source, status, texture: lastValid ?? productionPreviewCache.imageTexture };
+  const cached = authoringPhysicalPreview.cache.get(familyId);
+  const sameProject = cached?.projectSessionId === state.authoring.snapshot.projectSessionId;
+  const physicalTexture = sameProject ? cached.texture : null;
+  const ready = Boolean(planar && physicalTexture && cached.output === planar);
+  const updating = [authoringPhysicalPreview.pending, authoringPhysicalPreview.running]
+    .some((request) => request?.familyId === familyId && request.workspace === workspace &&
+      request.generation === authoringPhysicalPreview.requestGeneration);
+  const error = authoringPhysicalPreview.errors.get(familyId);
+  const failed = error?.projectSessionId === state.authoring.snapshot.projectSessionId &&
+    error.revision === merged.revision;
+  const status = ready ? 'READY' : updating ? 'UPDATING' : failed ? 'ERROR' :
+    merged.dirty || physicalTexture ? 'OUTDATED' : 'NOT READY';
+  return { source, status, familyId, physicalTexture,
+    texture: physicalTexture ?? lastValid ?? productionPreviewCache.imageTexture };
+}
+
+function discardAuthoringPhysicalRequests({ clearCache = false } = {}) {
+  authoringPhysicalPreview.requestGeneration += 1;
+  authoringPhysicalPreview.pending = null;
+  if (clearCache) {
+    const cachedTextures = new Set([...authoringPhysicalPreview.cache.values()].map((entry) => entry.texture));
+    for (const mesh of state.site.meshes) {
+      if (cachedTextures.has(mesh.material?.map)) {
+        mesh.material.map = null;
+        mesh.material.needsUpdate = true;
+      }
+    }
+    if (authoringPhysicalPreview.routeActive) restoreProductionSiteSurfaceVisibility();
+    for (const cached of authoringPhysicalPreview.cache.values()) cached.texture.dispose();
+    authoringPhysicalPreview.cache.clear();
+    authoringPhysicalPreview.errors.clear();
+  }
+}
+
+const authoringPhysicalBakeOps = {
+  hasLayers: (familyId) => authoringSession.ensureFamily(familyId).length > 0,
+  fullMergeReady: (profile) => mergedProjectionResultReady(profile),
+  fullMerge: (familyId) => runFullMergedBake({ familyId, autoPreview: true }),
+  planarReady: (familyId, revision) => planarWorkflow.readyOutput(familyId, revision),
+  planarBake: (familyId, revision, ready) => planarWorkflow.bake(familyId, { ready, revision }),
+  installTexture: loadPhysicalPlanarTexture
+};
+
+function authoringPhysicalRequestCurrent(request) {
+  return request.generation === authoringPhysicalPreview.requestGeneration &&
+    request.projectSessionId === state.authoring.snapshot.projectSessionId &&
+    request.workspace === productionWorkspace && request.view ===
+      (request.workspace === 'photo' ? state.site.scene : productionSitePreset) &&
+    productionPreviewSource[request.workspace] === 'AUTHORING' &&
+    isProductionPreviewRoutingActive() && productionAuthoringPreviewFamilyId() === request.familyId &&
+    authoringSession.mergedState(request.familyId).revision === request.revision &&
+    !state.authoring.project.busy;
+}
+
+async function waitForAuthoringBakeSlot(request) {
+  while (state.projectionBake.running || state.fullMerge.running || planarWorkflow.job ||
+    state.reverseBake.activeJobId !== null) {
+    if (!authoringPhysicalRequestCurrent(request)) return false;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+  }
+  return authoringPhysicalRequestCurrent(request);
+}
+
+async function loadPhysicalPlanarTexture(output) {
+  const objectUrl = URL.createObjectURL(output.blob);
+  let texture;
+  try {
+    texture = await loadTexture(objectUrl);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+  const { width, height } = PLANAR_OUTPUT_PROFILE.outputResolution;
+  if ((texture.image.naturalWidth || texture.image.width) !== width ||
+      (texture.image.naturalHeight || texture.image.height) !== height) {
+    texture.dispose();
+    throw new Error('PHYSICAL_PLANAR_TEXTURE_DIMENSIONS_MISMATCH');
+  }
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.flipY = false;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.premultiplyAlpha = false;
+  texture.userData.physicalPlanarPreview = true;
+  texture.userData.simpleImageAlphaBlack = true;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+async function updateAuthoringPhysicalPreview(request) {
+  if (!authoringPhysicalRequestCurrent(request) || !authoringPhysicalBakeOps.hasLayers(request.familyId)) return;
+  physicalPlanarBindings();
+  const profile = getProjectionBakeProfile(request.familyId);
+  const asset = state.manifest?.planarMapping?.profiles?.[request.familyId];
+  if (!profile || !asset?.sourceVerified || !asset?.buildCopyVerified) {
+    throw new Error('PLANAR_ASSET_UNAVAILABLE');
+  }
+  const started = performance.now();
+  let fullMergeMs = 0;
+  let planarBakeMs = 0;
+  let textureInstallMs = 0;
+  if (!authoringPhysicalBakeOps.fullMergeReady(profile)) {
+    if (!await waitForAuthoringBakeSlot(request)) return;
+    const from = performance.now();
+    const merged = await authoringPhysicalBakeOps.fullMerge(request.familyId);
+    fullMergeMs = performance.now() - from;
+    if (!merged || !authoringPhysicalRequestCurrent(request)) return;
+  }
+  let output = authoringPhysicalBakeOps.planarReady(request.familyId, request.revision);
+  if (!output) {
+    if (!await waitForAuthoringBakeSlot(request)) return;
+    const from = performance.now();
+    output = await authoringPhysicalBakeOps.planarBake(request.familyId, request.revision,
+      authoringPhysicalBakeOps.fullMergeReady(profile));
+    planarBakeMs = performance.now() - from;
+    if (!output || !authoringPhysicalRequestCurrent(request)) return;
+  }
+  const cached = authoringPhysicalPreview.cache.get(request.familyId);
+  if (cached?.projectSessionId === request.projectSessionId && cached.output === output) {
+    render();
+    syncProductionUi();
+    return;
+  }
+  const from = performance.now();
+  const texture = await authoringPhysicalBakeOps.installTexture(output);
+  textureInstallMs = performance.now() - from;
+  if (!authoringPhysicalRequestCurrent(request) ||
+      authoringPhysicalBakeOps.planarReady(request.familyId, request.revision) !== output) {
+    texture.dispose();
+    return;
+  }
+  authoringPhysicalPreview.cache.set(request.familyId, {
+    projectSessionId: request.projectSessionId, revision: request.revision, output, texture
+  });
+  authoringPhysicalPreview.errors.delete(request.familyId);
+  render();
+  syncProductionUi();
+  updateDiagnostics();
+  if (cached) cached.texture.dispose();
+  const timing = { familyId: request.familyId, fullMergeMs, planarBakeMs,
+    textureInstallMs, totalMs: performance.now() - started };
+  authoringPhysicalPreview.timings.push(timing);
+  window.previewSourceBDiagnostics = { lastTiming: timing,
+    cachedFamilies: [...authoringPhysicalPreview.cache.keys()],
+    projectSessionId: request.projectSessionId, requestGeneration: request.generation };
+}
+
+function pumpAuthoringPhysicalPreview() {
+  if (authoringPhysicalPreview.pumpPromise) return;
+  authoringPhysicalPreview.pumpPromise = (async () => {
+    while (authoringPhysicalPreview.pending) {
+      const request = authoringPhysicalPreview.pending;
+      authoringPhysicalPreview.pending = null;
+      authoringPhysicalPreview.running = request;
+      try {
+        await updateAuthoringPhysicalPreview(request);
+      } catch (error) {
+        if (authoringPhysicalRequestCurrent(request)) {
+          authoringPhysicalPreview.errors.set(request.familyId, {
+            projectSessionId: request.projectSessionId, revision: request.revision,
+            message: String(error.message || error)
+          });
+          console.error('AUTHORING PREVIEW ERROR', error);
+        }
+      } finally {
+        if (authoringPhysicalPreview.running === request) authoringPhysicalPreview.running = null;
+        render();
+        syncProductionUi();
+        updateDiagnostics();
+      }
+    }
+  })().finally(() => {
+    authoringPhysicalPreview.pumpPromise = null;
+    if (authoringPhysicalPreview.pending) pumpAuthoringPhysicalPreview();
+  });
+}
+
+function requestAuthoringPhysicalPreview() {
+  discardAuthoringPhysicalRequests();
+  if (productionWorkspace === 'authoring' || productionPreviewSource[productionWorkspace] !== 'AUTHORING' ||
+      !isProductionPreviewRoutingActive()) return;
+  const familyId = productionAuthoringPreviewFamilyId();
+  const request = { generation: authoringPhysicalPreview.requestGeneration,
+    projectSessionId: state.authoring.snapshot.projectSessionId, familyId,
+    revision: authoringSession.mergedState(familyId).revision,
+    workspace: productionWorkspace,
+    view: productionWorkspace === 'photo' ? state.site.scene : productionSitePreset };
+  authoringPhysicalPreview.errors.delete(familyId);
+  authoringPhysicalPreview.pending = request;
+  render();
+  syncProductionUi();
+  pumpAuthoringPhysicalPreview();
 }
 
 function syncPreviewModeUi(decision) {
@@ -2067,7 +2311,7 @@ function syncProductionUi() {
     const preview = productionPreviewDecision();
     productionUi.previewSourceState.textContent = preview.source === 'PS_PREVIEW'
       ? `PS PREVIEW · ${preview.status}` : preview.source === 'AUTHORING'
-        ? `AUTHORING PREVIEW · ${preview.status}${preview.status === 'UNAVAILABLE' ? ' · physical display pending' : ''}`
+        ? `AUTHORING PREVIEW · ${preview.status}`
         : `IMAGE · ${preview.status}`;
     productionUi.previewSourceState.classList.toggle('unavailable', preview.status !== 'READY');
   }
@@ -2122,6 +2366,7 @@ function syncProductionUi() {
 function setUiMode(mode) {
   if (mode !== 'production' && mode !== 'developer') throw new Error(`Unknown UI mode: ${mode}`);
   document.body.dataset.uiMode = mode;
+  if (mode === 'developer') discardAuthoringPhysicalRequests();
   productionUi.modeToggle.textContent = mode === 'production' ? 'DEVELOPER MODE' : 'PRODUCTION UI';
   productionUi.modeToggle.setAttribute('aria-pressed', String(mode === 'developer'));
   document.querySelector('#projection-authoring-title').textContent = mode === 'production' ? 'LAYERS & PROPERTIES' : 'PROJECTION AUTHORING';
@@ -2130,6 +2375,8 @@ function setUiMode(mode) {
   if (mode === 'production' && authoringCameraInterlock.maskEditing) vectorMaskPanel.classList.add('production-open');
   syncProductionUi();
   resizeRenderer();
+  if (mode === 'production' && productionWorkspace !== 'authoring' &&
+      productionPreviewSource[productionWorkspace] === 'AUTHORING') requestAuthoringPhysicalPreview();
 }
 
 function changeProductionSiteOption(element, value) {
@@ -2160,6 +2407,59 @@ function showProductionView(view, { resetIfCurrent = true } = {}) {
   }
   if (sameView && resetIfCurrent) resetCurrentView();
   syncProductionUi();
+  if (view === 'authoring') discardAuthoringPhysicalRequests();
+  else if (productionPreviewSource[view] === 'AUTHORING') requestAuthoringPhysicalPreview();
+}
+
+const AUTHORING_ORBIT_TO_FREE_THRESHOLD = 5;
+let authoringOrbitPointer = null;
+
+function authoringOrbitCanOpenFreeView() {
+  return document.body.dataset.uiMode === 'production' && productionWorkspace === 'authoring' &&
+    state.activeView === 'site-3d' && state.site.world === 'world3d' &&
+    state.site.mappingMode === 'anamorphic' && state.site.surfaceSetAvailable &&
+    controlsSite.enabled && controlsSite.enableRotate &&
+    controlsSite.mouseButtons.LEFT === THREE.MOUSE.ROTATE &&
+    state.interactionMode === 'navigate' && !authoringCameraInterlock.forcedLocked &&
+    !authoringPointerSession.active && !state.authoring.maskEditor.drag;
+}
+
+function beginAuthoringOrbitPointer(event) {
+  authoringOrbitPointer = null;
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey ||
+      !['mouse', 'pen'].includes(event.pointerType) || !authoringOrbitCanOpenFreeView()) return;
+  authoringOrbitPointer = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+}
+
+function continueAuthoringOrbitPointer(event) {
+  const down = authoringOrbitPointer;
+  if (!down || down.pointerId !== event.pointerId) return;
+  if (!authoringOrbitCanOpenFreeView() || (event.buttons & 1) === 0) {
+    authoringOrbitPointer = null;
+    return;
+  }
+  if (Math.hypot(event.clientX - down.x, event.clientY - down.y) <
+      AUTHORING_ORBIT_TO_FREE_THRESHOLD) return;
+  authoringOrbitPointer = null;
+  let backOrbitStart = null;
+  if (productionAuthoringFamily === 'back' && state.site.anamorphicFamily === 'back') {
+    markAnamorphicFreePreview();
+    backOrbitStart = { camera: snapshotSiteCameraRuntime(), up: cameraSite.up.clone() };
+  }
+  showProductionView('site', { resetIfCurrent: false });
+  productionUi.family.value = 'free';
+  productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+  if (backOrbitStart) {
+    cameraSite.up.copy(backOrbitStart.up);
+    restoreSiteCameraRuntime(backOrbitStart.camera);
+    controlsSite.update();
+    render();
+    updateDiagnostics();
+  }
+}
+
+function endAuthoringOrbitPointer(event) {
+  if (authoringOrbitPointer?.pointerId === event.pointerId) authoringOrbitPointer = null;
 }
 
 function syncAuthoringProjectUi(available) {
@@ -2828,6 +3128,7 @@ function clearProjectScopedPhotoshopState() {
 async function openAuthoringProject(manifestFile = null) {
   if (!window.luuxProject) throw new Error('PROJECT_BRIDGE_UNAVAILABLE: Project persistence bridge is unavailable.');
   if (state.authoring.project.busy) return false;
+  discardAuthoringPhysicalRequests({ clearCache: true });
   planarWorkflow.reset();
   planarMappingRuntime.disposeAll();
   cancelActiveSnapshot('PROJECT_SWITCH', 'Project Open invalidated the active Snapshot request.');
@@ -3527,10 +3828,10 @@ async function runProjectionBake({ repetitions = 1, maskMode = null, allowSynthe
   }
 }
 
-async function projectLayerForFullMerge(profile, matteAsset, layer, previewCanvases = null) {
+async function projectLayerForFullMerge(profile, matteAsset, layer, previewCanvases = null, surfaceMeshes = null) {
   return projectionBakeRuntime.run({
     profile,
-    surfaceMeshes: state.site.activeBindings
+    surfaceMeshes: surfaceMeshes ?? state.site.activeBindings
       .filter((binding) => binding.mesh.name === profile.surfaceBinding.exactName)
       .map((binding) => binding.mesh),
     occluderMeshes: matteAsset.meshes,
@@ -3543,15 +3844,25 @@ async function projectLayerForFullMerge(profile, matteAsset, layer, previewCanva
   });
 }
 
-async function runFullMergedBake() {
-  const profile = currentProjectionBakeProfile();
-  if (!isProjectionPocContext() || !profile) throw new Error('FULL_MERGE_CONTEXT_REQUIRED: Select an available Anamorphic Projection View.');
-  if (authoringSession.layers.length === 0) throw new Error('FULL_MERGE_LAYERS_REQUIRED: Add at least one layer.');
+async function runFullMergedBake({ familyId = null, autoPreview = false } = {}) {
+  const profile = autoPreview ? getProjectionBakeProfile(familyId) : currentProjectionBakeProfile();
+  if (!profile || (!autoPreview && !isProjectionPocContext())) throw new Error('FULL_MERGE_CONTEXT_REQUIRED: Select an available Anamorphic Projection View.');
+  const familyLayers = autoPreview ? authoringSession.ensureFamily(profile.familyId) : authoringSession.layers;
+  if (familyLayers.length === 0) throw new Error('FULL_MERGE_LAYERS_REQUIRED: Add at least one layer.');
   if (state.projectionBake.running || state.fullMerge.running || planarWorkflow.job !== null || state.reverseBake.activeJobId !== null) return null;
   planarWorkflow.invalidateFamily(profile.familyId);
-  const visibleLayers = authoringSession.renderLayers.filter((layer) => layer.visible);
+  const visibleLayers = [...familyLayers].reverse().filter((layer) => layer.visible);
+  const startingRevision = authoringSession.mergedState(profile.familyId).revision;
+  const projectSessionId = state.authoring.snapshot.projectSessionId;
+  const stillCurrent = () => authoringSession.mergedState(profile.familyId).revision === startingRevision &&
+    state.authoring.snapshot.projectSessionId === projectSessionId;
+  const familyAsset = SITE_SCENE_PROFILE.worlds.world3d.anamorphicFamilies[
+    profile.familyId === ANAMORPHIC_FAMILY_IDS.BACK ? 'back' : 'front75f'];
+  const surfaceMeshes = autoPreview ? (state.site.meshesByWorld[familyAsset.assetId] ?? [])
+    .filter((mesh) => mesh.name === profile.surfaceBinding.exactName) : null;
+  if (autoPreview && surfaceMeshes.length !== 1) throw new Error('FULL_MERGE_SURFACE_UNAVAILABLE');
   const selectedBefore = authoringSession.selectedLayer;
-  const selectedWasReady = selectedProjectionResultReady(profile);
+  const selectedWasReady = !autoPreview && selectedProjectionResultReady(profile);
   const selectedResultBefore = state.projectionBake.result;
   const accumulator = fullMergeRuntime.begin(profile);
   let matteAsset = null;
@@ -3567,7 +3878,8 @@ async function runFullMergedBake() {
     if (visibleLayers.length) matteAsset = await loadProjectionBakeMatte(profile);
     const layers = [];
     for (const layer of visibleLayers) {
-      const projected = await projectLayerForFullMerge(profile, matteAsset, layer);
+      const projected = await projectLayerForFullMerge(profile, matteAsset, layer, null, surfaceMeshes);
+      if (!stillCurrent()) { accumulator.dispose(); return null; }
       accumulator.addLayer({
         directTarget: projectionBakeRuntime.resources.directTarget,
         canonicalTarget: projectionBakeRuntime.resources.bakeTarget,
@@ -3583,7 +3895,8 @@ async function runFullMergedBake() {
         vectorMaskApplied: projected.authoring?.vectorMask?.applied === true
       });
     }
-    const mergedRevision = authoringSession.mergedState(profile.familyId).revision;
+    if (!stillCurrent()) { accumulator.dispose(); return null; }
+    const mergedRevision = startingRevision;
     const result = accumulator.finish({
       familyLabel: profile.label,
       mergedRevision,
@@ -3593,11 +3906,17 @@ async function runFullMergedBake() {
       layers
     });
     authoringSession.markMergedBaked(profile.familyId);
-    fullMergeRuntime.drawPreviews(profile.familyId, fullMergePreviewCanvases);
+    if (!autoPreview || currentProjectionBakeProfile()?.familyId === profile.familyId) {
+      fullMergeRuntime.drawPreviews(profile.familyId, fullMergePreviewCanvases);
+    }
     fullMergeMessage.className = 'projection-poc-message pass';
     fullMergeMessage.textContent = `${profile.label} Full Merge ready · ${visibleLayers.length} visible layer${visibleLayers.length === 1 ? '' : 's'} · Direct ${result.directWidth} × ${result.directHeight} · Canonical ${result.canonicalWidth} × ${result.canonicalHeight}.`;
 
-    if (selectedWasReady && selectedBefore?.visible) {
+    if (autoPreview) {
+      projectionBakeRuntime.dispose();
+      state.projectionBake.result = null;
+      state.projectionBake.status = authoringSession.source ? 'DIRTY / NEEDS BAKE' : 'READY';
+    } else if (selectedWasReady && selectedBefore?.visible) {
       await projectLayerForFullMerge(profile, matteAsset, selectedBefore, projectionPreviewCanvases);
       state.projectionBake.result = selectedResultBefore;
     } else {
@@ -4964,7 +5283,10 @@ function updatePointerControls() {
         ? (state.interactionMode === 'point'
           ? 'PHOTO POINT: Left click points · Photo camera fixed'
           : 'PHOTO VIEW: Camera fixed to the selected photograph')
-        : (state.interactionMode === 'point'
+        : (document.body.dataset.uiMode === 'production' && productionWorkspace === 'authoring' &&
+            authoringOrbitCanOpenFreeView()
+          ? 'AUTHORING VIEW: Left drag opens SITE FREE VIEW · Middle drag: pan · Wheel: dolly'
+          : state.interactionMode === 'point'
           ? 'SITE POINT: Left click · Left drag: orbit · Middle drag: pan · Wheel: dolly'
           : 'SITE NAVIGATE: Left drag: orbit · Middle drag: pan · Wheel: dolly'))
       : `SITE SURFACE: NONE · Missing: ${state.site.missingMeshes.join(', ') || 'contract unavailable'}`;
@@ -6665,10 +6987,15 @@ productionUi.family.addEventListener('change', () => {
     else changeProductionSiteOption(siteAnamorphicFamilySelect, selection);
   }
   syncProductionUi();
+  if (mode !== 'authoring' && productionPreviewSource[productionWorkspace] === 'AUTHORING') {
+    requestAuthoringPhysicalPreview();
+  }
 });
 productionUi.previewSource.addEventListener('change', () => {
   if (productionWorkspace === 'authoring') return;
   productionPreviewSource[productionWorkspace] = productionUi.previewSource.value;
+  if (productionUi.previewSource.value === 'AUTHORING') requestAuthoringPhysicalPreview();
+  else discardAuthoringPhysicalRequests();
   render();
   updateDiagnostics();
 });
@@ -6753,6 +7080,7 @@ siteAnamorphicFamilySelect.addEventListener('change', () => {
   }
   if (family.id === state.site.anamorphicFamily) { resetCurrentView(); return; }
   state.site.anamorphicFamily = family.id;
+  if (productionWorkspace === 'authoring') productionAuthoringFamily = family.id;
   authoringSession.activateFamily(family.familyId);
   syncSelectedAuthoringRuntime();
   invalidateAuthoringOutputs('authoring-family-selection-change');
@@ -7153,6 +7481,12 @@ function beginPan(event) {
   canvas.classList.add('dragging');
 }
 
+canvas.addEventListener('pointerdown', beginAuthoringOrbitPointer, { capture: true });
+document.addEventListener('pointermove', continueAuthoringOrbitPointer, { capture: true });
+document.addEventListener('pointerup', endAuthoringOrbitPointer, { capture: true });
+document.addEventListener('pointercancel', endAuthoringOrbitPointer, { capture: true });
+window.addEventListener('blur', () => { authoringOrbitPointer = null; });
+
 canvas.addEventListener('pointerdown', (event) => {
   if (isThreeDimensionalView()) {
     if (event.button === 0 && state.interactionMode === 'point') {
@@ -7233,6 +7567,7 @@ window.addEventListener('resize', resizeRenderer);
 window.addEventListener('resize', () => requestAnimationFrame(clampVectorMaskPanel));
 window.addEventListener('blur', cancelAuthoringPointerInteraction);
 window.addEventListener('beforeunload', () => {
+  discardAuthoringPhysicalRequests({ clearCache: true });
   const previewTextures = new Set([productionPreviewCache.imageTexture, productionPreviewCache.photoshopTexture,
     ...productionPreviewCache.imageBank.map((entry) => entry.texture)]);
   for (const texture of previewTextures) texture?.dispose();
@@ -9868,6 +10203,11 @@ window.runProductionUiPhaseASmoke = async () => {
   const productionDefault = initial.mode === 'production' &&
     getComputedStyle(document.querySelector('#production-navigation')).display !== 'none' &&
     getComputedStyle(document.querySelector('#projection-poc')).display === 'none';
+  const titleUnified = document.title === 'Signage MockUp Generator' &&
+    [...document.querySelectorAll('.production-heading h1, .developer-heading h1')]
+      .every((heading) => heading.textContent === 'Signage MockUp Generator') &&
+    [...document.querySelectorAll('.production-heading p, .developer-heading p')]
+      .every((caption) => caption.textContent === '2026 LUNARGRAPHICS / LEE JUNGHO');
 
   productionUi.modeToggle.click();
   changeProductionSiteOption(siteWorldSelect, 'world3d');
@@ -9909,6 +10249,47 @@ window.runProductionUiPhaseASmoke = async () => {
     productionUi.bakePlanar.disabled === planarMasterBake.disabled &&
     productionUi.viewPlanar.disabled === planarMasterPreview.disabled &&
     productionUi.savePlanar.disabled === planarMasterSave.disabled;
+  const orbitPointerEvent = (pointerId, x, buttons = 1) => ({
+    button: 0, pointerType: 'mouse', pointerId, clientX: x, clientY: 100,
+    buttons, ctrlKey: false, metaKey: false, shiftKey: false
+  });
+  beginAuthoringOrbitPointer(orbitPointerEvent(70, 100));
+  continueAuthoringOrbitPointer(orbitPointerEvent(70, 103));
+  endAuthoringOrbitPointer(orbitPointerEvent(70, 103, 0));
+  const authoringClickStays = productionWorkspace === 'authoring' &&
+    state.site.mappingMode === 'anamorphic';
+  beginAuthoringOrbitPointer({ ...orbitPointerEvent(71, 100), shiftKey: true });
+  continueAuthoringOrbitPointer(orbitPointerEvent(71, 110));
+  const authoringPanStays = productionWorkspace === 'authoring';
+  const backOrbitBaseline = snapshotSiteCameraRuntime();
+  beginAuthoringOrbitPointer(orbitPointerEvent(72, 100));
+  continueAuthoringOrbitPointer(orbitPointerEvent(72, 110));
+  const authoringBackOrbitToFree = productionWorkspace === 'site' &&
+    productionSitePreset === 'free' && state.site.mappingMode === 'normal' &&
+    productionAuthoringFamily === 'back' && productionUi.family.value === 'free' &&
+    controlsSite.enabled;
+  const backOrbitForward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraSite.quaternion);
+  const backOrbitUp = new THREE.Vector3(0, 1, 0).applyQuaternion(cameraSite.quaternion);
+  const backOrbitLevelUp = new THREE.Vector3(0, 1, 0)
+    .addScaledVector(backOrbitForward, -backOrbitForward.y).normalize();
+  const authoringBackOrbitCamera = cameraSite.position.distanceTo(
+    backOrbitBaseline.position.clone().add(new THREE.Vector3(0, 0.5, 0))) < 1e-9 &&
+    controlsSite.target.distanceTo(backOrbitBaseline.target) < 1e-9 &&
+    Math.abs(cameraSite.fov - backOrbitBaseline.fov) < 1e-9 &&
+    Math.abs(cameraSite.aspect - Math.max(1, viewer.clientWidth) / Math.max(1, viewer.clientHeight)) < 1e-9 &&
+    cameraSite.up.distanceTo(new THREE.Vector3(0, 1, 0)) < 1e-9 &&
+    backOrbitUp.angleTo(backOrbitLevelUp) < 1e-7;
+  productionUi.viewAuthoring.click();
+  chooseOption(productionUi.family, 'front75f');
+  beginAuthoringOrbitPointer(orbitPointerEvent(73, 100));
+  continueAuthoringOrbitPointer(orbitPointerEvent(73, 110));
+  const authoringFrontOrbitToFree = productionWorkspace === 'site' &&
+    productionSitePreset === 'free' && state.site.mappingMode === 'normal' &&
+    productionAuthoringFamily === 'front75f' && productionUi.family.value === 'free' &&
+    controlsSite.enabled;
+  const authoringFrontOrbitDefault = cameraSite.position.distanceTo(
+    new THREE.Vector3(...SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes
+      .find((scene) => scene.id === 'frontSweet').camera.position).add(new THREE.Vector3(0, 0.5, 0))) < 1e-9;
   productionUi.viewSite.click();
   const siteOptions = [...productionUi.family.options].map((option) => [option.value, option.disabled]);
   const siteMenu = productionWorkspace === 'site' && productionUi.familyLabel.textContent === 'SITE VIEW' &&
@@ -10048,15 +10429,22 @@ window.runProductionUiPhaseASmoke = async () => {
     state.previewMode === initial.previewMode && authoringSession.revision === initial.revision &&
     JSON.stringify(authoringSession.layers.map((layer) => layer.id)) === JSON.stringify(initial.layerIds);
   return {
-    productionDefault, developerReachable, developerFovHidden, orderedViews, authoringRoute, quickMenuAvailable,
-    authoringReset, backRoute, developerFamilyReselectReset, siteMenu, siteFront, siteBack, siteRoute,
+    productionDefault, titleUnified, developerReachable, developerFovHidden, orderedViews,
+    authoringRoute, quickMenuAvailable,
+    authoringReset, backRoute, developerFamilyReselectReset, authoringClickStays,
+    authoringPanStays, authoringBackOrbitToFree, authoringBackOrbitCamera,
+    authoringFrontOrbitToFree, authoringFrontOrbitDefault,
+    siteMenu, siteFront, siteBack, siteRoute,
     siteFovOnly, frontFovChanged, frontFovReset, backFovChanged, backFovReset,
     siteFreeBaseline, freeFovReadout, freeFovChanged, siteFovRange,
     freeFovReset, siteReselectReset, photoFovHidden, photoMenu, photoScenes, photoNavigationBlocked, photoRoute,
     photoReselectReset, noResetOnOpen, productionSceneReselectReset,
     developerNoResetOnOpen, developerSceneReselectReset, simpleImageLoadingPreserved, sharedControls, statePreserved,
-    technicalPass: productionDefault && developerReachable && developerFovHidden && authoringRoute && backRoute && siteRoute &&
+    technicalPass: productionDefault && titleUnified && developerReachable && developerFovHidden &&
+      authoringRoute && backRoute && siteRoute &&
       photoRoute && photoNavigationBlocked && sharedControls && statePreserved && orderedViews && quickMenuAvailable &&
+      authoringClickStays && authoringPanStays && authoringBackOrbitToFree &&
+      authoringBackOrbitCamera && authoringFrontOrbitToFree && authoringFrontOrbitDefault &&
       siteMenu && siteFront && siteBack && siteFovOnly && frontFovChanged && frontFovReset &&
       backFovChanged && backFovReset &&
       siteFreeBaseline && freeFovReadout && freeFovChanged && siteFovRange && freeFovReset && photoFovHidden &&
@@ -10335,16 +10723,17 @@ window.runPreviewSourceASmoke = async () => {
       authoringSession.mergedState = () => ({ dirty: false, revision: 1 });
       planarWorkflow.readyOutput = () => ({ familyId: ANAMORPHIC_FAMILY_IDS.FRONT_75F });
       render();
-      const readyButUnrouted = productionPreviewDecision().status === 'UNAVAILABLE' &&
-        productionUi.previewSourceState.textContent.includes('physical display pending') &&
+      const missingPhysicalTextureNotPublished = productionPreviewDecision().status !== 'READY' &&
+        !productionPreviewDecision().physicalTexture &&
         state.site.activeBindings[0]?.mesh.material.map === previousMap;
       authoringSession.mergedState = () => ({ dirty: true, revision: 2 });
       planarWorkflow.readyOutput = () => null;
       render();
-      const dirty = productionPreviewDecision().status === 'OUTDATED' &&
-        productionUi.previewSourceState.textContent.includes('OUTDATED') &&
+      const dirtyNotPublished = productionPreviewDecision().status !== 'READY' &&
+        !productionPreviewDecision().physicalTexture &&
         state.site.activeBindings[0]?.mesh.material.map === previousMap;
-      result.authoringReadiness = { readyButUnrouted, dirty, autoBakeStarted: state.fullMerge.running !== initial.mergeRunning ||
+      result.authoringReadiness = { missingPhysicalTextureNotPublished, dirtyNotPublished,
+        autoBakeStarted: state.fullMerge.running !== initial.mergeRunning ||
         planarWorkflow.job !== initial.planarJob };
     } finally {
       authoringSession.mergedState = actualMergedState;
@@ -10376,8 +10765,8 @@ window.runPreviewSourceASmoke = async () => {
       result.psFreeAlpha.opaque[0] > 200 && result.psFreeAlpha.opaque[3] === 255 &&
       result.psFreeAlpha.partial[1] > 20 && result.psFreeAlpha.partial[1] < 230 &&
       result.psFreeAlpha.partial[3] === 255 && Object.values(result.bank).every(Boolean) &&
-      result.workspaceMemory && result.authoringUnchanged && result.authoringReadiness.readyButUnrouted &&
-      result.authoringReadiness.dirty && !result.authoringReadiness.autoBakeStarted;
+      result.workspaceMemory && result.authoringUnchanged && result.authoringReadiness.missingPhysicalTextureNotPublished &&
+      result.authoringReadiness.dirtyNotPublished && !result.authoringReadiness.autoBakeStarted;
     return result;
   } finally {
     for (const binding of state.site.bindings) {
@@ -10415,12 +10804,467 @@ window.runPreviewSourceASmoke = async () => {
     changeProductionSiteOption(siteWorldSelect, initial.world);
     changeProductionSiteOption(siteMappingSelect, initial.mapping);
     changeProductionSiteOption(siteAnamorphicFamilySelect, initial.family);
+    productionAuthoringFamily = initial.authoringFamily;
     state.site.scene = initial.scene;
     siteSceneSelect.value = initial.scene;
     setActiveView(initial.view);
     setUiMode(initial.mode);
     restoreSiteCameraRuntime(initial.camera);
     render();
+  }
+};
+
+// Isolated Production routing and job-policy smoke. Planar-A/B runtime smokes
+// separately exercise the actual Full Merge Direct read and Planar renderer.
+window.runPreviewSourceBSmoke = async () => {
+  const front = ANAMORPHIC_FAMILY_IDS.FRONT_75F;
+  const back = ANAMORPHIC_FAMILY_IDS.BACK;
+  const initial = {
+    mode: document.body.dataset.uiMode, workspace: productionWorkspace,
+    sitePreset: productionSitePreset, authoringFamily: productionAuthoringFamily,
+    sources: { ...productionPreviewSource }, world: state.site.world,
+    mapping: state.site.mappingMode, family: state.site.anamorphicFamily,
+    scene: state.site.scene, view: state.activeView,
+    camera: snapshotSiteCameraRuntime(), projectSessionId: state.authoring.snapshot.projectSessionId,
+    cache: new Map(authoringPhysicalPreview.cache),
+    errors: new Map(authoringPhysicalPreview.errors),
+    timings: [...authoringPhysicalPreview.timings],
+    mergedState: authoringSession.mergedState,
+    planarReady: planarWorkflow.readyOutput, planarJob: planarWorkflow.job,
+    bakeOps: { ...authoringPhysicalBakeOps }
+  };
+  const mocked = new Map([[front, { revision: 1, fullReady: true, planar: { familyId: front, revision: 1 } }],
+    [back, { revision: 1, fullReady: true, planar: { familyId: back, revision: 1 } }]]);
+  const counts = { full: 0, planar: 0, texture: 0 };
+  let failAt = null;
+  let deferPlanar = null;
+  const report = {};
+  const outputFor = (familyId, revision) => ({ familyId, revision });
+  const settle = async () => {
+    while (authoringPhysicalPreview.pumpPromise || authoringPhysicalPreview.pending) {
+      if (authoringPhysicalPreview.pumpPromise) await authoringPhysicalPreview.pumpPromise;
+      else await nextFrame();
+    }
+  };
+  const displayedNames = () => state.site.meshes.filter((mesh) => mesh.visible &&
+    !mesh.userData.productionHelper).map((mesh) => mesh.name).sort();
+  const mappedPhysical = (texture) => physicalPlanarBindings().every((binding) =>
+    binding.mesh.visible && binding.mesh.material.map === texture);
+  const physicalBlackMatteSelected = (texture) => Boolean(texture?.userData.simpleImageAlphaBlack &&
+    simpleImageBlackUniform.value === 1 && physicalPlanarBindings().every((binding) =>
+      binding.mesh.material.customProgramCacheKey?.() === 'simple-image-black-v1'));
+  try {
+    discardAuthoringPhysicalRequests({ clearCache: true });
+    productionPreviewSource.site = 'IMAGE';
+    productionPreviewSource.photo = 'IMAGE';
+    authoringSession.mergedState = (familyId) => {
+      const entry = mocked.get(familyId ?? front);
+      return { revision: entry.revision, bakedRevision: entry.fullReady ? entry.revision : null,
+        dirty: !entry.fullReady, status: entry.fullReady ? 'MERGED READY' : 'MERGED DIRTY / NEEDS BAKE' };
+    };
+    planarWorkflow.readyOutput = (familyId, revision) => {
+      const entry = mocked.get(familyId);
+      return entry?.planar?.revision === revision ? entry.planar : null;
+    };
+    authoringPhysicalBakeOps.hasLayers = () => true;
+    authoringPhysicalBakeOps.fullMergeReady = (profile) => mocked.get(profile.familyId).fullReady;
+    authoringPhysicalBakeOps.fullMerge = async (familyId) => {
+      counts.full += 1;
+      if (failAt === 'full') throw new Error('FORCED_FULL_MERGE_FAILURE');
+      mocked.get(familyId).fullReady = true;
+      return { familyId };
+    };
+    authoringPhysicalBakeOps.planarReady = (familyId, revision) => planarWorkflow.readyOutput(familyId, revision);
+    authoringPhysicalBakeOps.planarBake = async (familyId, revision) => {
+      counts.planar += 1;
+      if (failAt === 'planar') throw new Error('FORCED_PLANAR_FAILURE');
+      if (deferPlanar) await deferPlanar.promise;
+      const output = outputFor(familyId, revision);
+      mocked.get(familyId).planar = output;
+      return output;
+    };
+    authoringPhysicalBakeOps.installTexture = async (output) => {
+      counts.texture += 1;
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 8;
+      const context = canvas.getContext('2d');
+      context.fillStyle = output.familyId === back ? '#0000ff' : '#ff0000';
+      context.fillRect(0, 0, 8, 8);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.flipY = false;
+      texture.userData.physicalPlanarPreview = true;
+      texture.userData.simpleImageAlphaBlack = true;
+      return texture;
+    };
+    productionSitePreset = 'free';
+    productionAuthoringFamily = 'front75f';
+    setUiMode('production');
+    showProductionView('site', { resetIfCurrent: false });
+    const siteCamera = snapshotSiteCameraRuntime();
+    const authoringBefore = JSON.stringify(authoringSession.snapshot());
+    const projectBefore = JSON.stringify(state.authoring.project);
+    productionUi.previewSource.value = 'AUTHORING';
+    productionUi.previewSource.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    const firstTexture = authoringPhysicalPreview.cache.get(front)?.texture;
+    report.reuse = { defaultFamily: productionPreviewDecision().familyId,
+      fullJobs: counts.full, planarJobs: counts.planar,
+      ready: productionPreviewDecision().status === 'READY', mapped: mappedPhysical(firstTexture),
+      visible: displayedNames(), cameraPreserved: siteCameraRuntimeMatchesSnapshot(siteCamera) };
+    mocked.get(front).revision = 2;
+    mocked.get(front).planar = null;
+    requestAuthoringPhysicalPreview();
+    const duringPlanar = productionPreviewDecision();
+    await settle();
+    report.planarOnly = { fullJobs: counts.full, planarJobs: counts.planar,
+      updatingKeptOld: duringPlanar.status === 'UPDATING' && duringPlanar.physicalTexture === firstTexture,
+      ready: productionPreviewDecision().status === 'READY',
+      mapped: mappedPhysical(authoringPhysicalPreview.cache.get(front)?.texture) };
+    mocked.get(front).revision = 3;
+    mocked.get(front).fullReady = false;
+    mocked.get(front).planar = null;
+    requestAuthoringPhysicalPreview();
+    await settle();
+    const lastGood = authoringPhysicalPreview.cache.get(front)?.texture;
+    report.fullUpdate = { fullJobs: counts.full, planarJobs: counts.planar,
+      ready: productionPreviewDecision().status === 'READY', mapped: mappedPhysical(lastGood),
+      cameraPreserved: siteCameraRuntimeMatchesSnapshot(siteCamera),
+      authoringPreserved: JSON.stringify(authoringSession.snapshot()) === authoringBefore,
+      projectPreserved: JSON.stringify(state.authoring.project) === projectBefore };
+    mocked.get(front).revision = 4;
+    mocked.get(front).fullReady = false;
+    mocked.get(front).planar = null;
+    failAt = 'full';
+    requestAuthoringPhysicalPreview();
+    await settle();
+    report.fullFailure = { status: productionPreviewDecision().status,
+      retained: productionPreviewDecision().physicalTexture === lastGood && mappedPhysical(lastGood) };
+    mocked.get(front).revision = 5;
+    mocked.get(front).fullReady = true;
+    failAt = 'planar';
+    requestAuthoringPhysicalPreview();
+    await settle();
+    report.planarFailure = { status: productionPreviewDecision().status,
+      retained: productionPreviewDecision().physicalTexture === lastGood && mappedPhysical(lastGood) };
+    failAt = null;
+    mocked.get(front).revision = 6;
+    const normalPlanarBake = authoringPhysicalBakeOps.planarBake;
+    let releasePlanar;
+    let planarStarted;
+    const started = new Promise((resolve) => { planarStarted = resolve; });
+    deferPlanar = { promise: new Promise((resolve) => { releasePlanar = resolve; }) };
+    authoringPhysicalBakeOps.planarBake = async (familyId, revision) => {
+      counts.planar += 1;
+      planarStarted();
+      await deferPlanar.promise;
+      const output = outputFor(familyId, revision);
+      mocked.get(familyId).planar = output;
+      return output;
+    };
+    requestAuthoringPhysicalPreview();
+    await started;
+    productionUi.previewSource.value = 'IMAGE';
+    productionUi.previewSource.dispatchEvent(new Event('change', { bubbles: true }));
+    releasePlanar();
+    await settle();
+    report.staleSource = { imageStatus: productionPreviewDecision().source === 'IMAGE',
+      imageMapped: state.site.activeBindings.every((binding) =>
+        binding.mesh.material.map === productionPreviewDecision().texture),
+      oldCacheRetained: authoringPhysicalPreview.cache.get(front)?.texture === lastGood,
+      noStaleTextureInstall: counts.texture === 3 };
+    deferPlanar = null;
+    authoringPhysicalBakeOps.planarBake = normalPlanarBake;
+    productionAuthoringFamily = 'back';
+    productionSitePreset = 'back';
+    productionUi.family.value = 'back';
+    productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+    productionUi.previewSource.value = 'AUTHORING';
+    productionUi.previewSource.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    const backTexture = authoringPhysicalPreview.cache.get(back)?.texture;
+    report.siteBack = { family: productionPreviewDecision().familyId,
+      selectedAnamorphic: state.site.activeBindings.map((binding) => binding.mesh.name),
+      visiblePhysical: displayedNames(), mapped: mappedPhysical(backTexture),
+      blackMatte: physicalBlackMatteSelected(backTexture),
+      status: productionPreviewDecision().status };
+    showProductionView('authoring', { resetIfCurrent: false });
+    productionUi.family.value = 'back';
+    productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+    showProductionView('site', { resetIfCurrent: false });
+    productionUi.family.value = 'free';
+    productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    report.siteFreeLastSelected = { family: productionPreviewDecision().familyId,
+      selectedAuthoringFamily: productionAuthoringFamily,
+      mapped: mappedPhysical(backTexture), blackMatte: physicalBlackMatteSelected(backTexture),
+      status: productionPreviewDecision().status };
+    productionUi.family.value = 'front75f';
+    productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+    await settle();
+    report.siteFront = { family: productionPreviewDecision().familyId,
+      selectedAnamorphic: state.site.activeBindings.map((binding) => binding.mesh.name),
+      visiblePhysical: displayedNames(),
+      mapped: mappedPhysical(authoringPhysicalPreview.cache.get(front)?.texture),
+      blackMatte: physicalBlackMatteSelected(authoringPhysicalPreview.cache.get(front)?.texture),
+      status: productionPreviewDecision().status };
+    productionPreviewSource.photo = 'AUTHORING';
+    showProductionView('photo', { resetIfCurrent: false });
+    if (state.photo.activationPromise) await state.photo.activationPromise;
+    await settle();
+    const photoCamera = snapshotSiteCameraRuntime();
+    requestAuthoringPhysicalPreview();
+    await settle();
+    report.photoFront = { scene: state.site.scene, family: productionPreviewDecision().familyId,
+      mapped: mappedPhysical(authoringPhysicalPreview.cache.get(front)?.texture),
+      blackMatte: physicalBlackMatteSelected(authoringPhysicalPreview.cache.get(front)?.texture),
+      cameraPreserved: siteCameraRuntimeMatchesSnapshot(photoCamera),
+      status: productionPreviewDecision().status };
+    productionUi.family.value = 'back';
+    productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+    if (state.photo.activationPromise) await state.photo.activationPromise;
+    await settle();
+    report.photoBack = { scene: state.site.scene, family: productionPreviewDecision().familyId,
+      mapped: mappedPhysical(backTexture), blackMatte: physicalBlackMatteSelected(backTexture),
+      status: productionPreviewDecision().status };
+    report.photoOtherViews = [];
+    for (const [scene, familyId] of [['frontSweet', front], ['night', back]]) {
+      productionUi.family.value = scene;
+      productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+      if (state.photo.activationPromise) await state.photo.activationPromise;
+      await settle();
+      const pose = snapshotSiteCameraRuntime();
+      requestAuthoringPhysicalPreview();
+      await settle();
+      report.photoOtherViews.push({ scene: state.site.scene,
+        familyId: productionPreviewDecision().familyId,
+        status: productionPreviewDecision().status,
+        mapped: mappedPhysical(authoringPhysicalPreview.cache.get(familyId)?.texture),
+        blackMatte: physicalBlackMatteSelected(authoringPhysicalPreview.cache.get(familyId)?.texture),
+        cameraPreserved: siteCameraRuntimeMatchesSnapshot(pose) });
+    }
+    mocked.get(back).revision = 2;
+    mocked.get(back).planar = null;
+    const jobsBeforeManualSlot = counts.planar;
+    const priorManualJob = planarWorkflow.job;
+    planarWorkflow.job = { familyId: back, revision: 2 };
+    requestAuthoringPhysicalPreview();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const blockedWhileManual = counts.planar === jobsBeforeManualSlot &&
+      productionPreviewDecision().status === 'UPDATING';
+    planarWorkflow.job = priorManualJob;
+    await settle();
+    report.manualPlanarSlot = { blockedWhileManual,
+      oneAutoJobAfterManual: counts.planar === jobsBeforeManualSlot + 1,
+      ready: productionPreviewDecision().status === 'READY' };
+    mocked.get(back).revision = 3;
+    mocked.get(back).planar = null;
+    let releaseProjectPlanar;
+    let projectPlanarStarted;
+    const projectStarted = new Promise((resolve) => { projectPlanarStarted = resolve; });
+    const projectBakeGate = new Promise((resolve) => { releaseProjectPlanar = resolve; });
+    const actualPlanarBake = authoringPhysicalBakeOps.planarBake;
+    authoringPhysicalBakeOps.planarBake = async (familyId, revision) => {
+      counts.planar += 1;
+      projectPlanarStarted();
+      await projectBakeGate;
+      const output = outputFor(familyId, revision);
+      mocked.get(familyId).planar = output;
+      return output;
+    };
+    const texturesBeforeProjectChange = counts.texture;
+    requestAuthoringPhysicalPreview();
+    await projectStarted;
+    state.authoring.snapshot.projectSessionId = crypto.randomUUID();
+    releaseProjectPlanar();
+    await settle();
+    report.staleProject = { noPublication: counts.texture === texturesBeforeProjectChange &&
+      authoringPhysicalPreview.cache.get(back)?.projectSessionId === initial.projectSessionId,
+      oldProjectHidden: productionPreviewDecision().physicalTexture === null };
+    authoringPhysicalBakeOps.planarBake = actualPlanarBake;
+    state.authoring.snapshot.projectSessionId = initial.projectSessionId;
+    report.technicalPass = report.reuse.defaultFamily === front &&
+      report.reuse.fullJobs === 0 && report.reuse.planarJobs === 0 &&
+      report.reuse.ready && report.reuse.mapped && report.reuse.cameraPreserved &&
+      report.planarOnly.fullJobs === 0 && report.planarOnly.planarJobs === 1 &&
+      report.planarOnly.updatingKeptOld && report.planarOnly.ready && report.planarOnly.mapped &&
+      report.fullUpdate.fullJobs === 1 && report.fullUpdate.planarJobs === 2 &&
+      report.fullUpdate.ready && report.fullUpdate.mapped && report.fullUpdate.cameraPreserved &&
+      report.fullUpdate.authoringPreserved && report.fullUpdate.projectPreserved &&
+      report.fullFailure.status === 'ERROR' && report.fullFailure.retained &&
+      report.planarFailure.status === 'ERROR' && report.planarFailure.retained &&
+      report.staleSource.imageStatus && report.staleSource.imageMapped &&
+      report.staleSource.oldCacheRetained && report.staleSource.noStaleTextureInstall &&
+      report.siteBack.family === back && report.siteBack.status === 'READY' && report.siteBack.mapped &&
+      report.siteBack.blackMatte &&
+      report.siteBack.selectedAnamorphic.includes('ANAM_SURFACE_BACK') &&
+      report.siteBack.visiblePhysical.includes('ILMIN_Back_3Dworld_Basic') &&
+      report.siteFreeLastSelected.family === back &&
+      report.siteFreeLastSelected.selectedAuthoringFamily === 'back' &&
+      report.siteFreeLastSelected.status === 'READY' && report.siteFreeLastSelected.mapped &&
+      report.siteFreeLastSelected.blackMatte &&
+      report.siteFront.family === front && report.siteFront.status === 'READY' && report.siteFront.mapped &&
+      report.siteFront.blackMatte &&
+      report.siteFront.selectedAnamorphic.includes('ANAM_SURFACE_FRONT75F') &&
+      report.photoFront.family === front && report.photoFront.status === 'READY' &&
+      report.photoFront.mapped && report.photoFront.blackMatte && report.photoFront.cameraPreserved &&
+      report.photoBack.family === back && report.photoBack.status === 'READY' &&
+      report.photoBack.mapped && report.photoBack.blackMatte &&
+      report.photoOtherViews.every((entry) => entry.status === 'READY' && entry.mapped &&
+        entry.blackMatte && entry.cameraPreserved &&
+        entry.familyId === (entry.scene === 'night' ? back : front)) &&
+      report.manualPlanarSlot.blockedWhileManual && report.manualPlanarSlot.oneAutoJobAfterManual &&
+      report.manualPlanarSlot.ready && report.staleProject.noPublication && report.staleProject.oldProjectHidden;
+    return report;
+  } finally {
+    discardAuthoringPhysicalRequests({ clearCache: true });
+    planarWorkflow.job = initial.planarJob;
+    for (const [key, value] of Object.entries(initial.bakeOps)) authoringPhysicalBakeOps[key] = value;
+    authoringSession.mergedState = initial.mergedState;
+    planarWorkflow.readyOutput = initial.planarReady;
+    authoringPhysicalPreview.cache = initial.cache;
+    authoringPhysicalPreview.errors = initial.errors;
+    authoringPhysicalPreview.timings = initial.timings;
+    productionPreviewSource.site = 'IMAGE';
+    productionPreviewSource.photo = 'IMAGE';
+    productionWorkspace = initial.workspace;
+    productionSitePreset = initial.sitePreset;
+    productionAuthoringFamily = initial.authoringFamily;
+    state.authoring.snapshot.projectSessionId = initial.projectSessionId;
+    changeProductionSiteOption(siteWorldSelect, initial.world);
+    changeProductionSiteOption(siteMappingSelect, initial.mapping);
+    changeProductionSiteOption(siteAnamorphicFamilySelect, initial.family);
+    productionAuthoringFamily = initial.authoringFamily;
+    state.site.scene = initial.scene;
+    siteSceneSelect.value = initial.scene;
+    setActiveView(initial.view);
+    setUiMode(initial.mode);
+    productionPreviewSource.site = initial.sources.site;
+    productionPreviewSource.photo = initial.sources.photo;
+    restoreSiteCameraRuntime(initial.camera);
+    render();
+  }
+};
+
+window.runPreviewSourceBPhysicalIntegrationSmoke = async () => {
+  const front = ANAMORPHIC_FAMILY_IDS.FRONT_75F;
+  const back = ANAMORPHIC_FAMILY_IDS.BACK;
+  const initial = { mode: document.body.dataset.uiMode, workspace: productionWorkspace,
+    sitePreset: productionSitePreset, authoringFamily: productionAuthoringFamily,
+    sources: { ...productionPreviewSource }, world: state.site.world,
+    mapping: state.site.mappingMode, family: state.site.anamorphicFamily,
+    scene: state.site.scene, view: state.activeView,
+    camera: snapshotSiteCameraRuntime(), snapshot: authoringSession.snapshot(),
+    project: JSON.stringify(state.authoring.project),
+    projectSessionId: state.authoring.snapshot.projectSessionId };
+  const fixture = document.createElement('canvas');
+  fixture.width = fixture.height = 32;
+  const context = fixture.getContext('2d', { alpha: true });
+  context.fillStyle = '#f00';
+  context.fillRect(0, 0, 16, 32);
+  context.fillStyle = '#00f';
+  context.fillRect(16, 0, 16, 32);
+  const runtime = { id: 'preview-source-b-integration', filename: 'integration-fixture.png',
+    name: 'integration-fixture.png', mimeType: 'image/png', type: 'image/png',
+    width: 32, height: 32, hasAlpha: true, byteLength: 0, image: fixture, objectUrl: null };
+  const report = { families: [] };
+  try {
+    discardAuthoringPhysicalRequests({ clearCache: true });
+    productionPreviewSource.site = 'IMAGE';
+    productionPreviewSource.photo = 'IMAGE';
+    authoringSession.addLayer(runtime, front, runtime);
+    authoringSession.addLayer(runtime, back, runtime);
+    productionAuthoringFamily = 'front75f';
+    productionSitePreset = 'free';
+    setUiMode('production');
+    showProductionView('site', { resetIfCurrent: false });
+    for (const [familyId, workspace, view] of [[front, 'site', 'free'], [back, 'photo', 'back']]) {
+      if (workspace === 'photo') {
+        productionPreviewSource.photo = 'IMAGE';
+        showProductionView('photo', { resetIfCurrent: false });
+        productionUi.family.value = view;
+        productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+        if (state.photo.activationPromise) await state.photo.activationPromise;
+        productionUi.previewSource.value = 'AUTHORING';
+        productionUi.previewSource.dispatchEvent(new Event('change', { bubbles: true }));
+      } else {
+        productionUi.previewSource.value = 'AUTHORING';
+        productionUi.previewSource.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      const pose = snapshotSiteCameraRuntime();
+      while (authoringPhysicalPreview.pumpPromise || authoringPhysicalPreview.pending) {
+        if (authoringPhysicalPreview.pumpPromise) await authoringPhysicalPreview.pumpPromise;
+        else await nextFrame();
+      }
+      const merged = authoringSession.mergedState(familyId);
+      const full = fullMergeRuntime.result(familyId);
+      const output = planarWorkflow.readyOutput(familyId, merged.revision);
+      const cached = authoringPhysicalPreview.cache.get(familyId);
+      const bindings = physicalPlanarBindings();
+      report.families.push({ familyId, workspace, view,
+        fullMergedDirect: [full?.directWidth, full?.directHeight],
+        fullMergedRevision: full?.mergedRevision, planarSize: [output?.width, output?.height],
+        outputReady: Boolean(output?.blob?.type === 'image/png'),
+        physicalTextureFromOutput: cached?.output === output,
+        textureContract: Boolean(cached?.texture.colorSpace === THREE.SRGBColorSpace &&
+          cached.texture.flipY === false && cached.texture.minFilter === THREE.LinearFilter &&
+          cached.texture.magFilter === THREE.LinearFilter && cached.texture.wrapS === THREE.ClampToEdgeWrapping &&
+          cached.texture.wrapT === THREE.ClampToEdgeWrapping &&
+          cached.texture.userData.simpleImageAlphaBlack === true &&
+          bindings.every((binding) => binding.mesh.material.transparent === true &&
+            binding.mesh.material.customProgramCacheKey?.() === 'simple-image-black-v1') &&
+          simpleImageBlackUniform.value === 1),
+        physicalBindings: bindings.map((binding) => binding.mesh.name),
+        mapped: Boolean(cached && bindings.every((binding) =>
+          binding.mesh.visible && binding.mesh.material.map === cached.texture)),
+        cameraPreserved: siteCameraRuntimeMatchesSnapshot(pose),
+        status: productionPreviewDecision().status,
+        timing: authoringPhysicalPreview.timings.at(-1) });
+    }
+    showProductionView('authoring', { resetIfCurrent: false });
+    report.manualOutputsAvailable = {};
+    for (const [familyId, family] of [[front, 'front75f'], [back, 'back']]) {
+      productionUi.family.value = family;
+      productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+      syncProjectionPocUi();
+      report.manualOutputsAvailable[familyId] = Boolean(
+        planarWorkflow.readyOutput(familyId, authoringSession.mergedState(familyId).revision) &&
+        !planarMasterPreview.disabled && !planarMasterSave.disabled);
+    }
+    report.projectPreserved = JSON.stringify(state.authoring.project) === initial.project;
+    report.technicalPass = report.families.length === 2 && report.projectPreserved &&
+      report.manualOutputsAvailable[front] && report.manualOutputsAvailable[back] &&
+      report.families.every((entry) => entry.status === 'READY' && entry.outputReady &&
+        entry.physicalTextureFromOutput && entry.textureContract && entry.mapped && entry.cameraPreserved &&
+        entry.planarSize[0] === 4728 && entry.planarSize[1] === 5760 &&
+        entry.fullMergedDirect[1] === 3840 &&
+        entry.fullMergedDirect[0] === (entry.familyId === front ? 3000 : 2100));
+    return report;
+  } finally {
+    discardAuthoringPhysicalRequests({ clearCache: true });
+    planarWorkflow.reset();
+    planarMappingRuntime.disposeAll();
+    fullMergeRuntime.disposeAll();
+    authoringSession.restore(initial.snapshot);
+    productionPreviewSource.site = 'IMAGE';
+    productionPreviewSource.photo = 'IMAGE';
+    productionWorkspace = initial.workspace;
+    productionSitePreset = initial.sitePreset;
+    productionAuthoringFamily = initial.authoringFamily;
+    state.authoring.snapshot.projectSessionId = initial.projectSessionId;
+    changeProductionSiteOption(siteWorldSelect, initial.world);
+    changeProductionSiteOption(siteMappingSelect, initial.mapping);
+    changeProductionSiteOption(siteAnamorphicFamilySelect, initial.family);
+    productionAuthoringFamily = initial.authoringFamily;
+    state.site.scene = initial.scene;
+    siteSceneSelect.value = initial.scene;
+    setActiveView(initial.view);
+    setUiMode(initial.mode);
+    productionPreviewSource.site = initial.sources.site;
+    productionPreviewSource.photo = initial.sources.photo;
+    restoreSiteCameraRuntime(initial.camera);
+    render();
+    fixture.width = fixture.height = 1;
   }
 };
 
