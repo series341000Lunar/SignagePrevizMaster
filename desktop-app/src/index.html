@@ -7,17 +7,49 @@
       content="default-src 'self' file:; script-src 'self'; style-src 'self'; img-src 'self' file: blob: data:; connect-src 'self' file: ws://localhost:34100; object-src 'none'; base-uri 'none'; frame-src 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Signage MockUp Generator — Block 8A</title>
+    <title>LUUX Signage Previz</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
-  <body>
+  <body data-ui-mode="production">
     <header>
-      <div>
+      <div class="production-heading">
+        <h1>LUUX Signage Previz</h1>
+        <p>Production workspace</p>
+      </div>
+      <div class="developer-heading">
         <h1>Signage MockUp Generator — BLOCK 8A</h1>
         <p>LUNARGRAPHICS · Single Image Projection Authoring</p>
       </div>
-      <div id="full-resolution-badge" class="badge pending">WAITING</div>
+      <div class="header-status">
+        <span id="production-photoshop-status" class="production-status" role="status">PHOTOSHOP DISCONNECTED</span>
+        <div id="full-resolution-badge" class="badge pending">WAITING</div>
+        <button id="ui-mode-toggle" type="button" aria-pressed="false">DEVELOPER MODE</button>
+      </div>
     </header>
+
+    <nav id="production-navigation" aria-label="Production workspace">
+      <div class="production-nav-group">
+        <span>PROJECT</span>
+        <strong id="production-project-name">UNSAVED</strong>
+        <span id="production-project-state" role="status">NOT SAVED</span>
+        <button id="production-project-open" type="button">OPEN</button>
+        <button id="production-project-save" type="button">SAVE</button>
+        <button id="production-project-save-as" type="button">SAVE AS</button>
+      </div>
+      <div class="production-nav-group">
+        <label id="production-family-label" for="production-family">FAMILY</label>
+        <select id="production-family">
+          <option value="front75f">FRONT 75F</option>
+          <option value="back">BACK</option>
+        </select>
+      </div>
+      <div class="production-nav-group production-view-group" aria-label="View purpose">
+        <span>VIEW</span>
+        <button id="production-view-photo" type="button">PHOTO</button>
+        <button id="production-view-site" type="button">SITE 3D</button>
+        <button id="production-view-authoring" type="button">AUTHORING</button>
+      </div>
+    </nav>
 
     <section class="controls" aria-label="Viewer controls">
       <button id="view-2d-button" class="view-button" type="button">2D VIEW</button>
@@ -60,7 +92,7 @@
       </label>
       <button id="locations-toggle-button" class="site-control location-toggle-button active" type="button" aria-pressed="true" hidden>LOCATIONS ON</button>
       <button id="return-to-site-button" class="site-control return-to-site-button" type="button" hidden>RETURN TO SITE</button>
-      <button id="legacy-camera-lock-button" class="site-control camera-lock-button locked" type="button" aria-pressed="true" hidden>CAMERA LOCKED</button>
+      <button id="legacy-camera-lock-button" class="site-control camera-lock-button locked" type="button" aria-pressed="true" hidden>CAMERA EDITOR LOCKED</button>
       <button id="anamorphic-camera-reset-button" class="site-control camera-lock-button locked" type="button" hidden>FRONT 75F CALIBRATION</button>
       <label id="anamorphic-fov-control" class="site-control" hidden>
         FOV V
@@ -88,6 +120,12 @@
     <main>
       <section id="viewer" aria-label="Full-resolution texture viewer">
         <canvas id="three-canvas"></canvas>
+        <button id="reset-view-button" type="button" title="Reset the current view camera">RESET VIEW</button>
+        <div id="site-fov-control" aria-label="Site 3D camera focal length" hidden>
+          <label for="site-fov-slider">35MM EQ <output id="site-fov-value" for="site-fov-slider"></output></label>
+          <input id="site-fov-slider" type="range" min="0" max="1000" step="1" orient="vertical" aria-label="35mm equivalent focal length, 20 to 400 millimeters">
+          <button id="site-fov-reset-button" type="button">RESET FOV</button>
+        </div>
         <div id="location-overlay" class="location-overlay" aria-label="Site photo locations"></div>
         <div id="pointer-marker" class="pointer-marker" aria-hidden="true">
           <span class="pointer-marker-ring"></span>
@@ -176,6 +214,10 @@
       </section>
 
       <aside>
+        <section id="production-intro" class="production-card">
+          <h2>WORKSPACE</h2>
+          <p id="production-context">Choose FRONT 75F or BACK, then open AUTHORING to work with layers.</p>
+        </section>
         <section id="camera-editor" class="camera-editor" aria-labelledby="camera-editor-title" hidden>
           <div class="camera-editor-heading">
             <h2 id="camera-editor-title">CAMERA — FRONT</h2>
@@ -366,6 +408,34 @@
             <input id="outside-signage-opacity" type="range" min="0" max="1" step="0.01" value="0.5">
           </section>
           <p id="authoring-message" class="projection-poc-message">Add PNG/JPG layers. Bake processes the selected visible layer only.</p>
+        </section>
+        <section id="production-mask-entry" class="production-card" hidden>
+          <h2>MASK</h2>
+          <button id="production-mask-edit" type="button" disabled>OPEN MASK TOOLS</button>
+          <p>Edits the selected SMG layer mask. Photoshop user Layer Masks must be applied before Selection import.</p>
+        </section>
+        <section id="production-output" class="production-card production-output" hidden>
+          <h2>OUTPUT</h2>
+          <div class="production-output-group">
+            <h3>SELECTED LAYER → PHOTOSHOP</h3>
+            <button id="production-bake-current" type="button" disabled>BAKE SELECTED LAYER</button>
+            <button id="production-send-direct" type="button" disabled>SEND SELECTED LAYER</button>
+            <small id="production-send-state">TARGET NOT SET</small>
+          </div>
+          <div class="production-output-group">
+            <h3>FULL COMPOSITE</h3>
+            <button id="production-bake-merged" type="button" disabled>UPDATE COMPOSITE</button>
+            <button id="production-save-merged" type="button" disabled>SAVE COMPOSITE PNG</button>
+            <small id="production-merged-state">NO LAYERS</small>
+          </div>
+          <div class="production-output-group">
+            <h3>PLANAR DELIVERY</h3>
+            <p>Update the Full Composite before baking the delivery image.</p>
+            <button id="production-bake-planar" type="button" disabled>BAKE PLANAR</button>
+            <button id="production-view-planar" type="button" disabled>VIEW PLANAR</button>
+            <button id="production-save-planar" type="button" disabled>SAVE PLANAR PNG</button>
+            <small id="production-planar-state">FULL MERGE REQUIRED</small>
+          </div>
         </section>
         <section id="projection-poc" class="projection-poc" aria-labelledby="projection-poc-title" hidden>
           <div class="projection-poc-heading">

@@ -213,7 +213,8 @@ assert(/id="legacy-camera-lock-button"[^>]*aria-pressed="true"[^>]*hidden/.test(
 assert(/function isLegacyCameraContext\(\)/.test(rendererSource) && /state\.site\.world === 'legacy2d'/.test(rendererSource), 'Camera lock must be scoped to Legacy 2D World.');
 assert(/enteringLegacy[\s\S]*state\.site\.legacyCameraLocked = true/.test(rendererSource), 'Entering Legacy 2D World must restore the default camera lock.');
 assert(/siteSceneSelect\.addEventListener\('change',[\s\S]*lockLegacyCamera\(\)/.test(rendererSource), 'Every Legacy scene change must restore the camera lock.');
-assert(/!legacyContext \|\| !state\.site\.legacyCameraLocked/.test(rendererSource), 'Legacy OrbitControls must only enable after explicit unlock.');
+assert(/controlsSite\.enabled = state\.activeView === 'site-3d'[\s\S]*!legacyContext &&[\s\S]*!authoringLocked/.test(rendererSource),
+  'Legacy PhotoScene OrbitControls must remain disabled even if the diagnostic camera lock is unlocked.');
 assert(/toggleLegacyCameraLock/.test(rendererSource) && /cameraControlsEnabled: controlsSite\.enabled/.test(rendererSource), 'Legacy camera lock must be user-toggleable and observable in diagnostics.');
 assert(/ANAM_SURFACE_FRONT75F/.test(anamorphicCalibrationSource) &&
   /function anamorphicSurface\(profile\)/.test(siteProfileSource) &&

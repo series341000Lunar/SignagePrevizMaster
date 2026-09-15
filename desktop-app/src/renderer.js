@@ -107,6 +107,11 @@ const pointerMarker = document.querySelector('#pointer-marker');
 const view2dButton = document.querySelector('#view-2d-button');
 const view3dPlaneButton = document.querySelector('#view-3d-plane-button');
 const viewSite3dButton = document.querySelector('#view-site-3d-button');
+const resetViewButton = document.querySelector('#reset-view-button');
+const siteFovControl = document.querySelector('#site-fov-control');
+const siteFovSlider = document.querySelector('#site-fov-slider');
+const siteFovValue = document.querySelector('#site-fov-value');
+const siteFovResetButton = document.querySelector('#site-fov-reset-button');
 const previewAuthoringButton = document.querySelector('#preview-authoring-button');
 const previewPhotoshopFinalButton = document.querySelector('#preview-photoshop-final-button');
 const previewModeState = document.querySelector('#preview-mode-state');
@@ -268,6 +273,38 @@ const planarMasterBake = document.querySelector('#planar-master-bake');
 const planarMasterPreview = document.querySelector('#planar-master-preview');
 const planarMasterSave = document.querySelector('#planar-master-save');
 const planarMasterMessage = document.querySelector('#planar-master-message');
+const productionUi = {
+  modeToggle: document.querySelector('#ui-mode-toggle'),
+  projectName: document.querySelector('#production-project-name'),
+  projectState: document.querySelector('#production-project-state'),
+  projectOpen: document.querySelector('#production-project-open'),
+  projectSave: document.querySelector('#production-project-save'),
+  projectSaveAs: document.querySelector('#production-project-save-as'),
+  familyLabel: document.querySelector('#production-family-label'),
+  family: document.querySelector('#production-family'),
+  viewAuthoring: document.querySelector('#production-view-authoring'),
+  viewSite: document.querySelector('#production-view-site'),
+  viewPhoto: document.querySelector('#production-view-photo'),
+  photoshopStatus: document.querySelector('#production-photoshop-status'),
+  intro: document.querySelector('#production-intro'),
+  context: document.querySelector('#production-context'),
+  maskEntry: document.querySelector('#production-mask-entry'),
+  maskEdit: document.querySelector('#production-mask-edit'),
+  output: document.querySelector('#production-output'),
+  bakeCurrent: document.querySelector('#production-bake-current'),
+  sendDirect: document.querySelector('#production-send-direct'),
+  sendState: document.querySelector('#production-send-state'),
+  bakeMerged: document.querySelector('#production-bake-merged'),
+  saveMerged: document.querySelector('#production-save-merged'),
+  mergedState: document.querySelector('#production-merged-state'),
+  bakePlanar: document.querySelector('#production-bake-planar'),
+  viewPlanar: document.querySelector('#production-view-planar'),
+  savePlanar: document.querySelector('#production-save-planar'),
+  planarState: document.querySelector('#production-planar-state')
+};
+let productionWorkspace = 'site';
+let productionSitePreset = 'free';
+let productionAuthoringFamily = 'front75f';
 const planarPreviewOverlay = document.querySelector('#planar-preview-overlay');
 const planarPreviewImage = document.querySelector('#planar-preview-image');
 const planarPreviewDetails = document.querySelector('#planar-preview-details');
@@ -443,6 +480,8 @@ const state = {
       busy: false,
       hasCurrentProject: false,
       projectName: null,
+      savedRevision: null,
+      savedPreviewGray: null,
       status: 'Authoring source of truth is not saved.',
       error: ''
     },
@@ -1883,6 +1922,132 @@ function syncAuthoringQuickRail(available) {
     : 'NO DIRECT TARGET';
 }
 
+function syncProductionSceneSelector() {
+  const mode = productionWorkspace;
+  if (productionUi.family.dataset.mode !== mode) {
+    const choices = mode === 'photo'
+      ? SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes.map((scene) => [scene.id, scene.label.replaceAll('_', ' ').toUpperCase(), false])
+      : mode === 'site'
+        ? [['free', 'FREE VIEW', false], ['front75f', 'FRONT 75F', false], ['back', 'BACK', false], ['camera', 'CAMERA · FUTURE', true]]
+        : [['front75f', 'FRONT 75F', false], ['back', 'BACK', false]];
+    productionUi.family.replaceChildren(...choices.map(([value, label, disabled]) => {
+      const option = new Option(label, value);
+      option.disabled = disabled;
+      return option;
+    }));
+    productionUi.family.dataset.mode = mode;
+  }
+  productionUi.familyLabel.textContent = mode === 'photo' ? 'PHOTO LOCATION' : mode === 'site' ? 'SITE VIEW' : 'FAMILY';
+  productionUi.family.value = mode === 'photo' ? state.site.scene :
+    mode === 'site' ? productionSitePreset : productionAuthoringFamily;
+}
+
+function currentProductionView() {
+  return state.activeView === 'site-3d' ? productionWorkspace : null;
+}
+
+function syncProductionUi() {
+  const project = state.authoring.project;
+  const available = isProjectionAuthoringContext() && productionWorkspace === 'authoring';
+  const profile = currentProjectionBakeProfile();
+  const directTarget = profile ? resolveReverseBakeTarget(profile.familyId, 'DIRECT').target : null;
+  const directResolution = profile ? expectedProjectionOutputResolution(profile, 'DIRECT') : null;
+  const targetReady = Boolean(directTarget?.status === 'READY' &&
+    directTarget.width === directResolution?.width && directTarget.height === directResolution?.height &&
+    directTarget.documentMode === 'RGB' && directTarget.documentDepth === 8);
+
+  productionUi.projectName.textContent = project.projectName || 'UNSAVED';
+  const changedSinceSave = project.savedRevision !== authoringSession.revision ||
+    project.savedPreviewGray !== state.previewBackgroundGray;
+  productionUi.projectState.textContent = project.busy ? 'WORKING' : project.error ? 'ERROR' :
+    !project.hasCurrentProject ? 'NOT SAVED' : changedSinceSave ? 'CHANGES NOT SAVED' : 'SAVED';
+  const projectBlocked = project.busy || state.projectionBake.running || state.reverseBake.activeJobId !== null;
+  productionUi.projectOpen.disabled = !window.luuxProject || projectBlocked;
+  productionUi.projectSave.disabled = !window.luuxProject || projectBlocked || Boolean(state.authoring.snapshot.current);
+  productionUi.projectSaveAs.disabled = productionUi.projectSave.disabled;
+  syncProductionSceneSelector();
+  resetViewButton.hidden = state.activeView === '2d';
+  resetViewButton.disabled = state.activeView === 'site-3d' &&
+    (!state.site.surfaceSetAvailable || (isAnamorphicCalibrationContext() && authoringCameraInterlock.forcedLocked));
+  syncSiteFovControl();
+
+  document.body.dataset.productionWorkspace = productionWorkspace;
+  productionUi.viewAuthoring.classList.toggle('active', state.activeView === 'site-3d' && productionWorkspace === 'authoring');
+  productionUi.viewSite.classList.toggle('active', state.activeView === 'site-3d' && productionWorkspace === 'site');
+  productionUi.viewPhoto.classList.toggle('active', state.activeView === 'site-3d' && productionWorkspace === 'photo');
+
+  productionUi.photoshopStatus.className = `production-status${state.link.photoshopConnected ? ' connected' : ''}${state.reverseBake.lastError ? ' error' : ''}`;
+  productionUi.photoshopStatus.textContent = state.reverseBake.lastError ? 'PHOTOSHOP ERROR' :
+    !state.link.photoshopConnected ? 'PHOTOSHOP DISCONNECTED' :
+      `PHOTOSHOP CONNECTED · ${targetReady ? 'TARGET READY' : 'TARGET NOT SET'}${state.reverseBake.lastApplied ? ' · SEND COMPLETE' : ''}`;
+
+  productionUi.intro.hidden = available;
+  productionUi.context.textContent = productionWorkspace === 'photo'
+    ? 'Photo inspection is active. Choose AUTHORING to edit the selected family.'
+    : productionWorkspace === 'site'
+      ? 'Choose FREE VIEW, FRONT 75F, or BACK to inspect the site.'
+      : 'Choose FRONT 75F or BACK to work with layers and output.';
+  productionUi.maskEntry.hidden = !available;
+  productionUi.output.hidden = !available;
+  if (!available || !authoringSession.selectedLayer) vectorMaskPanel.classList.remove('production-open');
+  productionUi.maskEdit.disabled = !available || !authoringSession.selectedLayer;
+  productionUi.maskEdit.textContent = vectorMaskPanel.classList.contains('production-open') ? 'CLOSE MASK TOOLS' : 'OPEN MASK TOOLS';
+  productionUi.bakeCurrent.disabled = quickBakeCurrent.disabled;
+  productionUi.sendDirect.disabled = quickSendDirect.disabled;
+  productionUi.sendState.textContent = state.reverseBake.lastError ? 'SEND ERROR · See Developer Mode for details' :
+    targetReady ? 'DIRECT TARGET READY' : 'DIRECT TARGET NOT SET';
+  productionUi.bakeMerged.disabled = quickBakeFullMerged.disabled;
+  productionUi.saveMerged.disabled = fullMergeSaveButtons.find((button) => button.dataset.fullMergeExport === 'DIRECT')?.disabled ?? true;
+  productionUi.mergedState.textContent = fullMergeState.textContent;
+  productionUi.bakePlanar.disabled = planarMasterBake.disabled;
+  productionUi.viewPlanar.disabled = planarMasterPreview.disabled;
+  productionUi.savePlanar.disabled = planarMasterSave.disabled;
+  productionUi.planarState.textContent = planarMasterState.textContent;
+}
+
+function setUiMode(mode) {
+  if (mode !== 'production' && mode !== 'developer') throw new Error(`Unknown UI mode: ${mode}`);
+  document.body.dataset.uiMode = mode;
+  productionUi.modeToggle.textContent = mode === 'production' ? 'DEVELOPER MODE' : 'PRODUCTION UI';
+  productionUi.modeToggle.setAttribute('aria-pressed', String(mode === 'developer'));
+  document.querySelector('#projection-authoring-title').textContent = mode === 'production' ? 'LAYERS & PROPERTIES' : 'PROJECTION AUTHORING';
+  document.querySelector('#authoring-composite-title').textContent = mode === 'production' ? 'PROPERTIES' : 'LAYER COMPOSITE';
+  document.querySelector('#vector-mask-title').textContent = mode === 'production' ? 'MASK' : 'VECTOR MASK';
+  if (mode === 'production' && authoringCameraInterlock.maskEditing) vectorMaskPanel.classList.add('production-open');
+  syncProductionUi();
+  resizeRenderer();
+}
+
+function changeProductionSiteOption(element, value) {
+  if (element.value === value) return;
+  element.value = value;
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function showProductionView(view, { resetIfCurrent = true } = {}) {
+  const sameView = currentProductionView() === view;
+  productionWorkspace = view;
+  setActiveView('site-3d');
+  if (view === 'photo') {
+    changeProductionSiteOption(siteMappingSelect, 'normal');
+    changeProductionSiteOption(siteWorldSelect, 'legacy2d');
+  } else if (view === 'site') {
+    changeProductionSiteOption(siteWorldSelect, 'world3d');
+    if (productionSitePreset === 'free') changeProductionSiteOption(siteMappingSelect, 'normal');
+    else {
+      changeProductionSiteOption(siteMappingSelect, 'anamorphic');
+      changeProductionSiteOption(siteAnamorphicFamilySelect, productionSitePreset);
+    }
+  } else {
+    changeProductionSiteOption(siteWorldSelect, 'world3d');
+    changeProductionSiteOption(siteMappingSelect, 'anamorphic');
+    changeProductionSiteOption(siteAnamorphicFamilySelect, productionAuthoringFamily);
+    previewAuthoringButton.click();
+  }
+  if (sameView && resetIfCurrent) resetCurrentView();
+  syncProductionUi();
+}
+
 function syncAuthoringProjectUi(available) {
   const project = state.authoring.project;
   const bridgeAvailable = Boolean(window.luuxProject);
@@ -2077,6 +2242,7 @@ function syncAuthoringUi() {
   syncAuthoringOverlay();
   syncAuthoringQuickRail(available);
   syncAuthoringProjectUi(available);
+  syncProductionUi();
 }
 
 function toggleAuthoringCameraLock() {
@@ -2454,8 +2620,10 @@ async function saveAuthoringProject(saveAs = false) {
   if (state.authoring.project.busy) return false;
   setProjectOperationState({ busy: true, status: saveAs ? 'Preparing Save As...' : 'Preparing Save...', error: '' });
   try {
+    const savingRevision = authoringSession.revision;
+    const savingPreviewGray = state.previewBackgroundGray;
     const payload = await createProjectSavePayload(authoringSession, {
-      previewBackgroundGray: state.previewBackgroundGray
+      previewBackgroundGray: savingPreviewGray
     });
     let result = saveAs ? await window.luuxProject.saveAs(payload) : await window.luuxProject.save(payload);
     if (!saveAs && !result.ok && result.error?.code === 'PROJECT_SAVE_AS_REQUIRED') {
@@ -2468,6 +2636,8 @@ async function saveAuthoringProject(saveAs = false) {
     }
     state.authoring.project.hasCurrentProject = true;
     state.authoring.project.projectName = result.projectName;
+    state.authoring.project.savedRevision = savingRevision;
+    state.authoring.project.savedPreviewGray = savingPreviewGray;
     setProjectOperationState({
       busy: false,
       status: `Saved project.json and ${result.assetCount} byte-identical source asset${result.assetCount === 1 ? '' : 's'}.`,
@@ -2596,6 +2766,8 @@ async function openAuthoringProject(manifestFile = null) {
     invalidateAuthoringOutputs('project-load');
     state.authoring.project.hasCurrentProject = true;
     state.authoring.project.projectName = result.projectName;
+    state.authoring.project.savedRevision = authoringSession.revision;
+    state.authoring.project.savedPreviewGray = state.previewBackgroundGray;
     state.authoring.project.busy = false;
     state.authoring.project.error = '';
     state.authoring.project.status = `Opened ${result.projectName}. Layers restored as NEEDS BAKE / PHOTOSHOP UNSYNCED.`;
@@ -2761,6 +2933,7 @@ function syncProjectionPocUi() {
   const busy = state.projectionBake.running || state.fullMerge.running || planarWorkflow.job !== null || projectionPngExporting || fullMergePngExporting || reverseBusy;
   projectionPocState.textContent = projectionPngExporting ? 'EXPORTING' : (state.projectionBake.running ? 'RUNNING' : state.projectionBake.status);
   projectionPocState.className = `projection-poc-state${busy ? ' running' : ''}${state.projectionBake.status === 'ERROR' ? ' fail' : ''}`;
+  syncProductionUi();
 }
 
 function waitForPhotoshopBakeApply(jobId) {
@@ -3546,6 +3719,102 @@ function fitSiteCameraToActiveSurfaces() {
   controlsSite.update();
 }
 
+function resetFreeSiteCamera() {
+  if (state.site.world !== 'world3d' || state.site.mappingMode !== 'normal' ||
+      !state.site.surfaceSetAvailable) return false;
+  const frontSweet = SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes
+    .find((scene) => scene.id === 'frontSweet').camera;
+  const [pitch, yaw] = frontSweet.eulerXyzDegrees;
+  const levelOrientation = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+    THREE.MathUtils.degToRad(pitch), THREE.MathUtils.degToRad(yaw), 0, 'XYZ'
+  ));
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(levelOrientation);
+  cameraSite.fov = frontSweet.fov;
+  cameraSite.aspect = Math.max(1, viewer.clientWidth) / Math.max(1, viewer.clientHeight);
+  cameraSite.near = frontSweet.near;
+  cameraSite.far = frontSweet.far;
+  cameraSite.zoom = 1;
+  if (cameraSite.view?.enabled) cameraSite.clearViewOffset();
+  cameraSite.position.fromArray(frontSweet.position);
+  cameraSite.position.y += 0.5;
+  cameraSite.up.set(0, 1, 0);
+  controlsSite.target.copy(cameraSite.position).addScaledVector(forward, 10);
+  cameraSite.updateProjectionMatrix();
+  controlsSite.update();
+  cameraSite.updateMatrixWorld(true);
+  return true;
+}
+
+const FULL_FRAME_SENSOR_WIDTH_MM = 36;
+const SITE_FOCAL_MIN_MM = 20;
+const SITE_FOCAL_MAX_MM = 400;
+
+function focal35mmFromVerticalFov(verticalFov, aspect) {
+  return FULL_FRAME_SENSOR_WIDTH_MM / (2 * aspect * Math.tan(THREE.MathUtils.degToRad(verticalFov) / 2));
+}
+
+function verticalFovFromFocal35mm(focalMm, aspect) {
+  return THREE.MathUtils.radToDeg(2 * Math.atan(FULL_FRAME_SENSOR_WIDTH_MM / (2 * focalMm * aspect)));
+}
+
+function focal35mmFromSlider(value) {
+  return SITE_FOCAL_MIN_MM * Math.pow(SITE_FOCAL_MAX_MM / SITE_FOCAL_MIN_MM, Number(value) / 1000);
+}
+
+function sliderFromFocal35mm(focalMm) {
+  const clamped = THREE.MathUtils.clamp(focalMm, SITE_FOCAL_MIN_MM, SITE_FOCAL_MAX_MM);
+  return Math.round(1000 * Math.log(clamped / SITE_FOCAL_MIN_MM) /
+    Math.log(SITE_FOCAL_MAX_MM / SITE_FOCAL_MIN_MM));
+}
+
+function siteFovVisible() {
+  return document.body.dataset.uiMode === 'production' && productionWorkspace === 'site' &&
+    state.activeView === 'site-3d' && state.site.world === 'world3d';
+}
+
+function siteFovEditable() {
+  return siteFovVisible() && state.site.surfaceSetAvailable && !authoringCameraInterlock.cameraLocked &&
+    (!isAnamorphicCalibrationContext() || isAnamorphicCalibrationFramingActive());
+}
+
+function syncSiteFovControl() {
+  siteFovControl.hidden = !siteFovVisible();
+  siteFovSlider.disabled = siteFovResetButton.disabled = !siteFovEditable();
+  if (siteFovControl.hidden) return;
+  const focalMm = focal35mmFromVerticalFov(cameraSite.fov, cameraSite.aspect);
+  siteFovSlider.value = String(sliderFromFocal35mm(focalMm));
+  siteFovSlider.setAttribute('aria-valuetext', `${focalMm.toFixed(1)} millimeters, ${cameraSite.fov.toFixed(1)} degrees`);
+  siteFovValue.textContent = `${focalMm.toFixed(1)} mm · ${cameraSite.fov.toFixed(1)}°`;
+}
+
+function applySiteFocal35mm(focalMm) {
+  if (!siteFovEditable() || !Number.isFinite(focalMm) || focalMm < SITE_FOCAL_MIN_MM ||
+      focalMm > SITE_FOCAL_MAX_MM) return false;
+  const verticalFov = verticalFovFromFocal35mm(focalMm, cameraSite.aspect);
+  if (isAnamorphicCalibrationContext()) return applyAnamorphicFovValue(verticalFov);
+  cameraSite.fov = verticalFov;
+  cameraSite.updateProjectionMatrix();
+  cameraSite.updateMatrixWorld(true);
+  updateZoomReadout();
+  render();
+  updateDiagnostics();
+  return true;
+}
+
+function resetSiteFov() {
+  if (!siteFovEditable()) return false;
+  const baselineFov = isAnamorphicCalibrationContext()
+    ? currentAnamorphicFamily().cameraProfile.runtimeFov
+    : SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes.find((scene) => scene.id === 'frontSweet').camera.fov;
+  if (isAnamorphicCalibrationContext()) return applyAnamorphicFovValue(baselineFov);
+  cameraSite.fov = baselineFov;
+  cameraSite.updateProjectionMatrix();
+  cameraSite.updateMatrixWorld(true);
+  render();
+  updateDiagnostics();
+  return true;
+}
+
 function currentLegacyCameraRecord() {
   if (state.site.world !== 'legacy2d' || state.site.mappingMode !== 'normal') return null;
   const sceneContract = SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes
@@ -3802,6 +4071,30 @@ function resetCameraEditorView() {
   }
 }
 
+function resetCurrentView() {
+  if (state.activeView === '3d-plane') {
+    camera3d.position.set(0, 0, 3);
+    camera3d.zoom = 1;
+    camera3d.updateProjectionMatrix();
+    controls3d.target.set(0, 0, 0);
+    controls3d.update();
+  } else if (state.activeView === 'site-3d' && state.site.surfaceSetAvailable) {
+    if (isAnamorphicCalibrationContext()) {
+      if (authoringCameraInterlock.forcedLocked) return false;
+      return applyAnamorphicCalibrationCamera();
+    }
+    if (isLegacyCameraContext()) return resetCameraEditorView();
+    if (state.site.world !== 'world3d' || state.site.mappingMode !== 'normal') return false;
+    resetFreeSiteCamera();
+  } else {
+    return false;
+  }
+  updateZoomReadout();
+  render();
+  updateDiagnostics();
+  return true;
+}
+
 function resetCameraEditorToLegacy() {
   const record = currentLegacyCameraRecord();
   if (!record || state.site.legacyCameraLocked || !state.site.surfaceSetAvailable) return false;
@@ -3845,14 +4138,14 @@ function syncSiteCameraControls() {
   const legacyContext = isLegacyCameraContext();
   legacyCameraLockButton.hidden = !legacyContext;
   legacyCameraLockButton.disabled = !legacyContext || !state.site.surfaceSetAvailable;
-  legacyCameraLockButton.textContent = state.site.legacyCameraLocked ? 'CAMERA LOCKED' : 'CAMERA UNLOCKED';
+  legacyCameraLockButton.textContent = state.site.legacyCameraLocked ? 'CAMERA EDITOR LOCKED' : 'CAMERA EDITOR UNLOCKED';
   legacyCameraLockButton.setAttribute('aria-pressed', String(state.site.legacyCameraLocked));
   legacyCameraLockButton.classList.toggle('locked', state.site.legacyCameraLocked);
   legacyCameraLockButton.classList.toggle('unlocked', !state.site.legacyCameraLocked);
   const authoringLocked = isAnamorphicCalibrationContext() && authoringCameraInterlock.cameraLocked;
   controlsSite.enabled = state.activeView === 'site-3d' &&
     state.site.surfaceSetAvailable &&
-    (!legacyContext || !state.site.legacyCameraLocked) &&
+    !legacyContext &&
     !authoringLocked;
   syncCameraEditorAvailability();
   syncAnamorphicControls();
@@ -3894,7 +4187,10 @@ function applySiteSurfaceSelection({ resetCamera = true } = {}) {
   if (resetCamera) {
     if (isAnamorphicCalibrationContext()) applyAnamorphicCalibrationCamera();
     else if (selection.camera) applyCurrentCameraRecordToRuntime();
-    else if (state.site.surfaceSetAvailable) fitSiteCameraToActiveSurfaces();
+    else if (state.site.surfaceSetAvailable) {
+      if (state.site.world === 'world3d' && state.site.mappingMode === 'normal') resetFreeSiteCamera();
+      else fitSiteCameraToActiveSurfaces();
+    }
   }
   if (selection.camera) populateCameraEditorFromRecord();
   if (selection.photoScene) void activatePhotoScene(selection.photoScene);
@@ -4347,6 +4643,7 @@ function render() {
   syncAuthoringOverlay();
   syncPreviewModeUi(previewDecision);
   syncPlanarPreviewValidity();
+  syncProductionUi();
 }
 
 function updatePointerMarker() {
@@ -4420,10 +4717,10 @@ function updatePointerControls() {
   updateLocationMarkers();
   if (state.activeView === 'site-3d') {
     dragHint.textContent = state.site.surfaceSetAvailable
-      ? (isLegacyCameraContext() && state.site.legacyCameraLocked
+      ? (isLegacyCameraContext()
         ? (state.interactionMode === 'point'
-          ? 'LEGACY POINT · CAMERA LOCKED: Left click points · Unlock camera to orbit/pan/dolly'
-          : 'LEGACY CAMERA LOCKED: Unlock camera to orbit/pan/dolly')
+          ? 'PHOTO POINT: Left click points · Photo camera fixed'
+          : 'PHOTO VIEW: Camera fixed to the selected photograph')
         : (state.interactionMode === 'point'
           ? 'SITE POINT: Left click · Left drag: orbit · Middle drag: pan · Wheel: dolly'
           : 'SITE NAVIGATE: Left drag: orbit · Middle drag: pan · Wheel: dolly'))
@@ -6084,12 +6381,82 @@ function updateAuthoringPointerInteraction(event) {
 }
 
 view2dButton.addEventListener('click', () => setActiveView('2d'));
-view3dPlaneButton.addEventListener('click', () => setActiveView('3d-plane'));
-viewSite3dButton.addEventListener('click', () => setActiveView('site-3d'));
+view3dPlaneButton.addEventListener('click', () => {
+  if (state.activeView === '3d-plane') resetCurrentView();
+  else setActiveView('3d-plane');
+});
+viewSite3dButton.addEventListener('click', () => {
+  if (state.activeView === 'site-3d') resetCurrentView();
+  else setActiveView('site-3d');
+});
+resetViewButton.addEventListener('click', resetCurrentView);
+siteFovSlider.addEventListener('input', () => applySiteFocal35mm(focal35mmFromSlider(siteFovSlider.value)));
+siteFovResetButton.addEventListener('click', resetSiteFov);
+productionUi.modeToggle.addEventListener('click', () => setUiMode(document.body.dataset.uiMode === 'production' ? 'developer' : 'production'));
+productionUi.family.addEventListener('change', () => {
+  const selection = productionUi.family.value;
+  const mode = productionUi.family.dataset.mode;
+  if (mode === 'photo') {
+    if (selection === state.site.scene) resetCurrentView();
+    else changeProductionSiteOption(siteSceneSelect, selection);
+  } else if (mode === 'site') {
+    productionSitePreset = selection;
+    if (selection === 'free') {
+      changeProductionSiteOption(siteWorldSelect, 'world3d');
+      changeProductionSiteOption(siteMappingSelect, 'normal');
+      resetCurrentView();
+    } else {
+      changeProductionSiteOption(siteWorldSelect, 'world3d');
+      changeProductionSiteOption(siteMappingSelect, 'anamorphic');
+      changeProductionSiteOption(siteAnamorphicFamilySelect, selection);
+      resetCurrentView();
+    }
+  } else {
+    productionAuthoringFamily = selection;
+    if (selection === state.site.anamorphicFamily) resetCurrentView();
+    else changeProductionSiteOption(siteAnamorphicFamilySelect, selection);
+  }
+  syncProductionUi();
+});
+productionUi.viewAuthoring.addEventListener('click', () => showProductionView('authoring'));
+productionUi.viewSite.addEventListener('click', () => showProductionView('site'));
+productionUi.viewPhoto.addEventListener('click', () => showProductionView('photo'));
+productionUi.projectOpen.addEventListener('click', () => {
+  showProductionView('authoring', { resetIfCurrent: false });
+  authoringProjectOpen.click();
+});
+productionUi.projectSave.addEventListener('click', () => {
+  showProductionView('authoring', { resetIfCurrent: false });
+  authoringProjectSave.click();
+});
+productionUi.projectSaveAs.addEventListener('click', () => {
+  showProductionView('authoring', { resetIfCurrent: false });
+  authoringProjectSaveAs.click();
+});
+for (const [productionButton, existingButton] of [
+  [productionUi.bakeCurrent, quickBakeCurrent],
+  [productionUi.sendDirect, quickSendDirect],
+  [productionUi.bakeMerged, quickBakeFullMerged],
+  [productionUi.saveMerged, fullMergeSaveButtons.find((button) => button.dataset.fullMergeExport === 'DIRECT')],
+  [productionUi.bakePlanar, planarMasterBake],
+  [productionUi.viewPlanar, planarMasterPreview],
+  [productionUi.savePlanar, planarMasterSave]
+]) {
+  productionButton.addEventListener('click', () => {
+    if (existingButton && !existingButton.disabled) existingButton.click();
+  });
+}
+productionUi.maskEdit.addEventListener('click', () => {
+  if (vectorMaskPanel.classList.contains('production-open') && authoringCameraInterlock.maskEditing) vectorMaskEdit.click();
+  vectorMaskPanel.classList.toggle('production-open');
+  if (vectorMaskPanel.classList.contains('production-open')) clampVectorMaskPanel();
+  syncProductionUi();
+});
 previewAuthoringButton.addEventListener('click', () => setPreviewMode(PREVIEW_MODES.AUTHORING));
 previewPhotoshopFinalButton.addEventListener('click', () => setPreviewMode(PREVIEW_MODES.PHOTOSHOP_FINAL));
 previewBackgroundGray.addEventListener('input', () => setPreviewBackgroundGray(previewBackgroundGray.value));
 siteWorldSelect.addEventListener('change', () => {
+  if (state.site.world === siteWorldSelect.value) { resetCurrentView(); return; }
   if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
   if (authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
   state.site.world = siteWorldSelect.value;
@@ -6097,6 +6464,7 @@ siteWorldSelect.addEventListener('change', () => {
   applySiteSurfaceSelection();
 });
 siteMappingSelect.addEventListener('change', () => {
+  if (state.site.mappingMode === siteMappingSelect.value) { resetCurrentView(); return; }
   if (authoringCameraInterlock.layoutEditing) exitLayoutEdit();
   if (authoringCameraInterlock.maskEditing) exitVectorMaskEdit();
   state.site.mappingMode = siteMappingSelect.value;
@@ -6110,6 +6478,7 @@ siteAnamorphicFamilySelect.addEventListener('change', () => {
     siteAnamorphicFamilySelect.value = state.site.anamorphicFamily;
     return;
   }
+  if (family.id === state.site.anamorphicFamily) { resetCurrentView(); return; }
   state.site.anamorphicFamily = family.id;
   authoringSession.activateFamily(family.familyId);
   syncSelectedAuthoringRuntime();
@@ -6135,10 +6504,91 @@ locationsToggleButton.addEventListener('click', () => {
 });
 returnToSiteButton.addEventListener('click', () => { void returnToSite(); });
 siteSceneSelect.addEventListener('change', () => {
+  if (state.site.scene === siteSceneSelect.value) { resetCurrentView(); return; }
   state.site.scene = siteSceneSelect.value;
   lockLegacyCamera();
   applySiteSurfaceSelection();
 });
+const viewSelectMenu = document.createElement('div');
+viewSelectMenu.className = 'view-select-menu';
+viewSelectMenu.id = 'view-select-menu';
+viewSelectMenu.setAttribute('role', 'listbox');
+viewSelectMenu.hidden = true;
+document.body.append(viewSelectMenu);
+let activeViewSelect = null;
+
+function closeViewSelectMenu({ restoreFocus = false } = {}) {
+  const select = activeViewSelect;
+  if (select) select.setAttribute('aria-expanded', 'false');
+  activeViewSelect = null;
+  viewSelectMenu.hidden = true;
+  viewSelectMenu.replaceChildren();
+  if (restoreFocus) select?.focus();
+}
+
+function openViewSelectMenu(select, { focusOption = false } = {}) {
+  if (activeViewSelect === select) { closeViewSelectMenu({ restoreFocus: true }); return; }
+  closeViewSelectMenu();
+  activeViewSelect = select;
+  select.setAttribute('aria-expanded', 'true');
+  viewSelectMenu.setAttribute('aria-label', select.getAttribute('aria-label') || 'View selection');
+  for (const option of select.options) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.setAttribute('role', 'option');
+    button.setAttribute('aria-selected', String(option.value === select.value));
+    button.dataset.value = option.value;
+    button.textContent = option.textContent;
+    button.disabled = option.disabled;
+    button.classList.toggle('selected', option.value === select.value);
+    button.addEventListener('click', () => {
+      const sameValue = select.value === option.value;
+      closeViewSelectMenu({ restoreFocus: true });
+      if (sameValue) resetCurrentView();
+      else {
+        select.value = option.value;
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+    viewSelectMenu.append(button);
+  }
+  const rect = select.getBoundingClientRect();
+  viewSelectMenu.style.left = `${Math.max(0, Math.min(rect.left, window.innerWidth - rect.width))}px`;
+  viewSelectMenu.style.minWidth = `${rect.width}px`;
+  viewSelectMenu.hidden = false;
+  const menuHeight = viewSelectMenu.getBoundingClientRect().height;
+  viewSelectMenu.style.top = `${rect.bottom + menuHeight <= window.innerHeight ? rect.bottom : Math.max(0, rect.top - menuHeight)}px`;
+  if (focusOption) viewSelectMenu.querySelector('.selected:not(:disabled)')?.focus();
+}
+
+for (const select of [productionUi.family, siteWorldSelect, siteMappingSelect, siteAnamorphicFamilySelect, siteSceneSelect]) {
+  select.setAttribute('aria-haspopup', 'listbox');
+  select.setAttribute('aria-expanded', 'false');
+  select.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    select.focus();
+    openViewSelectMenu(select);
+  });
+  select.addEventListener('mousedown', (event) => event.preventDefault());
+  select.addEventListener('click', (event) => event.preventDefault());
+  select.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    openViewSelectMenu(select, { focusOption: true });
+  });
+}
+document.addEventListener('pointerdown', (event) => {
+  if (activeViewSelect && !viewSelectMenu.contains(event.target) && event.target !== activeViewSelect) closeViewSelectMenu();
+}, true);
+viewSelectMenu.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') { event.preventDefault(); closeViewSelectMenu({ restoreFocus: true }); return; }
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  event.preventDefault();
+  const buttons = [...viewSelectMenu.querySelectorAll('button:not(:disabled)')];
+  const index = buttons.indexOf(document.activeElement);
+  buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length]?.focus();
+});
+window.addEventListener('resize', () => closeViewSelectMenu());
 legacyCameraLockButton.addEventListener('click', toggleLegacyCameraLock);
 anamorphicCameraResetButton.addEventListener('click', applyAnamorphicCalibrationCamera);
 anamorphicFovInput.addEventListener('change', () => applyAnamorphicFovValue(anamorphicFovInput.value));
@@ -9097,6 +9547,231 @@ window.runBlock4FStartupViewSmoke = async () => {
   };
 };
 
+window.runProductionUiPhaseASmoke = async () => {
+  const chooseOption = (select, value) => {
+    select.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+    const button = [...viewSelectMenu.querySelectorAll('button')].find((candidate) => candidate.dataset.value === value);
+    if (!button) throw new Error(`View option ${value} is unavailable.`);
+    button.click();
+  };
+  const initial = {
+    mode: document.body.dataset.uiMode,
+    activeView: state.activeView,
+    world: state.site.world,
+    mappingMode: state.site.mappingMode,
+    family: state.site.anamorphicFamily,
+    scene: state.site.scene,
+    cameraMode: state.site.anamorphicCameraMode,
+    legacyCameraLocked: state.site.legacyCameraLocked,
+    camera: snapshotSiteCameraRuntime(),
+    previewMode: state.previewMode,
+    revision: authoringSession.revision,
+    layerIds: authoringSession.layers.map((layer) => layer.id)
+  };
+  const initialProduction = {
+    workspace: productionWorkspace,
+    sitePreset: productionSitePreset,
+    authoringFamily: productionAuthoringFamily
+  };
+  const productionDefault = initial.mode === 'production' &&
+    getComputedStyle(document.querySelector('#production-navigation')).display !== 'none' &&
+    getComputedStyle(document.querySelector('#projection-poc')).display === 'none';
+
+  productionUi.modeToggle.click();
+  changeProductionSiteOption(siteWorldSelect, 'world3d');
+  changeProductionSiteOption(siteMappingSelect, 'anamorphic');
+  const developerReachable = document.body.dataset.uiMode === 'developer' &&
+    getComputedStyle(document.querySelector('#production-navigation')).display === 'none' &&
+    getComputedStyle(document.querySelector('.controls')).display !== 'none' &&
+    getComputedStyle(document.querySelector('#projection-poc')).display !== 'none';
+  const developerFovHidden = siteFovControl.hidden;
+  productionUi.modeToggle.click();
+
+  productionUi.viewAuthoring.click();
+  const viewOrder = [...document.querySelectorAll('.production-view-group button')].map((button) => button.id);
+  const orderedViews = JSON.stringify(viewOrder) === JSON.stringify([
+    'production-view-photo', 'production-view-site', 'production-view-authoring'
+  ]) && !document.querySelector('#production-view-final');
+  const authoringRoute = productionWorkspace === 'authoring' && isProjectionAuthoringContext() &&
+    productionUi.viewAuthoring.classList.contains('active') && productionUi.family.dataset.mode === 'authoring';
+  const authoringFovHidden = siteFovControl.hidden;
+  const quickMenuAvailable = !authoringQuickRail.hidden && getComputedStyle(authoringQuickRail).display !== 'none';
+  const frontCamera = snapshotSiteCameraRuntime();
+  cameraSite.position.x += 0.75;
+  resetViewButton.click();
+  const authoringReset = siteCameraRuntimeMatchesSnapshot(frontCamera);
+  chooseOption(productionUi.family, 'back');
+  const backRoute = productionWorkspace === 'authoring' && productionAuthoringFamily === 'back' &&
+    isProjectionAuthoringContext() && state.site.anamorphicFamily === 'back' &&
+    siteAnamorphicFamilySelect.value === 'back';
+  const backCamera = snapshotSiteCameraRuntime();
+  productionUi.modeToggle.click();
+  cameraSite.position.x += 0.75;
+  chooseOption(siteAnamorphicFamilySelect, 'back');
+  const developerFamilyReselectReset = siteCameraRuntimeMatchesSnapshot(backCamera);
+  productionUi.modeToggle.click();
+  const sharedControls = productionUi.bakeCurrent.disabled === quickBakeCurrent.disabled &&
+    productionUi.sendDirect.disabled === quickSendDirect.disabled &&
+    productionUi.bakeMerged.disabled === quickBakeFullMerged.disabled &&
+    productionUi.saveMerged.disabled === fullMergeSaveButtons.find((button) => button.dataset.fullMergeExport === 'DIRECT').disabled &&
+    productionUi.bakePlanar.disabled === planarMasterBake.disabled &&
+    productionUi.viewPlanar.disabled === planarMasterPreview.disabled &&
+    productionUi.savePlanar.disabled === planarMasterSave.disabled;
+  productionUi.viewSite.click();
+  const siteOptions = [...productionUi.family.options].map((option) => [option.value, option.disabled]);
+  const siteMenu = productionWorkspace === 'site' && productionUi.familyLabel.textContent === 'SITE VIEW' &&
+    JSON.stringify(siteOptions) === JSON.stringify([['free', false], ['front75f', false], ['back', false], ['camera', true]]);
+  chooseOption(productionUi.family, 'front75f');
+  const siteFront = productionWorkspace === 'site' && productionSitePreset === 'front75f' &&
+    state.site.world === 'world3d' && state.site.mappingMode === 'anamorphic' && state.site.anamorphicFamily === 'front75f';
+  const siteFovOnly = !siteFovControl.hidden && !siteFovSlider.disabled && authoringFovHidden;
+  const frontFovBaseline = cameraSite.fov;
+  const frontFovPose = snapshotSiteCameraRuntime();
+  siteFovSlider.value = String(sliderFromFocal35mm(100));
+  siteFovSlider.dispatchEvent(new Event('input', { bubbles: true }));
+  const frontFovChanged = Math.abs(cameraSite.fov - verticalFovFromFocal35mm(
+    focal35mmFromSlider(sliderFromFocal35mm(100)), frontFovPose.aspect)) < 1e-9 &&
+    cameraSite.position.distanceTo(frontFovPose.position) < 1e-9 &&
+    cameraSite.quaternion.angleTo(frontFovPose.quaternion) < 1e-9 &&
+    controlsSite.target.distanceTo(frontFovPose.target) < 1e-9 &&
+    state.site.anamorphicCameraMode === 'FOV_ADJUSTED';
+  siteFovResetButton.click();
+  const frontFovReset = Math.abs(cameraSite.fov - frontFovBaseline) < 1e-9 &&
+    state.site.anamorphicCameraMode === 'CALIBRATION' &&
+    cameraSite.position.distanceTo(frontFovPose.position) < 1e-9;
+  chooseOption(productionUi.family, 'back');
+  const siteBack = productionWorkspace === 'site' && productionSitePreset === 'back' &&
+    state.site.world === 'world3d' && state.site.mappingMode === 'anamorphic' && state.site.anamorphicFamily === 'back';
+  const backFovBaseline = cameraSite.fov;
+  siteFovSlider.value = String(sliderFromFocal35mm(250));
+  siteFovSlider.dispatchEvent(new Event('input', { bubbles: true }));
+  const backFovChanged = !siteFovControl.hidden && Math.abs(cameraSite.fov -
+    verticalFovFromFocal35mm(focal35mmFromSlider(sliderFromFocal35mm(250)), cameraSite.aspect)) < 1e-9;
+  siteFovResetButton.click();
+  const backFovReset = Math.abs(cameraSite.fov - backFovBaseline) < 1e-9 &&
+    state.site.anamorphicCameraMode === 'CALIBRATION';
+  chooseOption(productionUi.family, 'free');
+  const siteRoute = productionWorkspace === 'site' && productionSitePreset === 'free' &&
+    state.site.world === 'world3d' && state.site.mappingMode === 'normal' && productionUi.viewSite.classList.contains('active');
+  const frontSweetCamera = SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes.find((scene) => scene.id === 'frontSweet').camera;
+  const [freePitch, freeYaw] = frontSweetCamera.eulerXyzDegrees;
+  const expectedFreeForward = new THREE.Vector3(0, 0, -1).applyQuaternion(
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(
+      THREE.MathUtils.degToRad(freePitch), THREE.MathUtils.degToRad(freeYaw), 0, 'XYZ'
+    ))
+  );
+  const actualFreeForward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraSite.quaternion);
+  const levelUp = new THREE.Vector3(0, 1, 0).addScaledVector(actualFreeForward,
+    -actualFreeForward.y).normalize();
+  const actualFreeUp = new THREE.Vector3(0, 1, 0).applyQuaternion(cameraSite.quaternion);
+  const expectedFreePosition = new THREE.Vector3(...frontSweetCamera.position).add(new THREE.Vector3(0, 0.5, 0));
+  const siteFreeBaseline = cameraSite.position.distanceTo(expectedFreePosition) < 1e-9 &&
+    Math.abs(cameraSite.position.y - (frontSweetCamera.position[1] + 0.5)) < 1e-9 &&
+    Math.abs(cameraSite.fov - frontSweetCamera.fov) < 1e-9 &&
+    actualFreeForward.angleTo(expectedFreeForward) < 1e-7 && actualFreeUp.angleTo(levelUp) < 1e-7;
+  const freeFovPose = snapshotSiteCameraRuntime();
+  const initialFocal35mm = focal35mmFromVerticalFov(frontSweetCamera.fov, cameraSite.aspect);
+  const freeFovReadout = Math.abs(focal35mmFromSlider(siteFovSlider.value) - initialFocal35mm) < 0.1 &&
+    siteFovValue.textContent.includes(`${initialFocal35mm.toFixed(1)} mm`);
+  siteFovSlider.value = String(sliderFromFocal35mm(35));
+  siteFovSlider.dispatchEvent(new Event('input', { bubbles: true }));
+  const freeFovChanged = Math.abs(cameraSite.fov - verticalFovFromFocal35mm(
+    focal35mmFromSlider(sliderFromFocal35mm(35)), freeFovPose.aspect)) < 1e-9 &&
+    cameraSite.position.distanceTo(freeFovPose.position) < 1e-9 &&
+    cameraSite.quaternion.angleTo(freeFovPose.quaternion) < 1e-9 &&
+    controlsSite.target.distanceTo(freeFovPose.target) < 1e-9;
+  siteFovSlider.value = '0';
+  siteFovSlider.dispatchEvent(new Event('input', { bubbles: true }));
+  const wideFov = cameraSite.fov;
+  siteFovSlider.value = '1000';
+  siteFovSlider.dispatchEvent(new Event('input', { bubbles: true }));
+  const teleFov = cameraSite.fov;
+  const siteFovRange = Math.abs(wideFov - verticalFovFromFocal35mm(20, freeFovPose.aspect)) < 1e-9 &&
+    Math.abs(teleFov - verticalFovFromFocal35mm(400, freeFovPose.aspect)) < 1e-9 && wideFov > teleFov;
+  siteFovResetButton.click();
+  const freeFovReset = siteCameraRuntimeMatchesSnapshot(freeFovPose);
+  const siteCamera = snapshotSiteCameraRuntime();
+  cameraSite.position.x += 0.75;
+  chooseOption(productionUi.family, 'free');
+  const siteReselectReset = siteCameraRuntimeMatchesSnapshot(siteCamera);
+  productionUi.viewPhoto.click();
+  const photoFovHidden = siteFovControl.hidden;
+  const photoOptions = [...productionUi.family.options].map((option) => option.value);
+  const photoMenu = productionWorkspace === 'photo' && productionUi.familyLabel.textContent === 'PHOTO LOCATION' &&
+    JSON.stringify(photoOptions) === JSON.stringify(['front', 'frontSweet', 'back', 'night']);
+  const photoScenes = [];
+  for (const scene of photoOptions) {
+    chooseOption(productionUi.family, scene);
+    if (state.photo.activationPromise) await state.photo.activationPromise;
+    photoScenes.push(isPhotoSceneContext() && state.site.scene === scene && siteSceneSelect.value === scene &&
+      isPhotoViewportActive() && !controlsSite.enabled);
+  }
+  state.site.legacyCameraLocked = false;
+  syncSiteCameraControls();
+  const photoNavigationBlocked = !controlsSite.enabled;
+  lockLegacyCamera();
+  const photoRoute = photoMenu && photoScenes.every(Boolean) && productionUi.viewPhoto.classList.contains('active');
+  const photoCamera = snapshotSiteCameraRuntime();
+  cameraSite.position.x += 0.75;
+  productionUi.viewPhoto.click();
+  const photoReselectReset = isPhotoSceneContext() && siteCameraRuntimeMatchesSnapshot(photoCamera);
+  cameraSite.position.x += 0.75;
+  productionUi.family.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+  const noResetOnOpen = !siteCameraRuntimeMatchesSnapshot(photoCamera);
+  viewSelectMenu.querySelector('.selected')?.click();
+  const productionSceneReselectReset = isPhotoSceneContext() && siteCameraRuntimeMatchesSnapshot(photoCamera);
+  productionUi.modeToggle.click();
+  cameraSite.position.x += 0.75;
+  siteSceneSelect.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+  const developerNoResetOnOpen = !siteCameraRuntimeMatchesSnapshot(photoCamera);
+  viewSelectMenu.querySelector('.selected')?.click();
+  const developerSceneReselectReset = isPhotoSceneContext() && siteCameraRuntimeMatchesSnapshot(photoCamera);
+  productionUi.modeToggle.click();
+  const simpleImageLoadingPreserved = Boolean(sourceSelect && document.querySelector('#reload-button') &&
+    state.manifest?.assets?.length &&
+    state.manifest.assets.every((asset) => [...sourceSelect.options].some((option) => option.value === asset.id)));
+
+  productionWorkspace = initialProduction.workspace;
+  productionSitePreset = initialProduction.sitePreset;
+  productionAuthoringFamily = initialProduction.authoringFamily;
+  changeProductionSiteOption(siteWorldSelect, initial.world);
+  changeProductionSiteOption(siteMappingSelect, initial.mappingMode);
+  changeProductionSiteOption(siteAnamorphicFamilySelect, initial.family);
+  state.site.scene = initial.scene;
+  siteSceneSelect.value = initial.scene;
+  state.site.anamorphicCameraMode = initial.cameraMode;
+  state.site.legacyCameraLocked = initial.legacyCameraLocked;
+  setActiveView(initial.activeView);
+  setPreviewMode(initial.previewMode);
+  setUiMode(initial.mode);
+  restoreSiteCameraRuntime(initial.camera);
+  syncSiteCameraControls();
+  render();
+  const statePreserved = state.activeView === initial.activeView && state.site.world === initial.world &&
+    state.site.mappingMode === initial.mappingMode && state.site.anamorphicFamily === initial.family &&
+    state.site.scene === initial.scene && state.site.anamorphicCameraMode === initial.cameraMode &&
+    state.site.legacyCameraLocked === initial.legacyCameraLocked && siteCameraRuntimeMatchesSnapshot(initial.camera) &&
+    state.previewMode === initial.previewMode && authoringSession.revision === initial.revision &&
+    JSON.stringify(authoringSession.layers.map((layer) => layer.id)) === JSON.stringify(initial.layerIds);
+  return {
+    productionDefault, developerReachable, developerFovHidden, orderedViews, authoringRoute, quickMenuAvailable,
+    authoringReset, backRoute, developerFamilyReselectReset, siteMenu, siteFront, siteBack, siteRoute,
+    siteFovOnly, frontFovChanged, frontFovReset, backFovChanged, backFovReset,
+    siteFreeBaseline, freeFovReadout, freeFovChanged, siteFovRange,
+    freeFovReset, siteReselectReset, photoFovHidden, photoMenu, photoScenes, photoNavigationBlocked, photoRoute,
+    photoReselectReset, noResetOnOpen, productionSceneReselectReset,
+    developerNoResetOnOpen, developerSceneReselectReset, simpleImageLoadingPreserved, sharedControls, statePreserved,
+    technicalPass: productionDefault && developerReachable && developerFovHidden && authoringRoute && backRoute && siteRoute &&
+      photoRoute && photoNavigationBlocked && sharedControls && statePreserved && orderedViews && quickMenuAvailable &&
+      siteMenu && siteFront && siteBack && siteFovOnly && frontFovChanged && frontFovReset &&
+      backFovChanged && backFovReset &&
+      siteFreeBaseline && freeFovReadout && freeFovChanged && siteFovRange && freeFovReset && photoFovHidden &&
+      authoringReset && developerFamilyReselectReset && siteReselectReset && photoReselectReset &&
+      noResetOnOpen && productionSceneReselectReset && developerNoResetOnOpen && developerSceneReselectReset &&
+      simpleImageLoadingPreserved
+  };
+};
+
 // Development-only Planar-A evidence hook. It does not modify authoring state,
 // Full Merge results, UI controls, project data, or Photoshop targets.
 window.runPlanarAFoundationSmoke = async () => {
@@ -9342,6 +10017,7 @@ async function start() {
     loadEnvironmentScene(),
     loadAsset(state.manifest.primaryAssetId)
   ]);
+  setUiMode('production');
   setActiveView(DEFAULT_ACTIVE_VIEW);
 }
 

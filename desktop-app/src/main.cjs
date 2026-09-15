@@ -247,6 +247,7 @@ async function runSmokeTest(window) {
     await waitForDiagnostics(window);
     await waitForSiteReady(window);
     await waitForEnvironmentReady(window);
+    const productionUi = await window.webContents.executeJavaScript('window.runProductionUiPhaseASmoke()', true);
     const startupView = await window.webContents.executeJavaScript('window.runBlock4FStartupViewSmoke()', true);
     const runtime = await window.webContents.executeJavaScript('window.runBlock0SmokeActions()', true);
     const cameraEditor = await window.webContents.executeJavaScript('window.runBlock4BCameraEditorSmoke()', true);
@@ -337,6 +338,7 @@ async function runSmokeTest(window) {
     const broker = liveLinkBroker?.getSnapshot() || null;
     const allActionsPass = Object.values(runtime.actions).every(Boolean);
     const technicalPass =
+      productionUi.technicalPass === true &&
       startupView.pass === true &&
       runtime.fullResolution &&
       runtime.hardwareRendering &&
@@ -490,6 +492,7 @@ async function runSmokeTest(window) {
       loopbackRequests,
       liveLink: { config: liveLinkConfig, broker, events: liveLinkEvents },
       criticalErrors,
+      productionUi,
       startupView,
       runtime,
       cameraEditor,

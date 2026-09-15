@@ -225,7 +225,7 @@ assert(/id="legacy-camera-lock-button"[^>]*aria-pressed="true"[^>]*hidden/.test(
 assert(/legacyCameraLocked:\s*true/.test(rendererSource));
 assert(/enteringLegacy[\s\S]*state\.site\.legacyCameraLocked = true/.test(rendererSource));
 assert(/siteSceneSelect\.addEventListener\('change',[\s\S]*lockLegacyCamera\(\)/.test(rendererSource));
-assert(/!legacyContext \|\| !state\.site\.legacyCameraLocked/.test(rendererSource));
+assert(/controlsSite\.enabled = state\.activeView === 'site-3d'[\s\S]*!legacyContext &&[\s\S]*!authoringLocked/.test(rendererSource));
 const pointerRequirementsSource = rendererSource.slice(
   rendererSource.indexOf('function pointerRequirementsSatisfied()'),
   rendererSource.indexOf('function updatePointerControls()')
