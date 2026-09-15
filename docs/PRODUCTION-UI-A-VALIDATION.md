@@ -26,6 +26,10 @@ Electron GPU smoke는 기본 sandbox에서 GPU 프로세스가 시작되지 않�
 
 FREE VIEW 높이/FOV 보정 후 새 smoke 항목 `siteFovOnly`, `frontFovChanged`, `frontFovReset`, `backFovChanged`, `backFovReset`, `freeFovReadout`, `freeFovChanged`, `siteFovRange`, `freeFovReset`, `photoFovHidden`, `developerFovHidden`이 모두 true다. `siteFreeBaseline`은 FRONT SWEET 원본 x/z·전방 방향·FOV와 **y+0.5**를 확인한다. 슬라이더 값은 풀프레임 가로 36mm 기준으로 수직 FOV와 camera aspect에서 환산하며, 20/400mm 양 끝값과 FOV만 바꿀 때 위치·quaternion·orbit target 유지도 비교했다. [Electron screenshot](../desktop-app/.runtime/dev-runtime.png)은 오른쪽 아래 세로 슬라이더와 Reset FOV 버튼의 배치 참고다. FREE VIEW 높이와 FOV 조작의 실사용 결과는 사용자가 의도대로 동작한다고 확인했다.
 
+2026-09-15 SITE 3D 후속 보정: Production SITE VIEW 및 Developer anamorphic family 표시를 `ANAM_FRONT 75F` / `ANAM_BACK`으로 바꾸고 ID는 유지했다. `npm run test:static`은 PASS다. 새 [Electron report](../desktop-app/.runtime/dev-runtime.json)의 `productionUi.technicalPass=true`와 `siteMenu=true`는 접두어 선택 및 기존 작업공간 전환을 확인한다. `anamorphic75f`와 `anamorphicBack`은 각각 free orbit 시작 위치가 승인 calibration 위치의 y+0.5, target과 FOV는 유지, up은 world Y, 화면 roll은 0이며 canvas aspect 제한이 풀린 것으로 보고한다. RESET 후 calibration quaternion·FOV·aspect 검사는 기존대로 true다. 먼저 실행한 전체 검사는 별도 Electron의 `127.0.0.1:34100` Live Link 포트 점유로 `EADDRINUSE`가 발생했다. 사용자가 그 창을 종료한 뒤 같은 smoke를 재실행해 **`BLOCK0_TECHNICAL_PASS=true`**를 얻었다. 실제 사용자 시점·orbit 화면 확인은 별도다.
+
+이번 SITE VIEW 표시·free orbit 시작점 보정은 **턴 범위 완료 / 기술 검증 PASS**다. 사용자의 턴 종료 요청을 Phase A 전체 제작 흐름의 PASS나 새 카메라 시점의 별도 시각 검수로 해석하지 않는다.
+
 Native `<select>`는 현재 항목을 다시 고를 때 `change`를 내지 않는다. 관련 Production/Developer 드롭다운은 기존 `<select>` 값을 그대로 유지하면서 선택용 메뉴에서 실제 옵션 클릭을 받는다. **열기만 할 때는 카메라를 건드리지 않고**, 현재 옵션을 다시 선택했을 때만 RESET VIEW를 실행한다. 다른 옵션은 기존 `<select>`에 `change`를 전달한다. 키보드 Enter/Space, Escape, 방향키도 메뉴에서 처리한다. 이 과정은 레이어, Bake 결과, 프로젝트 데이터를 바꾸지 않는다.
 
 ## 실제 사용자 확인 — 미완료

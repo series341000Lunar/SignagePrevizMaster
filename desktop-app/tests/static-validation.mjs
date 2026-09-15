@@ -239,9 +239,11 @@ assert(/calibrationStatus:\s*'USER_VALIDATED'/.test(anamorphicCalibrationSource)
   /validationDate:\s*'2026-09-11'/.test(anamorphicCalibrationSource),
   'The 75F calibration profile must record the explicit user visual validation.');
 assert(/function isAnamorphicCalibrationFramingActive/.test(rendererSource) &&
-  /freePreviewFovDefault/.test(rendererSource) &&
+  /freePreviewFovPreserved/.test(rendererSource) &&
+  /freePreviewPositionNearCalibration/.test(rendererSource) &&
+  /freePreviewRollFree/.test(rendererSource) &&
   /freePreviewCanvasUnrestricted/.test(rendererSource),
-  'Leaving 75F calibration must restore default camera framing and release the canvas aspect restriction.');
+  'Leaving 75F calibration must preserve a nearby camera pose without roll and release the canvas aspect restriction.');
 assert(/ANAMORPHIC_CALIBRATION_MATTE_COLOR\s*=\s*0x20242c/.test(rendererSource) &&
   /anamorphicCalibrationActive\s*\?\s*ANAMORPHIC_CALIBRATION_MATTE_COLOR\s*:\s*siteClearColor/.test(rendererSource) &&
   /renderer\.setScissorTest\(true\);[\s\S]*renderer\.setClearColor\(siteClearColor, 1\);[\s\S]*renderer\.clear\(true, true, true\);[\s\S]*renderer\.render\(sceneSite, cameraSite\)/.test(rendererSource),

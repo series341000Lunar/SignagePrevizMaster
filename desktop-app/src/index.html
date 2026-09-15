@@ -43,6 +43,15 @@
           <option value="back">BACK</option>
         </select>
       </div>
+      <div id="production-preview-source-group" class="production-nav-group">
+        <label for="production-preview-source">PREVIEW SOURCE</label>
+        <select id="production-preview-source" aria-label="Preview source">
+          <option value="IMAGE">IMAGE</option>
+          <option value="AUTHORING">AUTHORING</option>
+          <option value="PS_PREVIEW">PS PREVIEW</option>
+        </select>
+        <span id="production-preview-source-state" role="status">IMAGE · READY</span>
+      </div>
       <div class="production-nav-group production-view-group" aria-label="View purpose">
         <span>VIEW</span>
         <button id="production-view-photo" type="button">PHOTO</button>
@@ -73,8 +82,8 @@
       <label id="site-anamorphic-family-control" class="site-control" hidden>
         Family
         <select id="site-anamorphic-family-select" aria-label="Anamorphic family">
-          <option value="front75f">FRONT 75F · 3000 × 3840</option>
-          <option value="back">BACK · 2100 × 3840</option>
+          <option value="front75f">ANAM_FRONT 75F · 3000 × 3840</option>
+          <option value="back">ANAM_BACK · 2100 × 3840</option>
           <option value="ilmin" disabled>ILMIN · NOT AVAILABLE</option>
           <option value="front90f" disabled>FRONT 90F · NOT AVAILABLE</option>
         </select>
@@ -217,6 +226,17 @@
         <section id="production-intro" class="production-card">
           <h2>WORKSPACE</h2>
           <p id="production-context">Choose FRONT 75F or BACK, then open AUTHORING to work with layers.</p>
+          <div id="production-image-controls">
+            <label for="production-image-asset">PREVIEW IMAGE · temporary, no Authoring Layer</label>
+            <div class="production-image-bank-selection">
+              <select id="production-image-asset" aria-label="Preview image asset"></select>
+              <button id="production-image-delete-button" type="button" aria-label="Delete selected bank image" title="Delete selected bank image" disabled><span aria-hidden="true">🗑</span></button>
+            </div>
+            <button id="production-image-file-button" type="button">OPEN PNG/JPG...</button>
+            <input id="production-image-file-input" type="file" accept="image/png,image/jpeg,.png,.jpg,.jpeg" hidden>
+            <span id="production-image-name"></span>
+            <span id="production-image-bank-count">BANK 0 / 5</span>
+          </div>
         </section>
         <section id="camera-editor" class="camera-editor" aria-labelledby="camera-editor-title" hidden>
           <div class="camera-editor-heading">

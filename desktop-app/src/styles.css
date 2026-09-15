@@ -167,6 +167,16 @@ header p {
 #production-project-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #production-project-state { color: #e8c783; font-size: 11px; }
 .production-view-group button.active { border-color: #77d9ac; background: #234838; }
+#production-preview-source-state { color: #a9dfcb; font-size: 11px; }
+#production-preview-source-state.unavailable { color: #efc66b; }
+#production-image-controls { display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; margin-top: 12px; min-width: 0; }
+#production-image-controls[hidden], #production-preview-source-group[hidden] { display: none; }
+#production-image-controls label, #production-image-name, #production-image-bank-count { color: #a9bac8; font-size: 11px; }
+.production-image-bank-selection { display: flex; gap: 7px; min-width: 0; max-width: 100%; }
+#production-image-asset { min-width: 0; width: 0; padding: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #253344; color: #eef2f7; border: 1px solid #52657a; border-radius: 5px; }
+.production-image-bank-selection #production-image-asset { flex: 1 1 0; }
+#production-image-delete-button { flex: 0 0 38px; width: 38px; margin: 0; font-size: 15px; }
+#production-image-name { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .view-select-menu {
   position: fixed;

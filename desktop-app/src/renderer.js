@@ -89,6 +89,7 @@ import { PREVIEW_MODES, previewSourceDecision } from './preview-mode.js';
 import { DEFAULT_PREVIEW_BACKGROUND_GRAY, clampPreviewBackgroundInput } from './preview-background.js';
 
 const previewBackgroundUniform = { value: DEFAULT_PREVIEW_BACKGROUND_GRAY };
+const simpleImageBlackUniform = { value: 0 };
 
 const canvas = document.querySelector('#three-canvas');
 const viewer = document.querySelector('#viewer');
@@ -282,6 +283,16 @@ const productionUi = {
   projectSaveAs: document.querySelector('#production-project-save-as'),
   familyLabel: document.querySelector('#production-family-label'),
   family: document.querySelector('#production-family'),
+  previewSourceGroup: document.querySelector('#production-preview-source-group'),
+  previewSource: document.querySelector('#production-preview-source'),
+  previewSourceState: document.querySelector('#production-preview-source-state'),
+  imageControls: document.querySelector('#production-image-controls'),
+  imageAsset: document.querySelector('#production-image-asset'),
+  imageDeleteButton: document.querySelector('#production-image-delete-button'),
+  imageFileButton: document.querySelector('#production-image-file-button'),
+  imageFileInput: document.querySelector('#production-image-file-input'),
+  imageName: document.querySelector('#production-image-name'),
+  imageBankCount: document.querySelector('#production-image-bank-count'),
   viewAuthoring: document.querySelector('#production-view-authoring'),
   viewSite: document.querySelector('#production-view-site'),
   viewPhoto: document.querySelector('#production-view-photo'),
@@ -305,6 +316,19 @@ const productionUi = {
 let productionWorkspace = 'site';
 let productionSitePreset = 'free';
 let productionAuthoringFamily = 'front75f';
+const productionPreviewSource = { photo: 'IMAGE', site: 'IMAGE' };
+const PREVIEW_IMAGE_BANK_LIMIT = 5;
+const productionPreviewCache = {
+  imageTexture: null,
+  imageName: '',
+  imageSelection: null,
+  imageBank: [],
+  nextImageBankId: 1,
+  bankLoading: false,
+  photoshopTexture: null,
+  photoshopFrame: null,
+  lastValid: { photo: null, site: null }
+};
 const planarPreviewOverlay = document.querySelector('#planar-preview-overlay');
 const planarPreviewImage = document.querySelector('#planar-preview-image');
 const planarPreviewDetails = document.querySelector('#planar-preview-details');
@@ -1075,7 +1099,8 @@ function disposeCurrentTexture() {
       binding.mesh.material.needsUpdate = true;
     }
   }
-  if (state.texture) state.texture.dispose();
+  if (state.texture && state.texture !== productionPreviewCache.imageTexture &&
+      state.texture !== productionPreviewCache.photoshopTexture) state.texture.dispose();
   state.mesh = null;
   state.plane3d = null;
   state.plane3dFrame = null;
@@ -1106,6 +1131,7 @@ function createGeometry(width, height, flipVerticalUv) {
 function installTexture(texture, width, height, flipVerticalUv) {
   const geometry2d = createGeometry(width, height, flipVerticalUv);
   const material2d = new THREE.MeshBasicMaterial({ map: texture, toneMapped: false });
+  installSimpleImageBlackShader(material2d);
   const mesh = new THREE.Mesh(geometry2d, material2d);
   scene.add(mesh);
 
@@ -1117,6 +1143,7 @@ function installTexture(texture, width, height, flipVerticalUv) {
     side: THREE.DoubleSide,
     toneMapped: false
   });
+  installSimpleImageBlackShader(material3d);
   const plane3d = new THREE.Mesh(geometry3d, material3d);
   plane3d.name = 'BLOCK_3A_SIGNAGE_PLANE';
   scene3d.add(plane3d);
@@ -1234,15 +1261,26 @@ function currentPreviewDecision() {
   });
 }
 
+function isProductionPreviewRoutingActive() {
+  if (document.body.dataset.uiMode !== 'production' || state.activeView !== 'site-3d') return false;
+  if (productionWorkspace === 'photo') return state.site.world === 'legacy2d' && state.site.mappingMode === 'normal';
+  if (productionWorkspace !== 'site' || state.site.world !== 'world3d') return false;
+  return productionSitePreset === 'free'
+    ? state.site.mappingMode === 'normal'
+    : state.site.mappingMode === 'anamorphic' && state.site.anamorphicFamily === productionSitePreset;
+}
+
 function installPreviewBackgroundShader(material) {
   material.onBeforeCompile = (shader) => {
     shader.uniforms.previewBackgroundGray = previewBackgroundUniform;
+    shader.uniforms.simpleImageBlack = simpleImageBlackUniform;
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform float previewBackgroundGray;')
+      .replace('#include <common>', '#include <common>\nuniform float previewBackgroundGray;\nuniform float simpleImageBlack;')
       .replace('#include <map_fragment>', `#include <map_fragment>
         #ifdef USE_MAP
           vec4 previewSrgb = sRGBTransferOETF( diffuseColor );
-          previewSrgb.rgb = mix( vec3( previewBackgroundGray ), previewSrgb.rgb, diffuseColor.a );
+          float matteGray = mix( previewBackgroundGray, 0.0, simpleImageBlack );
+          previewSrgb.rgb = mix( vec3( matteGray ), previewSrgb.rgb, diffuseColor.a );
           diffuseColor.rgb = sRGBTransferEOTF( previewSrgb ).rgb;
           diffuseColor.a = 1.0;
         #endif`);
@@ -1250,9 +1288,29 @@ function installPreviewBackgroundShader(material) {
   material.customProgramCacheKey = () => 'project-preview-gray-v1';
 }
 
+function installSimpleImageBlackShader(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.simpleImageBlack = simpleImageBlackUniform;
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float simpleImageBlack;')
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        #ifdef USE_MAP
+          if ( simpleImageBlack > 0.5 ) {
+            vec4 simpleSrgb = sRGBTransferOETF( diffuseColor );
+            simpleSrgb.rgb *= diffuseColor.a;
+            diffuseColor.rgb = sRGBTransferEOTF( simpleSrgb ).rgb;
+            diffuseColor.a = 1.0;
+          }
+        #endif`);
+  };
+  material.customProgramCacheKey = () => 'simple-image-black-v1';
+}
+
 function applySitePreviewSource(decision) {
   const previewContext = isAnamorphicCalibrationContext();
-  const desiredMap = previewContext
+  const production = isProductionPreviewRoutingActive();
+  const selected = production ? productionPreviewDecision() : null;
+  const desiredMap = production ? selected.texture : previewContext
     ? (decision.source === 'PHOTOSHOP_FINAL' ? state.texture : null)
     : state.texture;
   for (const binding of state.site.activeBindings) {
@@ -1263,11 +1321,51 @@ function applySitePreviewSource(decision) {
       material.needsUpdate = true;
     }
     if (binding.mesh.userData.previewBackgroundSurface) {
-      const gray = previewContext && decision.source === 'AUTHORING'
+      const gray = previewContext && !production && decision.source === 'AUTHORING'
         ? state.previewBackgroundGray : 1;
       material.color.setRGB(gray, gray, gray, THREE.SRGBColorSpace);
     }
   }
+  return desiredMap;
+}
+
+function productionPreviewDecision() {
+  const workspace = productionWorkspace;
+  const source = productionPreviewSource[workspace];
+  const lastValid = productionPreviewCache.lastValid[workspace];
+  if (source === 'IMAGE') {
+    const texture = productionPreviewCache.imageTexture;
+    if (texture) productionPreviewCache.lastValid[workspace] = texture;
+    return { source, status: texture ? 'READY' : 'NOT READY', texture: texture ?? lastValid };
+  }
+  if (source === 'PS_PREVIEW') {
+    const frame = productionPreviewCache.photoshopFrame;
+    const texture = productionPreviewCache.photoshopTexture;
+    const connected = state.link.rendererHandshake && state.link.photoshopConnected;
+    const receivedWidth = frame?.receivedWidth ?? frame?.width;
+    const receivedHeight = frame?.receivedHeight ?? frame?.height;
+    const expected = isAnamorphicCalibrationContext() ? currentProjectionBakeProfile()?.workingResolution : null;
+    const valid = Boolean(connected && texture && frame &&
+      Number.isSafeInteger(receivedWidth) && Number.isSafeInteger(receivedHeight) &&
+      receivedWidth > 0 && receivedHeight > 0 &&
+      frame.documentWidth === receivedWidth && frame.documentHeight === receivedHeight &&
+      texture.image?.width === receivedWidth && texture.image?.height === receivedHeight &&
+      (!expected || (expected.width === receivedWidth && expected.height === receivedHeight)));
+    if (valid) productionPreviewCache.lastValid[workspace] = texture;
+    return { source, status: valid ? 'READY' : !connected ? 'UNAVAILABLE' :
+      expected && frame && (expected.width !== receivedWidth || expected.height !== receivedHeight)
+        ? 'SIZE MISMATCH' : 'UNAVAILABLE', texture: valid ? texture : lastValid ?? productionPreviewCache.imageTexture };
+  }
+  const familyId = workspace === 'photo'
+    ? (state.site.scene === 'back' || state.site.scene === 'night'
+      ? ANAMORPHIC_FAMILY_IDS.BACK : ANAMORPHIC_FAMILY_IDS.FRONT_75F)
+    : productionSitePreset === 'back' ? ANAMORPHIC_FAMILY_IDS.BACK : ANAMORPHIC_FAMILY_IDS.FRONT_75F;
+  const merged = authoringSession.mergedState(familyId);
+  const planar = planarWorkflow?.readyOutput(familyId, merged.revision);
+  const status = merged.dirty ? 'OUTDATED' : planar ? 'UNAVAILABLE' : 'NOT READY';
+  // Planar output is only exposed in the existing 2D overlay. Mapping it to
+  // the PHOTO/SITE physical meshes belongs to PREVIEW-SOURCE-B.
+  return { source, status, texture: lastValid ?? productionPreviewCache.imageTexture };
 }
 
 function syncPreviewModeUi(decision) {
@@ -1668,6 +1766,7 @@ function syncAuthoringOverlay() {
   const selectedLayer = authoringSession.selectedLayer;
   const runtimeSource = syncSelectedAuthoringRuntime();
   const visible = Boolean(state.previewMode === PREVIEW_MODES.AUTHORING && authoringSession.layers.length && isProjectionAuthoringContext() &&
+    !isProductionPreviewRoutingActive() &&
     state.site.anamorphicCameraMode === 'CALIBRATION');
   authoringOverlay.hidden = !visible;
   authoringOverlay.classList.toggle('editing', visible && authoringCameraInterlock.layoutEditing);
@@ -1928,7 +2027,7 @@ function syncProductionSceneSelector() {
     const choices = mode === 'photo'
       ? SITE_SCENE_PROFILE.worlds.legacy2d.normalScenes.map((scene) => [scene.id, scene.label.replaceAll('_', ' ').toUpperCase(), false])
       : mode === 'site'
-        ? [['free', 'FREE VIEW', false], ['front75f', 'FRONT 75F', false], ['back', 'BACK', false], ['camera', 'CAMERA · FUTURE', true]]
+        ? [['free', 'FREE VIEW', false], ['front75f', 'ANAM_FRONT 75F', false], ['back', 'ANAM_BACK', false], ['camera', 'CAMERA · FUTURE', true]]
         : [['front75f', 'FRONT 75F', false], ['back', 'BACK', false]];
     productionUi.family.replaceChildren(...choices.map(([value, label, disabled]) => {
       const option = new Option(label, value);
@@ -1957,6 +2056,21 @@ function syncProductionUi() {
     directTarget.documentMode === 'RGB' && directTarget.documentDepth === 8);
 
   productionUi.projectName.textContent = project.projectName || 'UNSAVED';
+  productionUi.previewSourceGroup.hidden = productionWorkspace === 'authoring';
+  productionUi.previewSource.value = productionPreviewSource[productionWorkspace] ?? 'IMAGE';
+  productionUi.imageControls.hidden = productionWorkspace === 'authoring' ||
+    productionPreviewSource[productionWorkspace] !== 'IMAGE';
+  productionUi.imageName.textContent = productionPreviewCache.imageName || 'No preview image';
+  productionUi.imageName.title = productionPreviewCache.imageName;
+  syncProductionImageBankUi();
+  if (productionWorkspace !== 'authoring') {
+    const preview = productionPreviewDecision();
+    productionUi.previewSourceState.textContent = preview.source === 'PS_PREVIEW'
+      ? `PS PREVIEW · ${preview.status}` : preview.source === 'AUTHORING'
+        ? `AUTHORING PREVIEW · ${preview.status}${preview.status === 'UNAVAILABLE' ? ' · physical display pending' : ''}`
+        : `IMAGE · ${preview.status}`;
+    productionUi.previewSourceState.classList.toggle('unavailable', preview.status !== 'READY');
+  }
   const changedSinceSave = project.savedRevision !== authoringSession.revision ||
     project.savedPreviewGray !== state.previewBackgroundGray;
   productionUi.projectState.textContent = project.busy ? 'WORKING' : project.error ? 'ERROR' :
@@ -1985,7 +2099,7 @@ function syncProductionUi() {
   productionUi.context.textContent = productionWorkspace === 'photo'
     ? 'Photo inspection is active. Choose AUTHORING to edit the selected family.'
     : productionWorkspace === 'site'
-      ? 'Choose FREE VIEW, FRONT 75F, or BACK to inspect the site.'
+      ? 'Choose FREE VIEW, ANAM_FRONT 75F, or ANAM_BACK to inspect the site.'
       : 'Choose FRONT 75F or BACK to work with layers and output.';
   productionUi.maskEntry.hidden = !available;
   productionUi.output.hidden = !available;
@@ -3646,7 +3760,14 @@ function markAnamorphicFreePreview() {
   if (!isAnamorphicCalibrationContext() || state.site.anamorphicCameraMode === 'FREE_PREVIEW') return;
   state.site.anamorphicCameraMode = 'FREE_PREVIEW';
   releaseProjectionBakeResources('free-preview');
-  fitSiteCameraToActiveSurfaces();
+  cameraSite.position.y += 0.5;
+  cameraSite.up.set(0, 1, 0);
+  cameraSite.zoom = 1;
+  if (cameraSite.view?.enabled) cameraSite.clearViewOffset();
+  cameraSite.aspect = Math.max(1, viewer.clientWidth) / Math.max(1, viewer.clientHeight);
+  cameraSite.updateProjectionMatrix();
+  controlsSite.update();
+  cameraSite.updateMatrixWorld(true);
   syncAnamorphicControls();
   resizeRenderer();
   updateDiagnostics();
@@ -4256,6 +4377,7 @@ async function loadSiteScene() {
           toneMapped: false
         });
         if (child.userData.previewBackgroundSurface) installPreviewBackgroundShader(child.material);
+        else if (!productionHelper) installSimpleImageBlackShader(child.material);
         child.visible = false;
       });
       gltf.scene.userData.siteAssetId = assetId;
@@ -4406,6 +4528,8 @@ async function loadAsset(assetId) {
   const textureUrl = new URL(`./assets/${asset.fileName}`, import.meta.url).href;
   const texture = await loadTexture(textureUrl);
   texture.colorSpace = THREE.SRGBColorSpace;
+  texture.flipY = false;
+  texture.userData.simpleImageAlphaBlack = asset.mime === 'image/png';
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = state.filterMode === 'pixel' ? THREE.NearestFilter : THREE.LinearFilter;
@@ -4413,7 +4537,17 @@ async function loadAsset(assetId) {
 
   const decodedWidth = texture.image.naturalWidth || texture.image.width;
   const decodedHeight = texture.image.naturalHeight || texture.image.height;
-  installTexture(texture, decodedWidth, decodedHeight, false);
+  installTexture(texture, decodedWidth, decodedHeight, true);
+  const previousImage = productionPreviewCache.imageTexture;
+  productionPreviewCache.imageTexture = texture;
+  productionPreviewCache.imageName = asset.fileName;
+  productionPreviewCache.imageSelection = asset.id;
+  for (const workspace of ['photo', 'site']) {
+    if (productionPreviewCache.lastValid[workspace] === previousImage) productionPreviewCache.lastValid[workspace] = texture;
+  }
+  if (previousImage && previousImage !== texture && previousImage !== productionPreviewCache.photoshopTexture &&
+      !productionPreviewCache.imageBank.some((entry) => entry.texture === previousImage)) previousImage.dispose();
+  syncProductionImageBankUi();
 
   applyFit();
   render();
@@ -4422,6 +4556,103 @@ async function loadAsset(assetId) {
   gl.finish();
   updateDiagnostics();
   window.dispatchEvent(new CustomEvent('block0-ready', { detail: state.diagnostics }));
+}
+
+function syncProductionImageBankUi() {
+  const { imageSelection, imageBank, bankLoading } = productionPreviewCache;
+  if (imageSelection && productionUi.imageAsset.querySelector(`option[value="${CSS.escape(imageSelection)}"]`)) {
+    productionUi.imageAsset.value = imageSelection;
+  }
+  productionUi.imageDeleteButton.disabled = !imageBank.some((entry) => entry.id === imageSelection);
+  productionUi.imageAsset.title = productionPreviewCache.imageName;
+  productionUi.imageName.title = productionPreviewCache.imageName;
+  productionUi.imageFileButton.disabled = bankLoading || imageBank.length >= PREVIEW_IMAGE_BANK_LIMIT;
+  productionUi.imageBankCount.textContent = `BANK ${imageBank.length} / ${PREVIEW_IMAGE_BANK_LIMIT}`;
+}
+
+function shortPreviewImageName(name) {
+  return name.length <= 32 ? name : `${name.slice(0, 18)}…${name.slice(-13)}`;
+}
+
+function selectProductionPreviewImage(texture, name, selection) {
+  const previousImage = productionPreviewCache.imageTexture;
+  productionPreviewCache.imageTexture = texture;
+  productionPreviewCache.imageName = name;
+  productionPreviewCache.imageSelection = selection;
+  for (const workspace of ['photo', 'site']) {
+    if (productionPreviewCache.lastValid[workspace] === previousImage) productionPreviewCache.lastValid[workspace] = texture;
+  }
+  if (previousImage && previousImage !== texture && previousImage !== state.texture &&
+      previousImage !== productionPreviewCache.photoshopTexture &&
+      !productionPreviewCache.imageBank.some((entry) => entry.texture === previousImage)) previousImage.dispose();
+  syncProductionImageBankUi();
+  render();
+  updateDiagnostics();
+}
+
+function deleteSelectedProductionPreviewImage() {
+  const selected = productionPreviewCache.imageBank.find((entry) => entry.id === productionPreviewCache.imageSelection);
+  if (!selected) return;
+  const remaining = productionPreviewCache.imageBank.filter((entry) => entry !== selected);
+  const fallback = remaining.at(-1);
+  if (fallback) selectProductionPreviewImage(fallback.texture, fallback.name, fallback.id);
+  else if (state.asset?.kind === 'local' && state.texture) {
+    selectProductionPreviewImage(state.texture, state.asset.fileName, state.asset.id);
+  } else {
+    selectProductionPreviewImage(null, '', null);
+    productionUi.imageAsset.selectedIndex = -1;
+  }
+  productionPreviewCache.imageBank = remaining;
+  for (const workspace of ['photo', 'site']) {
+    if (productionPreviewCache.lastValid[workspace] === selected.texture) {
+      productionPreviewCache.lastValid[workspace] = productionPreviewCache.imageTexture;
+    }
+  }
+  productionUi.imageAsset.querySelector(`option[value="${CSS.escape(selected.id)}"]`)?.remove();
+  render();
+  for (const binding of state.site.bindings) {
+    if (binding.mesh.material?.map === selected.texture) {
+      binding.mesh.material.map = null;
+      binding.mesh.material.needsUpdate = true;
+    }
+  }
+  selected.texture.dispose();
+  syncProductionImageBankUi();
+  updateDiagnostics();
+}
+
+async function loadProductionPreviewFile(file) {
+  if (!isSupportedImageFile(file)) throw new Error('Preview IMAGE supports PNG and JPG/JPEG files only.');
+  if (productionPreviewCache.bankLoading) throw new Error('IMAGE_BANK_LOADING');
+  if (productionPreviewCache.imageBank.length >= PREVIEW_IMAGE_BANK_LIMIT) throw new Error('IMAGE_BANK_FULL · delete the selected bank image first.');
+  productionPreviewCache.bankLoading = true;
+  syncProductionImageBankUi();
+  try {
+  const objectUrl = URL.createObjectURL(file);
+  let texture;
+  try {
+    texture = await loadTexture(objectUrl);
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.flipY = false;
+  texture.userData.simpleImageAlphaBlack = file.type === 'image/png' || /\.png$/i.test(file.name);
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = state.filterMode === 'pixel' ? THREE.NearestFilter : THREE.LinearFilter;
+  const id = `bank:${productionPreviewCache.nextImageBankId++}`;
+  const width = texture.image.naturalWidth || texture.image.width;
+  const height = texture.image.naturalHeight || texture.image.height;
+  productionPreviewCache.imageBank.push({ id, name: file.name, texture });
+  const option = new Option(shortPreviewImageName(file.name), id);
+  option.title = `${file.name} · ${width} × ${height}`;
+  productionUi.imageAsset.append(option);
+  selectProductionPreviewImage(texture, file.name, id);
+  } finally {
+    productionPreviewCache.bankLoading = false;
+    syncProductionImageBankUi();
+  }
 }
 
 function effectiveColorProfile(metadata) {
@@ -4523,6 +4754,13 @@ async function installLiveFrame(frame) {
     textureGlError
   };
   state.link.liveFrameCurrent = true;
+  const previousPhotoshop = productionPreviewCache.photoshopTexture;
+  productionPreviewCache.photoshopTexture = texture;
+  productionPreviewCache.photoshopFrame = state.link.lastFrame;
+  for (const workspace of ['photo', 'site']) {
+    if (productionPreviewCache.lastValid[workspace] === previousPhotoshop) productionPreviewCache.lastValid[workspace] = texture;
+  }
+  if (previousPhotoshop && previousPhotoshop !== texture && previousPhotoshop !== productionPreviewCache.imageTexture) previousPhotoshop.dispose();
   render();
   updateDiagnostics();
   return state.link.lastFrame;
@@ -4601,7 +4839,9 @@ function render() {
   const photoActive = isPhotoViewportActive();
   const anamorphicCalibrationActive = isAnamorphicCalibrationFramingActive();
   const previewDecision = currentPreviewDecision();
-  applySitePreviewSource(previewDecision);
+  const siteMap = applySitePreviewSource(previewDecision);
+  const displayedTexture = state.activeView === 'site-3d' ? siteMap : state.texture;
+  simpleImageBlackUniform.value = displayedTexture?.userData.simpleImageAlphaBlack ? 1 : 0;
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, width, height);
   const environmentActive = state.activeView === 'site-3d' && state.site.world === 'world3d' &&
@@ -5406,9 +5646,14 @@ function updateDiagnostics() {
 function setFilterMode(mode) {
   state.filterMode = mode;
   filterButton.textContent = mode === 'pixel' ? 'PIXEL INSPECTION' : 'NORMAL';
-  if (state.texture) {
-    state.texture.magFilter = mode === 'pixel' ? THREE.NearestFilter : THREE.LinearFilter;
-    state.texture.needsUpdate = true;
+  const textures = new Set([state.texture, productionPreviewCache.imageTexture,
+    productionPreviewCache.photoshopTexture, ...productionPreviewCache.imageBank.map((entry) => entry.texture)]);
+  for (const texture of textures) {
+    if (!texture) continue;
+    texture.magFilter = mode === 'pixel' ? THREE.NearestFilter : THREE.LinearFilter;
+    texture.needsUpdate = true;
+  }
+  if ([...textures].some(Boolean)) {
     render();
     updateDiagnostics();
   }
@@ -6418,6 +6663,31 @@ productionUi.family.addEventListener('change', () => {
   }
   syncProductionUi();
 });
+productionUi.previewSource.addEventListener('change', () => {
+  if (productionWorkspace === 'authoring') return;
+  productionPreviewSource[productionWorkspace] = productionUi.previewSource.value;
+  render();
+  updateDiagnostics();
+});
+productionUi.imageAsset.addEventListener('change', () => {
+  const selection = productionUi.imageAsset.value;
+  const bankEntry = productionPreviewCache.imageBank.find((entry) => entry.id === selection);
+  if (bankEntry) {
+    selectProductionPreviewImage(bankEntry.texture, bankEntry.name, bankEntry.id);
+  } else if (selection) void loadAsset(selection).catch((error) => {
+    productionUi.previewSourceState.textContent = `IMAGE · ${error.message}`;
+    syncProductionImageBankUi();
+  });
+});
+productionUi.imageDeleteButton.addEventListener('click', deleteSelectedProductionPreviewImage);
+productionUi.imageFileButton.addEventListener('click', () => productionUi.imageFileInput.click());
+productionUi.imageFileInput.addEventListener('change', () => {
+  const file = productionUi.imageFileInput.files?.[0];
+  productionUi.imageFileInput.value = '';
+  if (file) void loadProductionPreviewFile(file).catch((error) => {
+    productionUi.previewSourceState.textContent = `IMAGE · ${error.message}`;
+  });
+});
 productionUi.viewAuthoring.addEventListener('click', () => showProductionView('authoring'));
 productionUi.viewSite.addEventListener('click', () => showProductionView('site'));
 productionUi.viewPhoto.addEventListener('click', () => showProductionView('photo'));
@@ -6960,6 +7230,12 @@ window.addEventListener('resize', resizeRenderer);
 window.addEventListener('resize', () => requestAnimationFrame(clampVectorMaskPanel));
 window.addEventListener('blur', cancelAuthoringPointerInteraction);
 window.addEventListener('beforeunload', () => {
+  const previewTextures = new Set([productionPreviewCache.imageTexture, productionPreviewCache.photoshopTexture,
+    ...productionPreviewCache.imageBank.map((entry) => entry.texture)]);
+  for (const texture of previewTextures) texture?.dispose();
+  productionPreviewCache.imageTexture = null;
+  productionPreviewCache.imageBank = [];
+  productionPreviewCache.photoshopTexture = null;
   planarWorkflow.reset();
   planarMappingRuntime.disposeAll();
   projectionBakeRuntime.dispose();
@@ -7115,10 +7391,20 @@ function runAnamorphicFamilySmoke(familyKey, expectedSurface) {
   const fovResetReturned = applyAnamorphicCalibrationCamera();
   const fovResetMatches = Math.abs(cameraSite.fov - family.cameraProfile.runtimeFov) < 1e-9 &&
     anamorphicFovInput.value === String(family.cameraProfile.runtimeFov);
+  const calibrationPosition = cameraSite.position.clone();
+  const calibrationTarget = controlsSite.target.clone();
+  const calibrationFov = cameraSite.fov;
   controlsSite.dispatchEvent({ type: 'start' });
   const freePreviewState = state.site.anamorphicCameraMode;
-  const freePreviewFovDefault = Math.abs(cameraSite.fov - 45) < 1e-9;
+  const freePreviewFovPreserved = Math.abs(cameraSite.fov - calibrationFov) < 1e-9;
+  const freePreviewPositionNearCalibration = cameraSite.position.distanceTo(
+    calibrationPosition.clone().add(new THREE.Vector3(0, 0.5, 0))) < 1e-9;
+  const freePreviewTargetPreserved = controlsSite.target.distanceTo(calibrationTarget) < 1e-9;
   const freePreviewUpDefault = cameraSite.up.distanceTo(new THREE.Vector3(0, 1, 0)) < 1e-9;
+  const freeForward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraSite.quaternion).normalize();
+  const freeUp = new THREE.Vector3(0, 1, 0).applyQuaternion(cameraSite.quaternion).normalize();
+  const levelUp = new THREE.Vector3(0, 1, 0).addScaledVector(freeForward, -freeForward.y).normalize();
+  const freePreviewRollFree = freeUp.angleTo(levelUp) < 1e-7;
   const freePreviewAspectUnrestricted = Math.abs(
     cameraSite.aspect - Math.max(1, viewer.clientWidth) / Math.max(1, viewer.clientHeight)
   ) < 1e-9;
@@ -7185,8 +7471,11 @@ function runAnamorphicFamilySmoke(familyKey, expectedSurface) {
     fovResetReturned,
     fovResetMatches,
     freePreviewState,
-    freePreviewFovDefault,
+    freePreviewFovPreserved,
+    freePreviewPositionNearCalibration,
+    freePreviewTargetPreserved,
     freePreviewUpDefault,
+    freePreviewRollFree,
     freePreviewAspectUnrestricted,
     freePreviewCanvasUnrestricted,
     resetReturned,
@@ -9620,7 +9909,9 @@ window.runProductionUiPhaseASmoke = async () => {
   productionUi.viewSite.click();
   const siteOptions = [...productionUi.family.options].map((option) => [option.value, option.disabled]);
   const siteMenu = productionWorkspace === 'site' && productionUi.familyLabel.textContent === 'SITE VIEW' &&
-    JSON.stringify(siteOptions) === JSON.stringify([['free', false], ['front75f', false], ['back', false], ['camera', true]]);
+    JSON.stringify(siteOptions) === JSON.stringify([['free', false], ['front75f', false], ['back', false], ['camera', true]]) &&
+    [...productionUi.family.options].find((option) => option.value === 'front75f')?.textContent === 'ANAM_FRONT 75F' &&
+    [...productionUi.family.options].find((option) => option.value === 'back')?.textContent === 'ANAM_BACK';
   chooseOption(productionUi.family, 'front75f');
   const siteFront = productionWorkspace === 'site' && productionSitePreset === 'front75f' &&
     state.site.world === 'world3d' && state.site.mappingMode === 'anamorphic' && state.site.anamorphicFamily === 'front75f';
@@ -9770,6 +10061,316 @@ window.runProductionUiPhaseASmoke = async () => {
       noResetOnOpen && productionSceneReselectReset && developerNoResetOnOpen && developerSceneReselectReset &&
       simpleImageLoadingPreserved
   };
+};
+
+window.runPreviewSourceASmoke = async () => {
+  const initial = {
+    workspace: productionWorkspace,
+    sitePreset: productionSitePreset,
+    authoringFamily: productionAuthoringFamily,
+    sources: { ...productionPreviewSource },
+    mode: document.body.dataset.uiMode,
+    view: state.activeView,
+    world: state.site.world,
+    mapping: state.site.mappingMode,
+    family: state.site.anamorphicFamily,
+    scene: state.site.scene,
+    camera: snapshotSiteCameraRuntime(),
+    linkHandshake: state.link.rendererHandshake,
+    photoshopConnected: state.link.photoshopConnected,
+    imageTexture: productionPreviewCache.imageTexture,
+    imageName: productionPreviewCache.imageName,
+    imageSelection: productionPreviewCache.imageSelection,
+    imageBank: [...productionPreviewCache.imageBank],
+    nextImageBankId: productionPreviewCache.nextImageBankId,
+    photoshopTexture: productionPreviewCache.photoshopTexture,
+    photoshopFrame: productionPreviewCache.photoshopFrame,
+    lastValid: { ...productionPreviewCache.lastValid },
+    revision: authoringSession.revision,
+    layers: JSON.stringify(authoringSession.layers.map((layer) => ({
+      id: layer.layerId, family: layer.familyId, transform: layer.transform,
+      mask: layer.vectorMask, opacity: layer.opacity, blend: layer.blendMode
+    }))),
+    projectStatus: state.authoring.project.status,
+    mergeRunning: state.fullMerge.running,
+    planarJob: planarWorkflow.job
+  };
+  const result = { photo: [], site: [] };
+  const syntheticPsCanvas = document.createElement('canvas');
+  syntheticPsCanvas.width = 1;
+  syntheticPsCanvas.height = 1;
+  syntheticPsCanvas.getContext('2d').fillStyle = '#326496';
+  syntheticPsCanvas.getContext('2d').fillRect(0, 0, 1, 1);
+  const syntheticPs = new THREE.CanvasTexture(syntheticPsCanvas);
+  const syntheticFrame = { receivedWidth: 1, receivedHeight: 1, documentWidth: 1, documentHeight: 1 };
+  try {
+    setUiMode('production');
+    state.link.rendererHandshake = true;
+    state.link.photoshopConnected = true;
+    productionPreviewCache.photoshopTexture = syntheticPs;
+    productionPreviewCache.photoshopFrame = syntheticFrame;
+    for (const [workspace, choices] of [['photo', ['front', 'frontSweet', 'back', 'night']],
+      ['site', ['free', 'front75f', 'back']]]) {
+      showProductionView(workspace);
+      for (const choice of choices) {
+        productionUi.family.value = choice;
+        productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+        if (state.photo.activationPromise) await state.photo.activationPromise;
+        const pose = snapshotSiteCameraRuntime();
+        const location = state.site.scene;
+        const sitePreset = productionSitePreset;
+        const snapshots = [];
+        for (const source of ['IMAGE', 'PS_PREVIEW', 'AUTHORING', 'IMAGE']) {
+          if (source === 'PS_PREVIEW') {
+            state.link.rendererHandshake = true;
+            state.link.photoshopConnected = true;
+          }
+          productionUi.previewSource.value = source;
+          productionUi.previewSource.dispatchEvent(new Event('change', { bubbles: true }));
+          const decision = productionPreviewDecision();
+          snapshots.push({ source, status: decision.status,
+            connected: state.link.rendererHandshake && state.link.photoshopConnected,
+            textureSize: [syntheticPs.image?.width, syntheticPs.image?.height],
+            cameraPreserved: siteCameraRuntimeMatchesSnapshot(pose),
+            locationPreserved: state.site.scene === location,
+            siteViewPreserved: productionSitePreset === sitePreset,
+            mapSelected: state.site.activeBindings.every((binding) => binding.mesh.material.map === decision.texture),
+            selectorVisible: !productionUi.previewSourceGroup.hidden });
+        }
+        result[workspace].push({ choice, snapshots });
+      }
+    }
+    showProductionView('photo');
+    productionUi.previewSource.value = 'PS_PREVIEW';
+    productionUi.previewSource.dispatchEvent(new Event('change', { bubbles: true }));
+    state.link.photoshopConnected = false;
+    render();
+    result.disconnected = {
+      status: productionPreviewDecision().status,
+      retained: state.site.activeBindings.every((binding) => binding.mesh.material.map === productionPreviewDecision().texture),
+      stateVisible: productionUi.previewSourceState.textContent.includes('UNAVAILABLE')
+    };
+    state.link.photoshopConnected = true;
+    showProductionView('site');
+    const beforeFileRevision = authoringSession.revision;
+    const beforeFileProject = state.authoring.project.status;
+    const pngCanvas = document.createElement('canvas');
+    pngCanvas.width = 8;
+    pngCanvas.height = 8;
+    const pngContext = pngCanvas.getContext('2d', { alpha: true });
+    pngContext.fillStyle = '#ff0000';
+    pngContext.fillRect(0, 0, 4, 4);
+    pngContext.fillStyle = 'rgba(0,255,0,0.5)';
+    pngContext.fillRect(4, 0, 4, 4);
+    pngContext.fillStyle = '#ffffff';
+    pngContext.fillRect(4, 4, 4, 4);
+    const pngBlob = await new Promise((resolve) => pngCanvas.toBlob(resolve, 'image/png'));
+    await loadProductionPreviewFile(new File([pngBlob], 'temporary-preview.png', { type: 'image/png' }));
+    result.file = { imageReady: productionPreviewDecision().status === 'READY',
+      name: productionPreviewCache.imageName, revisionPreserved: authoringSession.revision === beforeFileRevision,
+      projectPreserved: state.authoring.project.status === beforeFileProject,
+      siteFlipY: productionPreviewCache.imageTexture.flipY === false,
+      blackMatteSelected: simpleImageBlackUniform.value === 1,
+      bundledFlipAndPlaneCompensation: state.asset?.kind === 'local' && state.texture?.flipY === false &&
+        state.mesh?.geometry.getAttribute('uv').getY(0) === 0 &&
+        state.plane3d?.geometry.getAttribute('uv').getY(0) === 0 };
+    const sampleScene = new THREE.Scene();
+    const sampleGeometry = createGeometry(2, 2, true);
+    const sampleMaterial = new THREE.MeshBasicMaterial({ map: productionPreviewCache.imageTexture, toneMapped: false });
+    installSimpleImageBlackShader(sampleMaterial);
+    sampleScene.add(new THREE.Mesh(sampleGeometry, sampleMaterial));
+    const sampleCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+    sampleCamera.position.z = 1;
+    const sampleTarget = new THREE.WebGLRenderTarget(64, 64);
+    const samplePixels = { bottomLeft: new Uint8Array(4), topLeft: new Uint8Array(4), topRight: new Uint8Array(4) };
+    const baselinePixels = new Uint8Array(4);
+    const sampleTexture = productionPreviewCache.imageTexture;
+    const sourceInspect = document.createElement('canvas');
+    sourceInspect.width = 8;
+    sourceInspect.height = 8;
+    const sourceInspectContext = sourceInspect.getContext('2d', { alpha: true });
+    sourceInspectContext.drawImage(sampleTexture.image, 0, 0);
+    result.file.sourcePixels = {
+      opaqueTop: [...sourceInspectContext.getImageData(1, 1, 1, 1).data],
+      partialTop: [...sourceInspectContext.getImageData(6, 1, 1, 1).data],
+      cutoutBottom: [...sourceInspectContext.getImageData(1, 6, 1, 1).data]
+    };
+    try {
+      renderer.setRenderTarget(sampleTarget);
+      renderer.setViewport(0, 0, 64, 64);
+      renderer.setScissorTest(false);
+      renderer.setClearColor(0x000000, 0);
+      renderer.clear(true, true, true);
+      simpleImageBlackUniform.value = 0;
+      renderer.render(sampleScene, sampleCamera);
+      renderer.readRenderTargetPixels(sampleTarget, 4, 60, 1, 1, baselinePixels);
+      renderer.clear(true, true, true);
+      simpleImageBlackUniform.value = 1;
+      renderer.render(sampleScene, sampleCamera);
+      renderer.readRenderTargetPixels(sampleTarget, 4, 4, 1, 1, samplePixels.bottomLeft);
+      renderer.readRenderTargetPixels(sampleTarget, 4, 60, 1, 1, samplePixels.topLeft);
+      renderer.readRenderTargetPixels(sampleTarget, 60, 60, 1, 1, samplePixels.topRight);
+    } finally {
+      renderer.setRenderTarget(null);
+      sampleTarget.dispose();
+      sampleGeometry.dispose();
+      sampleMaterial.dispose();
+      render();
+    }
+    const bottomLeft = [...samplePixels.bottomLeft];
+    const topLeft = [...samplePixels.topLeft];
+    const topRight = [...samplePixels.topRight];
+    result.file.gpuPixels = { bottomLeft, topLeft, topRight };
+    result.file.baselinePixels = [...baselinePixels];
+    result.file.orientationAndBlack = bottomLeft[0] === 0 && bottomLeft[1] === 0 && bottomLeft[2] === 0 &&
+      bottomLeft[3] === 255 && topLeft[0] > 200 && topLeft[1] < 10 && topLeft[2] < 10 && topLeft[3] === 255 &&
+      topRight[1] > 20 && topRight[1] < 230 && topRight[3] === 255;
+    for (let index = 2; index <= PREVIEW_IMAGE_BANK_LIMIT; index++) {
+      const name = index === 2
+        ? 'PlanarA_FamilyDirect_Asymmetric_ANAMORPHIC_FRONT_75F_3000x5760_sample.png'
+        : `temporary-preview-${index}.png`;
+      await loadProductionPreviewFile(new File([pngBlob], name, { type: 'image/png' }));
+    }
+    const bankBeforeDelete = [...productionPreviewCache.imageBank];
+    const chosen = bankBeforeDelete[1];
+    productionUi.imageAsset.value = chosen.id;
+    productionUi.imageAsset.dispatchEvent(new Event('change', { bubbles: true }));
+    const selectedByDropdown = productionPreviewCache.imageTexture === chosen.texture &&
+      productionPreviewCache.imageName === chosen.name && !productionUi.imageDeleteButton.disabled;
+    const chosenOption = productionUi.imageAsset.selectedOptions[0];
+    const cardBounds = productionUi.intro.getBoundingClientRect();
+    const longNameContained = cardBounds.width > 0 && productionUi.imageAsset.getBoundingClientRect().width > 0 &&
+      chosenOption.textContent.length <= 32 &&
+      chosenOption.title.startsWith(chosen.name) && productionUi.imageAsset.title === chosen.name &&
+      productionUi.imageDeleteButton.getBoundingClientRect().right <= cardBounds.right - 8 &&
+      productionUi.imageName.getBoundingClientRect().right <= cardBounds.right - 8 &&
+      getComputedStyle(productionUi.imageName).textOverflow === 'ellipsis';
+    const bankCountAtLimit = productionPreviewCache.imageBank.length === PREVIEW_IMAGE_BANK_LIMIT &&
+      productionUi.imageFileButton.disabled;
+    let sixthRejected = false;
+    try {
+      await loadProductionPreviewFile(new File([pngBlob], 'temporary-preview-6.png', { type: 'image/png' }));
+    } catch (error) {
+      sixthRejected = error.message.includes('IMAGE_BANK_FULL');
+    }
+    productionUi.imageDeleteButton.click();
+    const deleteOnlyChosen = productionPreviewCache.imageBank.length === PREVIEW_IMAGE_BANK_LIMIT - 1 &&
+      !productionPreviewCache.imageBank.some((entry) => entry.id === chosen.id) &&
+      bankBeforeDelete.filter((entry) => entry !== chosen).every((entry) =>
+        productionPreviewCache.imageBank.some((remaining) => remaining.id === entry.id && remaining.texture === entry.texture)) &&
+      !productionUi.imageAsset.querySelector(`option[value="${CSS.escape(chosen.id)}"]`) &&
+      !productionUi.imageFileButton.disabled;
+    selectProductionPreviewImage(state.texture, state.asset.fileName, state.asset.id);
+    const builtinDeleteDisabled = productionUi.imageDeleteButton.disabled;
+    productionUi.imageDeleteButton.click();
+    const remainingAfterBuiltinClick = productionPreviewCache.imageBank.length === 4;
+    let drainOneByOne = true;
+    while (productionPreviewCache.imageBank.length) {
+      const count = productionPreviewCache.imageBank.length;
+      const entry = productionPreviewCache.imageBank[0];
+      selectProductionPreviewImage(entry.texture, entry.name, entry.id);
+      productionUi.imageDeleteButton.click();
+      drainOneByOne &&= productionPreviewCache.imageBank.length === count - 1 &&
+        !productionPreviewCache.imageBank.some((candidate) => candidate.id === entry.id);
+    }
+    drainOneByOne &&= productionPreviewCache.imageTexture === state.texture &&
+      productionUi.imageAsset.value === state.asset.id && productionUi.imageDeleteButton.disabled;
+    result.bank = { selectedByDropdown, longNameContained, bankCountAtLimit, sixthRejected, deleteOnlyChosen,
+      builtinDeleteDisabled, remainingAfterBuiltinClick, drainOneByOne,
+      authoringPreserved: authoringSession.revision === beforeFileRevision &&
+        state.authoring.project.status === beforeFileProject };
+    const actualMergedState = authoringSession.mergedState;
+    const actualReadyOutput = planarWorkflow.readyOutput;
+    try {
+      productionUi.previewSource.value = 'AUTHORING';
+      productionUi.previewSource.dispatchEvent(new Event('change', { bubbles: true }));
+      const previousMap = state.site.activeBindings[0]?.mesh.material.map;
+      authoringSession.mergedState = () => ({ dirty: false, revision: 1 });
+      planarWorkflow.readyOutput = () => ({ familyId: ANAMORPHIC_FAMILY_IDS.FRONT_75F });
+      render();
+      const readyButUnrouted = productionPreviewDecision().status === 'UNAVAILABLE' &&
+        productionUi.previewSourceState.textContent.includes('physical display pending') &&
+        state.site.activeBindings[0]?.mesh.material.map === previousMap;
+      authoringSession.mergedState = () => ({ dirty: true, revision: 2 });
+      planarWorkflow.readyOutput = () => null;
+      render();
+      const dirty = productionPreviewDecision().status === 'OUTDATED' &&
+        productionUi.previewSourceState.textContent.includes('OUTDATED') &&
+        state.site.activeBindings[0]?.mesh.material.map === previousMap;
+      result.authoringReadiness = { readyButUnrouted, dirty, autoBakeStarted: state.fullMerge.running !== initial.mergeRunning ||
+        planarWorkflow.job !== initial.planarJob };
+    } finally {
+      authoringSession.mergedState = actualMergedState;
+      planarWorkflow.readyOutput = actualReadyOutput;
+      productionUi.previewSource.value = 'IMAGE';
+      productionUi.previewSource.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    result.workspaceMemory = productionPreviewSource.photo === 'PS_PREVIEW' && productionPreviewSource.site === 'IMAGE';
+    result.authoringUnchanged = authoringSession.revision === initial.revision &&
+      JSON.stringify(authoringSession.layers.map((layer) => ({
+        id: layer.layerId, family: layer.familyId, transform: layer.transform,
+        mask: layer.vectorMask, opacity: layer.opacity, blend: layer.blendMode
+      }))) === initial.layers && state.authoring.project.status === initial.projectStatus &&
+      state.fullMerge.running === initial.mergeRunning && planarWorkflow.job === initial.planarJob;
+    result.technicalPass = result.photo.every((entry) => entry.snapshots.every((snapshot) =>
+      snapshot.cameraPreserved && snapshot.locationPreserved && snapshot.mapSelected && snapshot.selectorVisible &&
+      (snapshot.source === 'IMAGE' ? snapshot.status === 'READY' :
+        snapshot.source === 'AUTHORING' ? snapshot.status !== 'READY' : snapshot.status === 'READY'))) &&
+      result.site.every((entry) => entry.snapshots.every((snapshot) =>
+        snapshot.cameraPreserved && snapshot.siteViewPreserved && snapshot.mapSelected && snapshot.selectorVisible &&
+        (snapshot.source === 'IMAGE' ? snapshot.status === 'READY' :
+          snapshot.source === 'AUTHORING' ? snapshot.status !== 'READY' :
+            entry.choice === 'free' ? snapshot.status === 'READY' : snapshot.status === 'SIZE MISMATCH'))) &&
+      result.disconnected.status === 'UNAVAILABLE' && result.disconnected.retained && result.disconnected.stateVisible &&
+      result.file.imageReady && result.file.revisionPreserved && result.file.projectPreserved &&
+      result.file.siteFlipY && result.file.blackMatteSelected && result.file.bundledFlipAndPlaneCompensation &&
+      result.file.orientationAndBlack && Object.values(result.bank).every(Boolean) &&
+      result.workspaceMemory && result.authoringUnchanged && result.authoringReadiness.readyButUnrouted &&
+      result.authoringReadiness.dirty && !result.authoringReadiness.autoBakeStarted;
+    return result;
+  } finally {
+    for (const binding of state.site.bindings) {
+      if (binding.mesh.material?.map === syntheticPs ||
+          binding.mesh.material?.map === productionPreviewCache.imageTexture &&
+          productionPreviewCache.imageTexture !== initial.imageTexture) {
+        binding.mesh.material.map = null;
+        binding.mesh.material.needsUpdate = true;
+      }
+    }
+    const createdBankEntries = productionPreviewCache.imageBank.filter((entry) =>
+      !initial.imageBank.some((original) => original.id === entry.id));
+    for (const entry of createdBankEntries) {
+      productionUi.imageAsset.querySelector(`option[value="${CSS.escape(entry.id)}"]`)?.remove();
+      if (entry.texture !== state.texture) entry.texture.dispose();
+    }
+    syntheticPs.dispose();
+    productionPreviewCache.imageTexture = initial.imageTexture;
+    productionPreviewCache.imageName = initial.imageName;
+    productionPreviewCache.imageSelection = initial.imageSelection;
+    productionPreviewCache.imageBank = initial.imageBank;
+    productionPreviewCache.nextImageBankId = initial.nextImageBankId;
+    productionPreviewCache.bankLoading = false;
+    productionPreviewCache.photoshopTexture = initial.photoshopTexture;
+    productionPreviewCache.photoshopFrame = initial.photoshopFrame;
+    productionPreviewCache.lastValid = initial.lastValid;
+    syncProductionImageBankUi();
+    productionPreviewSource.photo = initial.sources.photo;
+    productionPreviewSource.site = initial.sources.site;
+    productionWorkspace = initial.workspace;
+    productionSitePreset = initial.sitePreset;
+    productionAuthoringFamily = initial.authoringFamily;
+    state.link.rendererHandshake = initial.linkHandshake;
+    state.link.photoshopConnected = initial.photoshopConnected;
+    changeProductionSiteOption(siteWorldSelect, initial.world);
+    changeProductionSiteOption(siteMappingSelect, initial.mapping);
+    changeProductionSiteOption(siteAnamorphicFamilySelect, initial.family);
+    state.site.scene = initial.scene;
+    siteSceneSelect.value = initial.scene;
+    setActiveView(initial.view);
+    setUiMode(initial.mode);
+    restoreSiteCameraRuntime(initial.camera);
+    render();
+  }
 };
 
 // Development-only Planar-A evidence hook. It does not modify authoring state,
@@ -10005,6 +10606,7 @@ async function start() {
     option.value = asset.id;
     option.textContent = `${asset.label} — ${asset.sourceWidth} × ${asset.sourceHeight}`;
     sourceSelect.append(option);
+    productionUi.imageAsset.append(new Option(`${asset.label} · ${asset.sourceWidth} × ${asset.sourceHeight}`, asset.id));
   }
   populateSiteSceneOptions();
   siteWorldSelect.value = state.site.world;

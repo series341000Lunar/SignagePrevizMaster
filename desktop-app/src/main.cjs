@@ -18,6 +18,7 @@ const smokeTest = process.argv.includes('--smoke-test');
 const linkSmokeTest = process.argv.includes('--link-smoke-test');
 const planarASmokeTest = process.argv.includes('--planar-a-smoke-test');
 const planarBSmokeTest = process.argv.includes('--planar-b-smoke-test');
+const previewSourceASmokeTest = process.argv.includes('--preview-source-a-smoke-test');
 const reportArgument = process.argv.find((argument) => argument.startsWith('--report='));
 const screenshotArgument = process.argv.find((argument) => argument.startsWith('--screenshot='));
 const externalNetworkRequests = [];
@@ -29,7 +30,7 @@ let currentProjectDirectory = null;
 let projectPersistencePromise = null;
 const pendingProjectOpens = new Map();
 
-if (smokeTest || linkSmokeTest || planarASmokeTest || planarBSmokeTest) {
+if (smokeTest || linkSmokeTest || planarASmokeTest || planarBSmokeTest || previewSourceASmokeTest) {
   const profileName = planarBSmokeTest ? 'planar-b-smoke-profile' : (planarASmokeTest ? 'planar-a-smoke-profile' : (linkSmokeTest ? 'link-smoke-profile' : 'runtime-smoke-profile'));
   app.setPath('userData', path.resolve(process.cwd(), '.runtime', profileName));
 }
@@ -232,7 +233,9 @@ function anamorphicSmokePass(result, familyId, surfaceName, projectionSeparated,
     result.editableFovApplied === true && result.editableFovMatches === true &&
     result.editableFovMode === 'FOV_ADJUSTED' && result.fovResetReturned === true &&
     result.fovResetMatches === true && result.freePreviewState === 'FREE_PREVIEW' &&
-    result.freePreviewFovDefault === true && result.freePreviewUpDefault === true &&
+    result.freePreviewFovPreserved === true && result.freePreviewPositionNearCalibration === true &&
+    result.freePreviewTargetPreserved === true && result.freePreviewUpDefault === true &&
+    result.freePreviewRollFree === true &&
     result.freePreviewAspectUnrestricted === true && result.freePreviewCanvasUnrestricted === true &&
     result.resetReturned === true && result.resetMode === 'CALIBRATION' &&
     result.calibrationMatteActive === true && result.calibrationMatteColor === '#20242c' &&
@@ -1021,6 +1024,24 @@ async function runPlanarBSmokeTest(window) {
   }
 }
 
+async function runPreviewSourceASmokeTest(window) {
+  const reportPath = resolveArgumentPath(reportArgument, 'preview-source-a-runtime.json');
+  try {
+    await waitForDiagnostics(window);
+    await waitForSiteReady(window);
+    const evidence = await window.webContents.executeJavaScript('window.runPreviewSourceASmoke()', true);
+    const technicalPass = evidence.technicalPass === true && criticalErrors.length === 0;
+    writeJson(reportPath, { block: 'PREVIEW-SOURCE-A', technicalPass, ...evidence, criticalErrors });
+    console.log(`PREVIEW_SOURCE_A_REPORT=${reportPath}`);
+    console.log(`PREVIEW_SOURCE_A_TECHNICAL_PASS=${technicalPass}`);
+    app.exit(technicalPass ? 0 : 2);
+  } catch (error) {
+    writeJson(reportPath, { block: 'PREVIEW-SOURCE-A', technicalPass: false, error: error.stack || error.message, criticalErrors });
+    console.error(error);
+    app.exit(2);
+  }
+}
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1440,
@@ -1055,6 +1076,7 @@ function createWindow() {
   if (linkSmokeTest) window.webContents.once('did-finish-load', () => runLinkSmokeTest(window));
   if (planarASmokeTest) window.webContents.once('did-finish-load', () => runPlanarASmokeTest(window));
   if (planarBSmokeTest) window.webContents.once('did-finish-load', () => runPlanarBSmokeTest(window));
+  if (previewSourceASmokeTest) window.webContents.once('did-finish-load', () => runPreviewSourceASmokeTest(window));
   return window;
 }
 

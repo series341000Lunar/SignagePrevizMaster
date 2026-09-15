@@ -17,7 +17,7 @@ Production 상단에는 PROJECT(이름, 저장 상태, Open/Save/Save As), 작�
 2026-09-15 추가 명세에 따라 Production 최상위 VIEW는 정확히 **PHOTO → SITE 3D → AUTHORING** 세 개다. 최상위 PS PREVIEW는 제거했지만 Developer UI의 기존 Photoshop Final Preview 기능과 버튼은 유지한다.
 
 - **PHOTO / PHOTO LOCATION:** 기존 Front, Front Sweet, Back, Night 네 PhotoScene을 제공한다. 선택 후에도 PHOTO/Legacy world에 머문다. 사진 기준 프레이밍을 보호하기 위해 Legacy 4개 장면의 OrbitControls는 Production과 Developer에서 항상 비활성이다. 사진 위 orbit/pan/dolly 입력은 카메라를 이동하지 않는다.
-- **SITE 3D / SITE VIEW:** FREE VIEW, FRONT 75F, BACK을 제공하고 CAMERA · FUTURE는 비활성 안내 항목으로 둔다. FREE VIEW는 기존 FRONT SWEET 사진 카메라의 위치·FOV·전방 방향을 기본 구도로 사용한다. Euler roll은 0으로 두고 world-up 기준으로 수평을 유지해 free orbit이 뒤틀리지 않게 한다. FRONT 75F/BACK은 기존 calibration camera 경로를 사용한다.
+- **SITE 3D / SITE VIEW:** FREE VIEW, ANAM_FRONT 75F, ANAM_BACK을 제공하고 CAMERA · FUTURE는 비활성 안내 항목으로 둔다. 접두어 `ANAM_`은 두 선택이 anamorphic mesh를 사용함을 표시한다. FREE VIEW는 기존 FRONT SWEET 사진 카메라의 위치·FOV·전방 방향을 기본 구도로 사용한다. Euler roll은 0으로 두고 world-up 기준으로 수평을 유지해 free orbit이 뒤틀리지 않게 한다. ANAM_FRONT 75F와 ANAM_BACK은 기존 calibration camera 경로를 사용한다. 이 두 뷰에서 free orbit을 시작하면 해당 calibration 위치보다 y만 0.5 높인 위치와 기존 look-at target/FOV를 유지하며 world-up으로 roll을 제거한다. RESET VIEW는 승인된 calibration 카메라를 복구한다.
 - **SITE 3D 캔버스 FOV:** 오른쪽 아래 세로 슬라이더는 35mm 풀프레임 가로 36mm 기준의 20–400mm 환산 초점거리와 현재 수직 FOV를 표시한다. 조작 범위는 넓은 화각을 세밀하게 다루도록 로그 눈금으로 배치했다. 진입 시 현재 카메라 FOV를 환산해 표시하고, `RESET FOV`는 카메라 위치·방향을 유지한 채 FREE VIEW의 FRONT SWEET 기본 FOV 또는 FRONT 75F/BACK 승인 FOV만 복구한다. 이 캔버스 컨트롤은 Production SITE 3D에서만 제공한다. Developer의 기존 수치 FOV 입력은 유지한다.
 - **AUTHORING / FAMILY:** FRONT 75F/BACK authoring family를 제공한다. Site view 선택과 Authoring family 선택은 별도의 세션 UI 값이며 프로젝트 schema에는 저장하지 않는다.
 
