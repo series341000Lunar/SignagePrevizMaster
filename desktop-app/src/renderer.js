@@ -4841,7 +4841,10 @@ function render() {
   const previewDecision = currentPreviewDecision();
   const siteMap = applySitePreviewSource(previewDecision);
   const displayedTexture = state.activeView === 'site-3d' ? siteMap : state.texture;
-  simpleImageBlackUniform.value = displayedTexture?.userData.simpleImageAlphaBlack ? 1 : 0;
+  const photoshopFreeSiteMatte = Boolean(displayedTexture && isProductionPreviewRoutingActive() &&
+    productionWorkspace === 'site' && productionSitePreset === 'free' &&
+    displayedTexture === productionPreviewCache.photoshopTexture);
+  simpleImageBlackUniform.value = displayedTexture?.userData.simpleImageAlphaBlack || photoshopFreeSiteMatte ? 1 : 0;
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, width, height);
   const environmentActive = state.activeView === 'site-3d' && state.site.world === 'world3d' &&
@@ -10097,12 +10100,17 @@ window.runPreviewSourceASmoke = async () => {
   };
   const result = { photo: [], site: [] };
   const syntheticPsCanvas = document.createElement('canvas');
-  syntheticPsCanvas.width = 1;
-  syntheticPsCanvas.height = 1;
-  syntheticPsCanvas.getContext('2d').fillStyle = '#326496';
-  syntheticPsCanvas.getContext('2d').fillRect(0, 0, 1, 1);
+  syntheticPsCanvas.width = 8;
+  syntheticPsCanvas.height = 8;
+  const syntheticPsContext = syntheticPsCanvas.getContext('2d', { alpha: true });
+  syntheticPsContext.fillStyle = '#ff0000';
+  syntheticPsContext.fillRect(0, 0, 4, 4);
+  syntheticPsContext.fillStyle = 'rgba(0,255,0,0.5)';
+  syntheticPsContext.fillRect(4, 0, 4, 4);
   const syntheticPs = new THREE.CanvasTexture(syntheticPsCanvas);
-  const syntheticFrame = { receivedWidth: 1, receivedHeight: 1, documentWidth: 1, documentHeight: 1 };
+  syntheticPs.colorSpace = THREE.SRGBColorSpace;
+  syntheticPs.flipY = false;
+  const syntheticFrame = { receivedWidth: 8, receivedHeight: 8, documentWidth: 8, documentHeight: 8 };
   try {
     setUiMode('production');
     state.link.rendererHandshake = true;
@@ -10110,15 +10118,27 @@ window.runPreviewSourceASmoke = async () => {
     productionPreviewCache.photoshopTexture = syntheticPs;
     productionPreviewCache.photoshopFrame = syntheticFrame;
     for (const [workspace, choices] of [['photo', ['front', 'frontSweet', 'back', 'night']],
-      ['site', ['free', 'front75f', 'back']]]) {
+      ['site', ['free', 'front75f', 'back', 'free', 'front75f']]]) {
       showProductionView(workspace);
       for (const choice of choices) {
-        productionUi.family.value = choice;
-        productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+        if (workspace === 'site') {
+          productionUi.family.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+          const button = [...viewSelectMenu.querySelectorAll('button')].find((candidate) => candidate.dataset.value === choice);
+          if (!button) throw new Error(`SITE VIEW ${choice} is unavailable.`);
+          button.click();
+        } else {
+          productionUi.family.value = choice;
+          productionUi.family.dispatchEvent(new Event('change', { bubbles: true }));
+        }
         if (state.photo.activationPromise) await state.photo.activationPromise;
         const pose = snapshotSiteCameraRuntime();
         const location = state.site.scene;
         const sitePreset = productionSitePreset;
+        const expectedSiteMeshes = choice === 'free'
+          ? ['ILMIN_Back_3Dworld_Basic', 'LUUX_Front_3Dworld_Basic']
+          : [choice === 'back' ? 'ANAM_SURFACE_BACK' : 'ANAM_SURFACE_FRONT75F'];
+        const expectedSiteAsset = choice === 'free' ? 'world3d'
+          : choice === 'back' ? 'anamorphicBack' : 'anamorphicFront75f';
         const snapshots = [];
         for (const source of ['IMAGE', 'PS_PREVIEW', 'AUTHORING', 'IMAGE']) {
           if (source === 'PS_PREVIEW') {
@@ -10128,12 +10148,28 @@ window.runPreviewSourceASmoke = async () => {
           productionUi.previewSource.value = source;
           productionUi.previewSource.dispatchEvent(new Event('change', { bubbles: true }));
           const decision = productionPreviewDecision();
+          const activeMeshNames = state.site.activeBindings.map((binding) => binding.mesh.name).sort();
+          const visibleMeshNames = state.site.meshes.filter((mesh) =>
+            mesh.visible && mesh.userData.productionHelper !== true).map((mesh) => mesh.name).sort();
           snapshots.push({ source, status: decision.status,
             connected: state.link.rendererHandshake && state.link.photoshopConnected,
             textureSize: [syntheticPs.image?.width, syntheticPs.image?.height],
             cameraPreserved: siteCameraRuntimeMatchesSnapshot(pose),
             locationPreserved: state.site.scene === location,
             siteViewPreserved: productionSitePreset === sitePreset,
+            siteMenuValue: productionUi.family.value,
+            siteAssetId: selectedSiteAssetId(),
+            siteMappingMode: state.site.mappingMode,
+            siteFamilyId: state.site.anamorphicFamily,
+            activeMeshNames, visibleMeshNames,
+            siteMeshMatchesView: workspace !== 'site' ||
+              (productionUi.family.value === choice && selectedSiteAssetId() === expectedSiteAsset &&
+                state.site.mappingMode === (choice === 'free' ? 'normal' : 'anamorphic') &&
+                (choice === 'free' || state.site.anamorphicFamily === choice) &&
+                JSON.stringify(activeMeshNames) === JSON.stringify(expectedSiteMeshes) &&
+                JSON.stringify(visibleMeshNames) === JSON.stringify(expectedSiteMeshes)),
+            psFreeBlackMatte: workspace !== 'site' || choice !== 'free' || source !== 'PS_PREVIEW' ||
+              (decision.texture === syntheticPs && simpleImageBlackUniform.value === 1),
             mapSelected: state.site.activeBindings.every((binding) => binding.mesh.material.map === decision.texture),
             selectorVisible: !productionUi.previewSourceGroup.hidden });
         }
@@ -10210,6 +10246,17 @@ window.runPreviewSourceASmoke = async () => {
       renderer.readRenderTargetPixels(sampleTarget, 4, 4, 1, 1, samplePixels.bottomLeft);
       renderer.readRenderTargetPixels(sampleTarget, 4, 60, 1, 1, samplePixels.topLeft);
       renderer.readRenderTargetPixels(sampleTarget, 60, 60, 1, 1, samplePixels.topRight);
+      sampleMaterial.map = syntheticPs;
+      sampleMaterial.needsUpdate = true;
+      renderer.clear(true, true, true);
+      renderer.render(sampleScene, sampleCamera);
+      const psCutout = new Uint8Array(4);
+      const psOpaque = new Uint8Array(4);
+      const psPartial = new Uint8Array(4);
+      renderer.readRenderTargetPixels(sampleTarget, 4, 4, 1, 1, psCutout);
+      renderer.readRenderTargetPixels(sampleTarget, 4, 60, 1, 1, psOpaque);
+      renderer.readRenderTargetPixels(sampleTarget, 60, 60, 1, 1, psPartial);
+      result.psFreeAlpha = { cutout: [...psCutout], opaque: [...psOpaque], partial: [...psPartial] };
     } finally {
       renderer.setRenderTarget(null);
       sampleTarget.dispose();
@@ -10317,14 +10364,18 @@ window.runPreviewSourceASmoke = async () => {
       (snapshot.source === 'IMAGE' ? snapshot.status === 'READY' :
         snapshot.source === 'AUTHORING' ? snapshot.status !== 'READY' : snapshot.status === 'READY'))) &&
       result.site.every((entry) => entry.snapshots.every((snapshot) =>
-        snapshot.cameraPreserved && snapshot.siteViewPreserved && snapshot.mapSelected && snapshot.selectorVisible &&
+        snapshot.cameraPreserved && snapshot.siteViewPreserved && snapshot.siteMeshMatchesView &&
+          snapshot.psFreeBlackMatte && snapshot.mapSelected && snapshot.selectorVisible &&
         (snapshot.source === 'IMAGE' ? snapshot.status === 'READY' :
           snapshot.source === 'AUTHORING' ? snapshot.status !== 'READY' :
             entry.choice === 'free' ? snapshot.status === 'READY' : snapshot.status === 'SIZE MISMATCH'))) &&
       result.disconnected.status === 'UNAVAILABLE' && result.disconnected.retained && result.disconnected.stateVisible &&
       result.file.imageReady && result.file.revisionPreserved && result.file.projectPreserved &&
       result.file.siteFlipY && result.file.blackMatteSelected && result.file.bundledFlipAndPlaneCompensation &&
-      result.file.orientationAndBlack && Object.values(result.bank).every(Boolean) &&
+      result.file.orientationAndBlack && result.psFreeAlpha.cutout.every((channel, index) => channel === (index === 3 ? 255 : 0)) &&
+      result.psFreeAlpha.opaque[0] > 200 && result.psFreeAlpha.opaque[3] === 255 &&
+      result.psFreeAlpha.partial[1] > 20 && result.psFreeAlpha.partial[1] < 230 &&
+      result.psFreeAlpha.partial[3] === 255 && Object.values(result.bank).every(Boolean) &&
       result.workspaceMemory && result.authoringUnchanged && result.authoringReadiness.readyButUnrouted &&
       result.authoringReadiness.dirty && !result.authoringReadiness.autoBakeStarted;
     return result;

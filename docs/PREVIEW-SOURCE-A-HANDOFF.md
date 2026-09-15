@@ -1,4 +1,4 @@
-# PREVIEW-SOURCE-A — Unified Preview Source Foundation
+# PREVIEW-SOURCE-A — Unified Preview Source Selection
 
 Baseline HEAD: `cbef701eb569de73f6f4f36218b93bfbc95c1fc5` (`Add production workspace UI and smoke coverage`). Target: Local checkout `C:\_InternalProjects\SignagePrevizMaster`.
 
@@ -8,7 +8,7 @@ IMAGE uses the existing simple bundled-source load path, plus a temporary PNG/JP
 
 Long bank filenames are shortened in the dropdown by keeping their beginning and ending; the full name remains in the selection/file-name tooltip. The controls stay within the Workspace card, and the file-name line uses an ellipsis when it exceeds the available width.
 
-Simple IMAGE textures now use `flipY=false` on the Site GLB UVs. The bundled IMAGE path flips only the 2D/3D Plane geometry UVs in compensation, preserving those views. For simple PNG preview, the display shader composites source alpha over fixed black and outputs alpha 1: fully transparent cutouts display as RGB 0 / A 1 and partial-alpha edges blend over black. The decoded original pixels remain available to existing source/authoring probes; Photoshop and Authoring rendering contracts are unchanged.
+Simple IMAGE textures now use `flipY=false` on the Site GLB UVs. The bundled IMAGE path flips only the 2D/3D Plane geometry UVs in compensation, preserving those views. For simple PNG preview, the display shader composites source alpha over fixed black and outputs alpha 1: fully transparent cutouts display as RGB 0 / A 1 and partial-alpha edges blend over black. The same black matte applies when Production SITE FREE VIEW displays the Photoshop PREVIEW texture. The decoded original pixels and Photoshop Live frame bytes remain available to existing source/authoring probes; Developer Photoshop Final and Authoring rendering contracts are unchanged.
 
 AUTHORING selection performs no Bake. Existing ready Planar PNG is available only in its 2D preview overlay; current PHOTO/SITE 3D physical mesh routing does not safely consume it. A current Planar result therefore reports `UNAVAILABLE · physical display pending`; missing output reports `NOT READY` and a dirty merged result reports `OUTDATED`. The last valid IMAGE/PS texture stays displayed if present. The physical Planar route and conditional automatic Bake belong to PREVIEW-SOURCE-B.
 

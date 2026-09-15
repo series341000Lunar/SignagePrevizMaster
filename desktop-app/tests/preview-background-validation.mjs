@@ -61,7 +61,8 @@ for (const gray of [0, 0.5, 1]) {
 assert.match(html, /id="preview-background-gray"[^>]*min="0"[^>]*max="1"[^>]*step="0\.01"/);
 assert.match(html, /id="authoring-background-preview"/);
 assert.match(renderer, /function installPreviewBackgroundShader/);
-assert.match(renderer, /previewSrgb\.rgb = mix\( vec3\( previewBackgroundGray \), previewSrgb\.rgb, diffuseColor\.a \)/);
+assert.match(renderer, /float matteGray = mix\( previewBackgroundGray, 0\.0, simpleImageBlack \)/);
+assert.match(renderer, /previewSrgb\.rgb = mix\( vec3\( matteGray \), previewSrgb\.rgb, diffuseColor\.a \)/);
 assert.match(renderer, /transparent: !child\.userData\.previewBackgroundSurface/);
 assert.match(renderer, /authoringBackgroundPreview\.getContext/);
 assert.match(renderer, /previewBackgroundGray: state\.previewBackgroundGray/);
